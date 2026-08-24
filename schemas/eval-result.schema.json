@@ -249,11 +249,11 @@
       "required": ["model", "harness", "profile", "kernel_version", "node", "runtime", "task_bank_sha256"],
       "properties": {
         "model": {"type": "string", "minLength": 1}, "harness": {"type": "string", "minLength": 1},
-        "profile": {"enum": ["host-native","deep-loop-kernel-minimal","deep-loop-current-v1.21","deep-loop-experimental"]}, "kernel_version": {"type": "string", "minLength": 1},
+        "profile": {"enum": ["host-native","deep-loop-kernel-minimal","deep-loop-current-v1.22","deep-loop-experimental"]}, "kernel_version": {"type": "string", "minLength": 1},
         "node": {"type": "string", "minLength": 1}, "runtime": {"type": "string", "minLength": 1},
         "task_bank_sha256": {"type":"string","pattern":"^[0-9a-f]{64}$"}
       },
-      "allOf":[{"if":{"properties":{"runtime":{"const":"fixture"}},"required":["runtime"]},"then":{"properties":{"profile":{"const":"deep-loop-current-v1.21"},"model":{"const":"none:fixture"},"harness":{"const":"none:fixture"}}}}]
+      "allOf":[{"if":{"properties":{"runtime":{"const":"fixture"}},"required":["runtime"]},"then":{"properties":{"profile":{"const":"deep-loop-current-v1.22"},"model":{"const":"none:fixture"},"harness":{"const":"none:fixture"}}}}]
     }
   }
 }

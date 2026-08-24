@@ -222,27 +222,107 @@ test('recordEpisode done throws EPISODE_ARTIFACTS_INCOMPLETE when artifacts do n
   );
 });
 
-test('recordEpisode approved/rejected derive from verdict proof', () => {
-  const { root, runId } = seed();
-  const f = fence(runId);
-  const { id } = newEpisode(root, runId, { plugin: 'deep-review', role: 'checker', kind: 'impl-review', point: 'implementation', fence: f });
-  assert.throws(() => recordEpisode(root, runId, id, { status: 'approved', proof: { verdict: 'REQUEST_CHANGES' }, fence: f }), /EPISODE_TERMINAL_NO_PROOF/);
-  recordEpisode(root, runId, id, { status: 'approved', proof: { verdict: 'APPROVE' }, fence: f });
-  assert.equal(readState(root, runId).data.episodes[0].status, 'approved');
+test('recordEpisode refuses approved/rejected even when caller supplies matching verdict proof', () => {
+  for (const [status, verdict] of [
+    ['approved', 'APPROVE'],
+    ['approved', 'REQUEST_CHANGES'],
+    ['rejected', 'REQUEST_CHANGES'],
+  ]) {
+    const { root, runId } = seed();
+    const f = fence(runId);
+    const { id } = newEpisode(root, runId, {
+      plugin: 'deep-review', role: 'checker', kind: 'impl-review', point: 'implementation', fence: f,
+    });
+    const before = durableEpisodeBytes(root, runId);
+    assert.throws(
+      () => recordEpisode(root, runId, id, { status, proof: { verdict }, fence: f }),
+      error => {
+        assert.match(error.message, /EPISODE_TERMINAL_VIA_REVIEW/);
+        assert.doesNotMatch(error.message, /EPISODE_STATUS_INVALID/);
+        return true;
+      },
+    );
+    assert.equal(readState(root, runId).data.episodes[0].status, 'pending');
+    assert.deepEqual(durableEpisodeBytes(root, runId), before);
+  }
 });
 
-// Codex r3 FIX 2: atomic replay guard — EPISODE_ALREADY_TERMINAL on second terminal call
-test('recordEpisode twice on same episode with terminal status throws EPISODE_ALREADY_TERMINAL', () => {
+test('recordEpisode keeps unknown statuses distinct from review-owned terminals', () => {
   const { root, runId } = seed();
   const f = fence(runId);
-  const { id } = newEpisode(root, runId, { plugin: 'deep-review', role: 'checker', kind: 'impl-review', point: 'implementation', fence: f });
-  recordEpisode(root, runId, id, { status: 'approved', proof: { verdict: 'APPROVE' }, fence: f });
+  const { id } = newEpisode(root, runId, {
+    plugin: 'deep-review', role: 'checker', kind: 'impl-review', point: 'implementation', fence: f,
+  });
   assert.throws(
-    () => recordEpisode(root, runId, id, { status: 'rejected', proof: { verdict: 'REQUEST_CHANGES' }, fence: f }),
-    /EPISODE_ALREADY_TERMINAL/
+    () => recordEpisode(root, runId, id, { status: 'weird', fence: f }),
+    error => {
+      assert.match(error.message, /EPISODE_STATUS_INVALID/);
+      assert.doesNotMatch(error.message, /EPISODE_TERMINAL_VIA_REVIEW/);
+      return true;
+    },
   );
-  // Status must be unchanged
-  assert.equal(readState(root, runId).data.episodes[0].status, 'approved');
+});
+
+test('recordEpisode refuses checker done before artifact proof validation', () => {
+  for (const withArtifact of [false, true]) {
+    const { root, runId } = seed();
+    const f = fence(runId);
+    const artifact = 'checker-proof.txt';
+    if (withArtifact) writeFileSync(join(root, artifact), 'proof');
+    const { id } = newEpisode(root, runId, {
+      plugin: 'deep-review', role: 'checker', kind: 'impl-review', point: 'implementation',
+      expectedArtifacts: withArtifact ? [artifact] : [], fence: f,
+    });
+    const before = durableEpisodeBytes(root, runId);
+    assert.throws(
+      () => recordEpisode(root, runId, id, {
+        status: 'done', artifacts: withArtifact ? [artifact] : [], fence: f,
+      }),
+      error => {
+        assert.match(error.message, /EPISODE_CHECKER_DONE_FORBIDDEN/);
+        assert.doesNotMatch(error.message, /EPISODE_TERMINAL_NO_PROOF/);
+        return true;
+      },
+    );
+    assert.equal(readState(root, runId).data.episodes[0].status, 'pending');
+    assert.deepEqual(durableEpisodeBytes(root, runId), before);
+  }
+});
+
+test('episode record CLI refuses checker done without mutating durable state', () => {
+  const { root, runId } = seed();
+  const f = fence(runId);
+  const artifact = 'checker-proof.txt';
+  writeFileSync(join(root, artifact), 'proof');
+  const { id } = newEpisode(root, runId, {
+    plugin: 'deep-review', role: 'checker', kind: 'impl-review', point: 'implementation',
+    expectedArtifacts: [artifact], fence: f,
+  });
+  const before = durableEpisodeBytes(root, runId);
+  const result = runEpisodeCli(root, runId, [
+    'episode', 'record', '--id', id, '--status', 'done', '--artifacts', JSON.stringify([artifact]),
+  ]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /EPISODE_CHECKER_DONE_FORBIDDEN/);
+  assert.equal(readState(root, runId).data.episodes[0].status, 'pending');
+  assert.deepEqual(durableEpisodeBytes(root, runId), before);
+});
+
+test('episode terminal declarations and checker guard ordering remain independent', () => {
+  const source = readFileSync(new URL('../scripts/lib/episode.mjs', import.meta.url), 'utf8');
+  assert.match(source, /const RECORDABLE_TERMINAL = \['done'\];/);
+  assert.match(source, /const ALL_TERMINAL = \['done', 'approved', 'rejected', 'abandoned'\];/);
+  const declarations = source.split('\n').filter(line => /const (?:RECORDABLE_TERMINAL|ALL_TERMINAL) =/.test(line));
+  assert.equal(declarations.length, 2);
+  assert.equal(declarations.some(line => /\.\.\.(?:RECORDABLE_TERMINAL|TERMINAL)/.test(line)), false);
+  assert.doesNotMatch(source, /proof\.verdict/);
+
+  const terminalGuard = source.indexOf('EPISODE_ALREADY_TERMINAL');
+  const checkerGuard = source.indexOf('EPISODE_CHECKER_DONE_FORBIDDEN');
+  const routingGuard = source.indexOf('EPISODE_ROUTING_STATUS_INVALID', checkerGuard);
+  assert.ok(terminalGuard >= 0 && terminalGuard < checkerGuard);
+  assert.ok(checkerGuard < routingGuard);
+  assert.equal(source.split('EPISODE_CHECKER_DONE_FORBIDDEN').length - 1, 1);
 });
 
 // Codex r3 FIX 4: submitted artifact path validation — escaping paths rejected

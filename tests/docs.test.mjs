@@ -356,12 +356,20 @@ test('maintainer guides use portable test discovery and the tracked README compa
   }
 });
 
+test('maintainer guide documents observation ownership, shared predicates, and the conditional M3 parent', () => {
+  const source = readFileSync(join(R, 'AGENTS.md'), 'utf8');
+  assert.match(source, /route-observation\.mjs/);
+  assert.match(source, /episode-predicates\.mjs/);
+  assert.match(source, /RouteObservationV1[\s\S]{0,500}\bomits\b[\s\S]{0,240}parent_run_id[\s\S]{0,240}present-but-null/i);
+});
+
 test('deep-suite patch declares node-only runtime and current durable artifacts without stale test counts', () => {
   const source = readFileSync(join(R, 'integration/deep-suite.patch.md'), 'utf8');
   assert.match(source, /"runtime":\s*\["node"\]/);
   assert.doesNotMatch(source, /"runtime":\s*\[[^\]]*"bash"/);
   assert.doesNotMatch(source, /\b\d+ tests green\b/i);
   for (const artifact of [
+    '.deep-loop/runs/<run-id>/observations/<subject_sha256>.json',
     '.deep-loop/runs/<run-id>/reviews/<sha256>.json',
     '.deep-loop/runs/<run-id>/preflight/cache/<cache-key>.json',
     '.deep-loop/runs/<run-id>/preflight/accounting/<cache-key>.json',
@@ -392,6 +400,27 @@ test('deep-suite patch declares node-only runtime and current durable artifacts 
   assert.match(source, /deep-suite `npm run preflight`[\s\S]{0,300}(?:PR|merge)/i);
   assert.match(source, /post-merge[\s\S]{0,240}(?:separate approval|별도 승인)/i);
   assert.match(source, /marketplace[\s\S]{0,200}sync[\s\S]{0,200}(?:proposal-only|별도 승인)/i);
+});
+
+test('1.22 observation docs describe best-effort zero-or-one emission and its bounded race scope', () => {
+  const changelog = readFileSync(join(R, 'CHANGELOG.md'), 'utf8');
+  const start = changelog.indexOf('## [1.22.0]');
+  const end = changelog.indexOf('\n## [', start + 1);
+  const release = changelog.slice(start, end < 0 ? undefined : end);
+  for (const marker of ['mkdirSync', 'temp write', 'linkSync', 'cleanup', 'fail-open', 'scope', 'moved-original']) {
+    assert.match(release, new RegExp(marker.replaceAll('-', '\\-'), 'i'), `CHANGELOG missing ${marker}`);
+  }
+  for (const [path, required] of [
+    ['README.md', /observations\/<subject_sha256>\.json[\s\S]{0,700}(?:best-effort|at-most-once|zero-or-one)/i],
+    ['README.ko.md', /observations\/<subject_sha256>\.json[\s\S]{0,700}0개 또는 1개/i],
+  ]) {
+    const source = readFileSync(join(R, path), 'utf8');
+    assert.match(source, required, `${path}: bounded observation emission missing`);
+    const observation = source.slice(source.indexOf('observations/<subject_sha256>.json'), source.indexOf('observations/<subject_sha256>.json') + 1400);
+    assert.doesNotMatch(observation, /race-free|TOCTOU-safe|prevents parent replacement|부모 교체를 방지/i,
+      `${path}: observation docs overclaim the race boundary`);
+  }
+  assert.doesNotMatch(release, /race-free|TOCTOU-safe|prevents parent replacement|부모 교체를 방지/i);
 });
 
 test('live-surface docs name all three shell-free compact hook implementations and never the deleted Bash wrapper', () => {

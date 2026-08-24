@@ -410,6 +410,7 @@ const VERIFIED_READ_REASON = Object.freeze({
   BOUND_EXCEEDED: 'bound-exceeded',
   DEADLINE_EXCEEDED: 'deadline-exceeded',
 });
+const TRANSIENT_LOCK_RELEASE = /^\.lock\.release-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function inferVerifiedReadReason(message) {
   const text = String(message || '');
@@ -544,6 +545,9 @@ function readStableDirectoryNames(path, options = {}) {
   const lstatFn = typeof options.lstatFn === 'function' ? options.lstatFn : lstatSync;
   const openDirFn = typeof options.opendirFn === 'function' ? options.opendirFn : opendirSync;
   const excludedNames = options.excludedNames instanceof Set ? options.excludedNames : null;
+  const excludedNamePredicate = typeof options.excludedNamePredicate === 'function'
+    ? options.excludedNamePredicate
+    : null;
   const expectedIdentity = options.expectedIdentity;
   const checkDeadline = () => {
     if (deadlineAtMs === undefined) return;
@@ -575,7 +579,7 @@ function readStableDirectoryNames(path, options = {}) {
       checkDeadline();
       const entry = directory.readSync();
       if (entry === null) break;
-      if (excludedNames?.has(entry.name)) continue;
+      if (excludedNames?.has(entry.name) || excludedNamePredicate?.(entry.name) === true) continue;
       if (names.length >= maxEntries) throw integrityInvalidError(`directory bound ${path}`);
       names.push(entry.name);
     }
@@ -1239,6 +1243,7 @@ function captureVerifiedDurableVectorLocked(dir, runId, options = {}, sharedDead
     lstatFn,
     opendirFn,
     excludedNames: path === dir ? new Set(['.lock']) : null,
+    excludedNamePredicate: path === dir ? name => TRANSIENT_LOCK_RELEASE.test(name) : null,
     expectedIdentity,
   }).names;
 

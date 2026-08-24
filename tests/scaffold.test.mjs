@@ -53,14 +53,14 @@ test('plugin manifest is installable-shaped', () => {
   if ('repository' in m) assert.equal(typeof m.repository, 'string', 'repository must be a string URL, not an object');
 });
 
-test('release metadata uses version 1.21.0 across both hosts and npm', () => {
+test('release metadata uses version 1.22.0 across both hosts and npm', () => {
   const claude = readJson('.claude-plugin/plugin.json');
   const codex = readJson('.codex-plugin/plugin.json');
   const pkg = readJson('package.json');
 
-  assert.equal(claude.version, '1.21.0');
-  assert.equal(codex.version, '1.21.0');
-  assert.equal(pkg.version, '1.21.0');
+  assert.equal(claude.version, '1.22.0');
+  assert.equal(codex.version, '1.22.0');
+  assert.equal(pkg.version, '1.22.0');
 });
 
 test('durable run schema is pinned at 0.4.0 independently of the release version', () => {

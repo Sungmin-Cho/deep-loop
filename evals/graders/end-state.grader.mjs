@@ -11,7 +11,7 @@ const SAFE_COMMANDS = new Set([
 ]);
 
 function assertFixtureProfile(profile) {
-  if (!profile || profile.id !== 'deep-loop-current-v1.21' || profile.driver !== 'fixture'
+  if (!profile || profile.id !== 'deep-loop-current-v1.22' || profile.driver !== 'fixture'
     || profile.model !== 'none:fixture' || profile.harness !== 'none:fixture'
     || JSON.stringify(profile.allowed_effects) !== JSON.stringify(['read-only'])
     || JSON.stringify(profile.record?.observables) !== JSON.stringify(['exit', 'effects'])) {

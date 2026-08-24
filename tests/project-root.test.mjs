@@ -36,6 +36,7 @@ import { createDirectoryJunction } from './helpers/fs-fixtures.mjs';
 import { validate } from '../scripts/lib/schema.mjs';
 import {
   appendAnchored,
+  captureVerifiedRootRecoverySnapshot,
   verifyHead,
   verifyLog,
 } from '../scripts/lib/integrity.mjs';
@@ -871,6 +872,22 @@ test('verified root-recovery capture diagnoses a moved root from immutable bytes
   assert.equal(diagnosis.action, 'rebind');
   assert.equal(diagnosis.current_root_digest, projectRootDigest(moved.storedRoot));
   assert.deepEqual(durableSnapshot(moved.candidateRoot, moved.runId), before);
+});
+
+test('verified vectors exclude only exact transient lock-release artifacts', () => {
+  const moved = movedRun('dl-root-verified-lock-release-');
+  const dir = runDir(moved.candidateRoot, moved.runId);
+  const token = '12345678-1234-4234-8234-123456789abc';
+  const transient = `.lock.release-${token}`;
+  const adjacent = `.lock.release-${token}-adjacent`;
+  mkdirSync(join(dir, transient));
+  mkdirSync(join(dir, adjacent));
+
+  const captured = captureVerifiedRootRecoverySnapshot(moved.candidateRoot, moved.runId);
+  assert.equal(captured.ok, true);
+  const rels = captured.snapshot.vector.map(entry => entry[1]);
+  assert.equal(rels.includes(transient), false);
+  assert.equal(rels.includes(adjacent), true);
 });
 
 test('verified root diagnosis propagates the path-free atomic-replacement race descriptor', async () => {

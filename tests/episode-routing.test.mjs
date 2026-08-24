@@ -93,6 +93,40 @@ test('recordEpisode freezes --routing on in_progress in the same episode-record 
   assert.equal(records[0].data.status, 'in_progress');
 });
 
+test('recordEpisode and review dispatch preserve optional fingerprints in durable state and events', () => {
+  const { root, runId, fence } = seed();
+  const request = { route_schema_version: 1, task_class: 'IMPLEMENTATION' };
+  const routedDecision = {
+    route_schema_version: 1,
+    router_plugin_version: '1.0.0',
+    policy_sha256: POLICY_A,
+    decision_fingerprint: 'a'.repeat(64),
+    request_sha256: 'b'.repeat(64),
+    selected_model: 'claude-sonnet-5',
+    selected_effort_native: 'high',
+    effective_policy: { minimum_effort: null },
+  };
+  const routing = buildRoutingRecord(request, routedDecision);
+  const { ws, id } = readyMaker(root, runId, fence, { routing });
+  let ep = readState(root, runId).data.episodes.find((item) => item.id === id);
+  assert.equal(ep.routing.decision.decision_fingerprint, 'a'.repeat(64));
+  assert.equal(ep.routing.decision.request_sha256, 'b'.repeat(64));
+  const record = eventLog(root, runId).find((event) => event.type === 'episode-record');
+  assert.equal(record.data.routing.decision.decision_fingerprint, 'a'.repeat(64));
+  assert.equal(record.data.routing.decision.request_sha256, 'b'.repeat(64));
+
+  recordEpisode(root, runId, id, { status: 'done', artifacts: ['art.txt'], fence });
+  const dispatched = dispatchReview(root, runId, {
+    point: 'implementation', workstreamId: ws, detected: { 'deep-review': true }, fence, routing,
+  });
+  ep = readState(root, runId).data.episodes.find((item) => item.id === dispatched.checkerEpisodeId);
+  assert.equal(ep.routing.decision.decision_fingerprint, 'a'.repeat(64));
+  assert.equal(ep.routing.decision.request_sha256, 'b'.repeat(64));
+  const checkerEvent = eventLog(root, runId).find((event) => event.type === 'episode-new' && event.data.routing);
+  assert.equal(checkerEvent.data.routing.decision.decision_fingerprint, 'a'.repeat(64));
+  assert.equal(checkerEvent.data.routing.decision.request_sha256, 'b'.repeat(64));
+});
+
 test('recordEpisode without --routing keeps current degrade behavior', () => {
   const { root, runId, fence } = seed();
   const { id } = readyMaker(root, runId, fence);

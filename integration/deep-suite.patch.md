@@ -58,6 +58,7 @@ The existing object remains Node-only and declares both hook event types. `Sessi
     "writes": [
       ".deep-loop/runs/<run-id>/loop.json",
       ".deep-loop/runs/<run-id>/event-log.jsonl",
+      ".deep-loop/runs/<run-id>/observations/<subject_sha256>.json",
       ".deep-loop/runs/<run-id>/handoffs/<ts>-next-session.md",
       ".deep-loop/runs/<run-id>/checkpoints/<checkpoint-key>-compact.json",
       ".deep-loop/runs/<run-id>/checkpoints/<checkpoint-key>-compact-observation.json",

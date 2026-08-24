@@ -1,6 +1,6 @@
 {
   "name": "deep-loop",
-  "version": "1.21.0",
+  "version": "1.22.0",
   "type": "module",
   "description": "Loop Engineering control plane over the deep-suite",
   "license": "MIT",

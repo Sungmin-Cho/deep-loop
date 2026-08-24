@@ -198,6 +198,11 @@ Exit 번역(§11.3):
 
 `--routing` 최소 키: `request`, `decision`(`route_schema_version` / `router_plugin_version` / `policy_sha256`), `selected_model`, `selected_effort_native`, `effective_policy`, `provenance`.
 
+라우터 JSON에 `decision_fingerprint` 또는 `request_sha256`가 있으면 그대로
+포함하고, 없으면 생략한다. 둘 중 어느 값도 스킬이 합성하지 않는다. 관측 파일
+`observations/<subject_sha256>.json`은 터미널 커밋 뒤 커널이 발행하며, 스킬은
+읽거나 쓰지 않고 `--artifacts`에도 넣지 않는다.
+
 진행 시 episode in_progress로 기록(authorized 결정이 있을 때만 `--routing`을 붙인다):
 ```
 node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" episode record --id <episode_id> --status in_progress --routing '<routing_json_compact>' --owner <owner_run_id> --generation <n> --project-root "<canonical_project_root>" --run-id <run_id>

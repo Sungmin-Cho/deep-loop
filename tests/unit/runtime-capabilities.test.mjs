@@ -24,7 +24,7 @@ const FIELDS = [
   'requires_process_receipt_settlement', 'requires_posix_visible_executable_trust',
   'max_effort_supported', 'executable_name', 'version_probe',
   'supported_platforms', 'measured_headless', 'session_effort_allowed',
-  'compact_supported', 'handoff_continuity_note',
+  'compact_supported', 'handoff_continuity_note', 'observation_runtime',
 ];
 
 test('every session runtime has every capability field', () => {
@@ -86,6 +86,8 @@ test('current values match today behavior', () => {
   assert.equal(runtimeCapability('codex', 'compact_supported'), true);
   assert.equal(runtimeCapability('claude', 'handoff_continuity_note'), 'desktop-model-effort');
   assert.equal(runtimeCapability('codex', 'handoff_continuity_note'), 'codex-preflight');
+  assert.equal(runtimeCapability('claude', 'observation_runtime'), 'claude_code');
+  assert.equal(runtimeCapability('codex', 'observation_runtime'), 'codex');
 });
 
 test('assertRuntimePlatform accepts current hosts and rejects others without falling back', () => {

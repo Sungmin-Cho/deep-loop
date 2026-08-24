@@ -180,6 +180,8 @@ export function buildRoutingRecord(request, decision, { provenance = 'router' } 
       route_schema_version: src.route_schema_version,
       router_plugin_version: src.router_plugin_version,
       policy_sha256: src.policy_sha256,
+      ...(SHA256.test(src.decision_fingerprint || '') ? { decision_fingerprint: src.decision_fingerprint } : {}),
+      ...(SHA256.test(src.request_sha256 || '') ? { request_sha256: src.request_sha256 } : {}),
     },
     selected_model: src.selected_model,
     selected_effort_native: src.selected_effort_native,

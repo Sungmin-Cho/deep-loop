@@ -16,8 +16,9 @@ import { sessionRuntime } from './runtime.mjs';
 import { canonicalProjectRoot } from './project-root.mjs';
 import { validate } from './schema.mjs';
 import { assertScopeAllows } from './session-scope.mjs';
+import { epOrder, isProofCapableChecker } from './episode-predicates.mjs';
+import { observeTerminalEpisode } from './route-observation.mjs';
 import {
-  isProofCapableChecker,
   deriveReviewArtifactContract,
   parseReviewImport,
   prepareImportedReview,
@@ -26,7 +27,7 @@ import {
   REVIEW_ATTEMPT_ID,
 } from './review-import.mjs';
 
-export { isProofCapableChecker };
+export { epOrder, isProofCapableChecker };
 
 const REVIEW_CONFIG_TERMINAL = new Set(['done', 'approved', 'rejected', 'abandoned']);
 const REVIEW_RECOVERY_PROFILES = Object.freeze({
@@ -274,17 +275,6 @@ function reportBoundToWorktree(root, realReport, worktreeRel) {
 
 // 연속 REQUEST_CHANGES 임계 (breaker.mjs THRESHOLD 미러 — fail-stop latch).
 const BREAKER_THRESHOLD = 3;
-
-// Hybrid episode-order comparator (shared — finish.mjs / next-action.mjs import it). Episode ids are
-// `NNN-plugin` zero-padded to only 3 digits, so naive string `>` breaks at the 999→1000 boundary
-// ('1000-x' < '999-x' lexicographically). When BOTH ids carry a numeric prefix, compare NUMERICALLY;
-// otherwise fall back to string compare (preserves synthetic test ids like m1/m2/c1). "a is later than b"
-// iff epOrder(a, b) > 0.
-export const epOrder = (a, b) => {
-  const na = parseInt(a, 10), nb = parseInt(b, 10);
-  if (Number.isInteger(na) && Number.isInteger(nb)) return na - nb;
-  return a < b ? -1 : a > b ? 1 : 0;
-};
 
 // UNIFIED rejected-checker resolution predicate — the SINGLE source of truth for
 // "is this rejected checker RESOLVED (superseded)?", shared by next-action.mjs (routing)
@@ -611,7 +601,7 @@ function validVerdict(verdict) {
 // Sole proof transaction for both adapters. appendAnchored performs the root-bound fresh read first; this
 // preCheck then applies runtime/lease, checker/maker, and source-evidence checks in the locked order.
 function commitReviewOutcome(root, runId, {
-  episodeId, verdict, reviewSource, evidence, fence, runtime, snapshot,
+  episodeId, verdict, reviewSource, evidence, fence, runtime, snapshot, now,
 }) {
   const passed = verdict === 'APPROVE' || verdict === 'CONCERN';
   if (!REVIEW_SOURCES.has(reviewSource)) throw new Error(`REVIEW_SOURCE_INVALID: ${reviewSource}`);
@@ -639,11 +629,14 @@ function commitReviewOutcome(root, runId, {
   } : null;
   let lockedContext;
   let result;
+  let committed = null;
   appendAnchored(root, runId, {
     type: 'review-outcome', data: eventData,
-    ...(reviewSource === 'imported-stdin' && evidence.generatedAt ? { now: evidence.generatedAt } : {}),
+    ...(reviewSource === 'imported-stdin' && evidence.generatedAt
+      ? { now: evidence.generatedAt }
+      : (now !== undefined ? { now } : {})),
   },
-    (loop) => {
+    (loop, _spent, tx) => {
       const checker = lockedContext.checker;
       const maker = lockedContext.maker;
       const workstream = lockedContext.workstream;
@@ -670,6 +663,9 @@ function commitReviewOutcome(root, runId, {
       result = {
         verdict, passed, terminal: checker.status, review_source: reviewSource,
         ...(evidence.report ? { report: evidence.report, report_sha256: evidence.reportSha256 } : {}),
+      };
+      committed = {
+        loop: structuredClone(loop), event: tx.event, episodeId, terminalStatus: checker.status,
       };
     },
     (loop) => {
@@ -741,7 +737,10 @@ function commitReviewOutcome(root, runId, {
       floor: MUTATION_TURN_FLOOR,
       ...(publication ? { publication } : {}),
     });
-  return result;
+  const observation = committed
+    ? observeTerminalEpisode(root, runId, { ...committed, verdict, reviewSource })
+    : null;
+  return observation ? { ...result, observation } : result;
 }
 
 export function recordReviewOutcome(root, runId, options = {}) {
@@ -749,7 +748,7 @@ export function recordReviewOutcome(root, runId, options = {}) {
     throw new Error('REVIEW_INPUT_INVALID: options');
   }
   rejectCallerMetadata(options, 'recordReviewOutcome');
-  const { episodeId, verdict, proof = {}, fence } = options;
+  const { episodeId, verdict, proof = {}, fence, now } = options;
   validFence(fence, 'recordReviewOutcome');
   validVerdict(verdict);
   if (proof === null || typeof proof !== 'object' || Array.isArray(proof)) throw new Error('REVIEW_INPUT_INVALID: proof');
@@ -766,7 +765,7 @@ export function recordReviewOutcome(root, runId, options = {}) {
     findings: proof.findings != null && String(proof.findings).length ? String(proof.findings).slice(0, 2000) : null,
   };
   return commitReviewOutcome(root, runId, {
-    episodeId, verdict, reviewSource: 'recorded-path', evidence, fence, runtime, snapshot,
+    episodeId, verdict, reviewSource: 'recorded-path', evidence, fence, runtime, snapshot, now,
   });
 }
 
@@ -809,6 +808,7 @@ export function importReviewOutcome(root, runId, options = {}, internal = {}) {
     fence,
     runtime,
     snapshot,
+    now,
   });
   // Keep the committed publication journal for the next canonical mutation gateway to reconcile
   // and retire under its own lock. A second cleanup lock here can outlive the bounded importer

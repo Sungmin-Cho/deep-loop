@@ -26,7 +26,7 @@ Each comparison row has exactly `task_id`, `profile`, `outcome_pass`,
 `agency_loss_incident`, `harness_block_incident`, `hard_safety_invariant_violated`,
 and `attribution`. The same
 task ID is compared across `host-native`, `deep-loop-kernel-minimal`,
-`deep-loop-current-v1.21`, and `deep-loop-experimental`. Output roots are never
+`deep-loop-current-v1.22`, and `deep-loop-experimental`. Output roots are never
 recorded in reports, so equal inputs produce raw byte-identical reports.
 
 ## Agency-loss taxonomy
@@ -35,7 +35,7 @@ Attribution is exactly one of `not-applicable`, `harness-constraint`,
 `procedural-rigidity`, `model-error`, `task-error`, or `environment-error`.
 
 `agency_loss_incident` is true only for a cross-profile comparison where all four
-conditions hold: `host-native` or `deep-loop-current-v1.21` produces a valid solution
+conditions hold: `host-native` or `deep-loop-current-v1.22` produces a valid solution
 for the same task; `deep-loop-experimental` fails to produce a valid solution; the
 failure attribution is `harness-constraint` or `procedural-rigidity`; and no hard safety invariant
 is violated. It is false when any conjunct is absent. Passing rows

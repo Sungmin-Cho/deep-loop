@@ -34,7 +34,7 @@ function events(root, runId) {
   return readFileSync(path, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
 }
 
-function seed({ reviewer = 'deep-review', newPolicy = false } = {}) {
+function seed({ reviewer = 'deep-review', newPolicy = false, observation = false } = {}) {
   const root = canonicalRealpath(mkdtempSync(join(tmpdir(), 'dl-checker-int-')));
   const detected = reviewer === 'deep-review' ? { 'deep-review': true } : { 'deep-review': false };
   const { runId } = initRun(root, {
@@ -43,6 +43,15 @@ function seed({ reviewer = 'deep-review', newPolicy = false } = {}) {
   });
   if (!newPolicy) migrateAuthenticLegacyTransport(root, runId);
   const fence = { owner: runId, generation: 1, intent: 'business' };
+  if (observation) {
+    mkdirSync(join(root, '.claude-plugin'), { recursive: true });
+    writeFileSync(join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: '1.22.0' }));
+    const observable = readState(root, runId).data;
+    observable.project.git = true;
+    observable.project.head = 'abcdef1';
+    observable.project.branch = 'feat/checker-observation-order';
+    writeState(root, runId, observable);
+  }
   const worktree = '.claude/worktrees/w';
   const artifact = `${worktree}/artifact.txt`;
   mkdirSync(join(root, worktree), { recursive: true });
@@ -311,6 +320,50 @@ test('headless host drives an unclaimed checker before no-pending-handoff and em
   assert.equal(handoffs.length, 1);
   const explicitCosts = events(f.root, f.runId).filter(event => event.type === 'cost' && event.data.reported_turns === 1);
   assert.equal(explicitCosts.length, 1);
+});
+
+test('checker import emits its immutable no-usage observation before process receipt settlement', () => {
+  const f = seed({ observation: true });
+
+  const deps = hostDeps(f);
+  const calls = [];
+  let observationPath;
+  let bytesAtImport;
+  const result = driveHeadlessRun({
+    root: f.root,
+    runId: f.runId,
+    now: Date.parse(FIXED_NOW),
+    ...deps,
+    checkerRunFn(options) {
+      return { ...deps.checkerRunFn(options), usageReceipt: options.usageReceipt };
+    },
+    checkerImportFn(options, bytes) {
+      calls.push('import');
+      const imported = deps.checkerImportFn(options, bytes);
+      assert.equal(imported.ok, true);
+      assert.equal(imported.value.observation.emitted, true);
+      observationPath = join(runDir(f.root, f.runId), imported.value.observation.path);
+      bytesAtImport = readFileSync(observationPath);
+      const document = JSON.parse(bytesAtImport);
+      assert.equal(Object.hasOwn(document.payload.attempts[0], 'usage'), false);
+      return imported;
+    },
+    settleProcessCostFn() {
+      calls.push('settle');
+      assert.equal(existsSync(observationPath), true);
+      assert.deepEqual(readFileSync(observationPath), bytesAtImport);
+      const document = JSON.parse(readFileSync(observationPath));
+      assert.equal(Object.hasOwn(document.payload.attempts[0], 'usage'), false);
+      return { ok: true, recorded: true, reason: 'recorded' };
+    },
+    removeProcessReceiptFn() {},
+  });
+
+  assert.deepEqual(calls, ['import', 'settle']);
+  assert.equal(result.action, 'checker-complete', JSON.stringify(result));
+  assert.equal(result.recorded, true);
+  assert.deepEqual(readFileSync(observationPath), bytesAtImport);
+  assert.equal(events(f.root, f.runId).some(event => String(event.type).includes('observation')), false);
 });
 
 test('checker measured usage that crosses a hard budget settles before routing and preserve-pauses without a child', () => {

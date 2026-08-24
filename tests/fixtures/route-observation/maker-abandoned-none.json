@@ -1,0 +1,84 @@
+{
+  "schema_version": "1.0",
+  "envelope": {
+    "producer": "deep-loop",
+    "producer_version": "1.22.0",
+    "artifact_kind": "route-observation",
+    "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    "session_id": "SESSION-RUN-01",
+    "parent_run_id": "PARENT-RUN-01",
+    "generated_at": "2026-08-24T02:10:11.204Z",
+    "schema": {
+      "name": "route-observation",
+      "version": "1.0"
+    },
+    "git": {
+      "head": "abcdef1",
+      "branch": "feat/route-observation",
+      "dirty": "unknown"
+    },
+    "provenance": {
+      "source_artifacts": [
+        {
+          "path": "episodes/004-deep-work/request.md"
+        }
+      ],
+      "tool_versions": {
+        "deep-loop": "1.22.0"
+      }
+    }
+  },
+  "payload": {
+    "contract": {
+      "plugin": "deep-model-router",
+      "observation_schema_version": 1
+    },
+    "decision": {
+      "route_schema_version": null,
+      "router_plugin_version": null,
+      "policy_sha256": null,
+      "request_sha256": null,
+      "decision_fingerprint": null,
+      "linkage_quality": "none"
+    },
+    "subject": {
+      "producer": "deep-loop",
+      "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "artifact_id": "004-deep-work",
+      "subject_sha256": "c0dc9125b405ae413eeb4f4158f9266d566b949a0b8359dd8317a22452aabd59",
+      "base_commit": "1234567"
+    },
+    "task": {
+      "class": null,
+      "risk_band": null,
+      "producer_phase": {
+        "producer": "deep-loop",
+        "value": "implementation"
+      }
+    },
+    "attempts": [
+      {
+        "attempt_id": null,
+        "evidence_kind": "none",
+        "evidence_ref": null,
+        "prompt_sha256": null,
+        "seat": "worker",
+        "seat_source": {
+          "producer": "deep-loop",
+          "value": "maker"
+        },
+        "expected_model_id": "claude-fable-5",
+        "observed_model_id": null,
+        "observed_model_source": "unavailable",
+        "runtime": "claude_code",
+        "transport_id": null,
+        "effort_native": "high",
+        "state": "cancelled",
+        "state_source": {
+          "producer": "deep-loop",
+          "value": "abandoned"
+        }
+      }
+    ]
+  }
+}
