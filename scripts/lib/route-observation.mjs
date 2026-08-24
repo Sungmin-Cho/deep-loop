@@ -607,16 +607,18 @@ function readRouterInstallMetadata(routeTaskRealpath) {
       return { ok: false, reason: 'validator-missing' };
     }
     const canonicalValidator = (fs.realpathSync.native || fs.realpathSync)(validator);
-    if (canonicalValidator !== validator) return { ok: false, reason: 'validator-missing' };
+    // The route-task parent is already canonical and the final component was
+    // lstat-checked above. Keep the OS-canonical spelling: Windows realpath may
+    // legitimately change drive-letter casing or separators for the same file.
+    return {
+      ok: true,
+      root,
+      version: packageManifest.version,
+      validator: canonicalValidator,
+    };
   } catch {
     return { ok: false, reason: 'validator-missing' };
   }
-  return {
-    ok: true,
-    root,
-    version: packageManifest.version,
-    validator,
-  };
 }
 
 function validatorDetail(stderr) {

@@ -335,7 +335,7 @@ test('durableAtomicCreate publishes one durable mode-0600 file and removes its t
 
   assert.deepEqual(result, { created: true, path });
   assert.deepEqual(readFileSync(path), bytes);
-  assert.equal(statSync(path).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600);
   assert.deepEqual(tempNames(root), []);
 });
 
@@ -481,6 +481,7 @@ test('durableAtomicCreate does not retry POSIX EPERM', async () => {
 
   assert.throws(() => durableAtomicCreate(path, Buffer.from('candidate'), {
     platform: 'darwin',
+    fsyncFn() {},
     linkFn() { attempts++; throw expected; },
     sleepFn() { sleeps++; },
   }), error => error === expected);
@@ -518,6 +519,7 @@ test('durableAtomicCreate leaves the published destination when parent flush fai
 
   assert.throws(() => durableAtomicCreate(path, bytes, {
     platform: 'darwin',
+    fsyncFn() {},
     openFn(openPath, flags) {
       if (openPath === root) throw expected;
       return openSync(openPath, flags);

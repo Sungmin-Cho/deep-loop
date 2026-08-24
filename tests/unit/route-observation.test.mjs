@@ -179,11 +179,15 @@ test('canonical JSON matches Python sort_keys for scalar, astral, integer-like, 
   for (const { value, exact } of cases) {
     const actual = asciiCanonicalJson(value);
     if (exact) assert.equal(actual, exact);
-    const python = spawnSync('python3', ['-c', [
+    const python = spawnSync('python3', ['-X', 'utf8', '-c', [
       'import json,sys',
       'v=json.loads(sys.stdin.read())',
       'sys.stdout.write(json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=True))',
-    ].join(';')], { input: JSON.stringify(value), encoding: 'utf8' });
+    ].join(';')], {
+      input: JSON.stringify(value),
+      encoding: 'utf8',
+      env: { ...process.env, PYTHONUTF8: '1' },
+    });
     if (python.error?.code === 'ENOENT') {
       t.diagnostic('python3 unavailable; parity sub-assertion skipped');
       continue;
