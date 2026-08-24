@@ -34,6 +34,15 @@ All notable changes to deep-loop are documented in this file.
 - `recordReviewOutcome` and `commitReviewOutcome` accept optional `now`; omitted
   values retain the previous wall-clock behavior.
 
+### Fixed
+
+- Windows router validation now keeps the OS-canonical validator spelling instead
+  of rejecting an equivalent drive-letter, separator, or long-name spelling.
+- Verified durable vectors exclude the exact transient
+  `.lock.release-<lock-token>` lifecycle artifact. A successor reader can acquire
+  `.lock` while the predecessor removes that release quarantine; treating it as
+  durable state produced a false `integrity-invalid` diagnosis under contention.
+
 ### Notes
 
 - The eval profile is `deep-loop-current-v1.22` in lockstep with this release. The
