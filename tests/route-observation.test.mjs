@@ -947,7 +947,7 @@ test('validator runs after both created and idempotent publication with synchron
   assert.equal(readFileSync(f.path).equals(before), true);
   const calls = readFileSync(stub.marker, 'utf8').trim().split('\n').map(line => JSON.parse(line));
   assert.equal(calls.length, 2);
-  const canonicalRoot = fs.realpathSync(f.root);
+  const canonicalRoot = (fs.realpathSync.native || fs.realpathSync)(f.root);
   const canonicalRun = join(canonicalRoot, '.deep-loop', 'runs', RUN_ID);
   const canonicalPath = join(canonicalRun, 'observations', `${f.subject}.json`);
   for (const call of calls) {
@@ -995,7 +995,9 @@ test('validator maps exit, signal, buffer, and spawn failures to closed non-sens
     ['invalid', { state: 'invalid', reason: 'invalid', detail: 'I-STRING', exit_status: 1 }, {}],
     ['traceback', { state: 'invalid', reason: 'invalid', detail: 'unknown', exit_status: 1 }, {}],
     ['usage', { state: 'usage', reason: 'usage', exit_status: 2 }, {}],
-    ['signal', { state: 'unavailable', reason: 'signal' }, {}],
+    ...(process.platform === 'win32'
+      ? []
+      : [['signal', { state: 'unavailable', reason: 'signal' }, {}]]),
     ['max-buffer', { state: 'unavailable', reason: 'max-buffer' }, {}],
     ['python-missing', { state: 'unavailable', reason: 'python-unavailable' }, { python: '/nonexistent/python3' }],
   ];
