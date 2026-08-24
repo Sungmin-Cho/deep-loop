@@ -33,6 +33,7 @@ import { resolveRunContext } from './lib/run-context.mjs';
 import { leaseCheck, acquireLease, releaseLease, sameBoundaryEvent } from './lib/lease.mjs';
 import { newWorkstream, setWorkstreamStatus, recordWorkstreamTerminal } from './lib/workspace.mjs';
 import { newEpisode, recordEpisode, abandonEpisode } from './lib/episode.mjs';
+import { projectObservationForCli } from './lib/route-observation.mjs';
 import {
   configureReviewFlags,
   dispatchReview,
@@ -1316,14 +1317,16 @@ const handlers = {
         try { routing = JSON.parse(f.routing); }
         catch { error('INVALID_ROUTING: must be JSON'); return 1; }
       }
-      recordEpisode(root, runId, id, {
+      const result = recordEpisode(root, runId, id, {
         status,
         artifacts: f.artifacts ? JSON.parse(f.artifacts) : [],
         proof: f.proof ? JSON.parse(f.proof) : {},
         ...(routing !== undefined ? { routing } : {}),
         fence,
         now: parseNow(f),
-      }); json({ ok: true }); return 0;
+      });
+      const observation = projectObservationForCli(result?.observation);
+      json({ ok: true, ...(observation ? { observation } : {}) }); return 0;
     }
     if (verb === 'abandon') {
       const id = reqStr(f, 'id'); if (!id) { error('MISSING_ID'); return 2; }
@@ -1332,7 +1335,9 @@ const handlers = {
       // uncaught CONFIRM_REQUIRED stack trace (exit 1). Keep passing confirm:true into the lib (defense in depth).
       if (f.confirm !== true && f.confirm !== 'true') { error('CONFIRM_REQUIRED: pass --confirm (human-only)'); return 2; }
       try {
-        abandonEpisode(root, runId, id, { reason, confirm: true, fence, now: parseNow(f) }); json({ ok: true, status: 'abandoned' }); return 0;
+        const result = abandonEpisode(root, runId, id, { reason, confirm: true, fence, now: parseNow(f) });
+        const observation = projectObservationForCli(result?.observation);
+        json({ ok: true, status: 'abandoned', ...(observation ? { observation } : {}) }); return 0;
       } catch (e) {
         const failure = kernelFailure(e);
         error(failure.message); return failure.code;   // EPISODE_ALREADY_TERMINAL / EPISODE_NOT_FOUND / EPISODE_INPUT_INVALID → exit 1
@@ -1399,7 +1404,14 @@ const handlers = {
       // verdict — the lib decides (CLI-bypass safe); a missing report on APPROVE/CONCERN surfaces REVIEW_NO_EVIDENCE.
       const report = f.report && f.report !== true ? String(f.report) : undefined;
       const findings = f.findings && f.findings !== true ? String(f.findings) : undefined;
-      try { json(recordReviewOutcome(root, runId, { episodeId: episode, verdict, proof: { report, findings }, fence })); return 0; }
+      try {
+        const result = recordReviewOutcome(root, runId, {
+          episodeId: episode, verdict, proof: { report, findings }, fence, now: parseNow(f),
+        });
+        const { observation: rawObservation, ...payload } = result;
+        const observation = projectObservationForCli(rawObservation);
+        json({ ...payload, ...(observation ? { observation } : {}) }); return 0;
+      }
       catch (e) {
         const failure = kernelFailure(e);
         error(failure.message); return failure.code;
@@ -1412,7 +1424,10 @@ const handlers = {
       if (f.stdin !== true) { error('STDIN_REQUIRED: review import requires --stdin'); return 2; }
       try {
         const raw = await readBoundedText(process.stdin);
-        json(importReviewOutcome(root, runId, { raw, fence, now: parseNow(f) }));
+        const result = importReviewOutcome(root, runId, { raw, fence, now: parseNow(f) });
+        const { observation: rawObservation, ...payload } = result;
+        const observation = projectObservationForCli(rawObservation);
+        json({ ...payload, ...(observation ? { observation } : {}) });
         return 0;
       } catch (e) {
         const failure = kernelFailure(e);

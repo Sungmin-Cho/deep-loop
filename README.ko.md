@@ -91,6 +91,9 @@ host 상실 복구도 human-only입니다. 먼저 preserve-pause하고, 확인�
 - trusted PostCompact evidence용 `checkpoints/<checkpoint-key>-compact-observation.json`과 crash-safe pair prune tombstone `checkpoints/<checkpoint-key>-compact-prune.json`
 - fixed-shape restore publication intent `compact-restore-intents/<operation-id>.prepared.json`
 - write-ahead log(**WAL**)용 `transactions/<operation-id>/prepared.json`과 `transactions/<operation-id>/committed.json`
+- RouteObservationV1 route-attempt telemetry용 `observations/<subject_sha256>.json` —
+  성공한 터미널 커밋 뒤 best-effort로 0개 또는 1개가 발행되며, 중복되지 않고
+  커밋–emit 사이 프로세스 종료는 복구하지 않으며 fail-open한다
 - `recoveries/<child-run-id>-affinity-recovery.json`, boundary-recovery capsule, `recoveries/root/<replacement-session-id>.json` root-relocation capsule
 - `terminal/launch-command.txt`와 바인딩된 launch metadata `terminal/launch-command.meta.json`
 

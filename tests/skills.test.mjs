@@ -75,6 +75,27 @@ function violatesBoundary(src) {
   });
 }
 
+// RouteObservationV1 is a derived artifact rather than kernel state, so it is not
+// part of DUR above. Skills still must never publish or edit it directly: only the
+// post-commit kernel library emitter owns observations/<subject_sha256>.json.
+function violatesObservationBoundary(src) {
+  const OBS = 'observations\/[^\\s\'\"]+\\.json';
+  const callForms = [
+    new RegExp(`(Write|Edit)\\s*\\([^)]*?${OBS}`),
+    new RegExp(`(writeFileSync|appendFileSync|writeFile|appendFile)\\s*\\([^)]*?${OBS}`),
+    new RegExp(`\\bsed\\s+-i\\b[^\\n]*?${OBS}`),
+    new RegExp(`\\b(perl|ruby)\\s+-[a-z]*i[a-z]*\\b[^\\n]*?${OBS}`),
+    new RegExp(`open\\s*\\([^)]*${OBS}[^)]*,\\s*[\"'][wa]`),
+  ];
+  if (callForms.some((re) => re.test(src))) return true;
+  const redirect = new RegExp(`(?:>>?|\\btee\\b)\\s+\\S*${OBS}`);
+  const shellWrite = new RegExp(`\\b(cp|mv|rm|truncate|install|dd)\\b[^\\n]*${OBS}`);
+  return src.split('\n').some((line) => {
+    if (/^\s*>/.test(line)) return false;
+    return redirect.test(line) || shellWrite.test(line);
+  });
+}
+
 // Codex r3 sf-4: deep-loop.mjs 를 실제 호출하는 라인 중 mutating subcommand 는 --owner 와 --generation 을 **둘 다** 가져야 한다.
 // Task 8: insights emit 도 mutating (lease-fenced) — MUTATING_SUB/MUTATING_CMD 둘 다 확장.
 const MUTATING_SUB = /(state\s+patch|episode\s+(?:new|record|abandon)|workstream\s+(?:new|set|terminal)|review\s+(?:configure|dispatch|record)|handoff\s+emit|checkpoint\s+(?:emit|observe|restore)|pause\b|budget\s+record|comprehension\s+ack|breaker\s+reset|session-profile\s+set|launcher-executable\s+approve|lease\s+(?:acquire|release)|finish\b|insights\s+emit)/;
@@ -154,6 +175,47 @@ test('boundary scan flags forbidden write forms and allows reads/mentions/blockq
     'event-log.jsonl 은 커널이 appendAnchored 단일 경로로만 쓴다 (스킬은 절대 직접 쓰지 않음).',
   ];
   for (const s of ok) assert.ok(!violatesBoundary(s), `should allow: ${s}`);
+});
+
+test('observation boundary flags direct writers while allowing prose and blockquotes', () => {
+  const bad = [
+    'Write({ file_path: "observations/abc.json", content: body })',
+    'fs.writeFileSync("observations/abc.json", body)',
+    'echo "$JSON" > observations/abc.json',
+    'tee observations/abc.json',
+    'cp tmp observations/abc.json',
+    'rm observations/abc.json',
+    'sed -i "s/x/y/" observations/abc.json',
+    "python -c \"open('observations/abc.json', 'w')\"",
+  ];
+  for (const source of bad) assert.ok(violatesObservationBoundary(source), `should flag: ${source}`);
+  const ok = [
+    '관측 파일 `observations/<subject_sha256>.json`은 커널만 쓴다.',
+    '> echo "$JSON" > observations/example.json',
+    'Read observations/example.json for diagnostics.',
+  ];
+  for (const source of ok) assert.ok(!violatesObservationBoundary(source), `should allow: ${source}`);
+});
+
+test('execution-plane docs never instruct a direct RouteObservationV1 write', () => {
+  for (const file of walkMdFiles(join(ROOT, 'skills'))) {
+    assert.ok(!violatesObservationBoundary(readFileSync(file, 'utf8')),
+      `${file} must not instruct a direct observations/*.json write`);
+  }
+});
+
+test('continue skill preserves optional router linkage without synthesizing it', () => {
+  const source = readFileSync(skillPath('deep-loop-continue'), 'utf8');
+  assert.match(source, /decision_fingerprint/);
+  assert.match(source, /request_sha256/);
+  assert.match(source, /합성하지 않는다|never synthesi[sz]e/i);
+});
+
+test('compact hooks never import the RouteObservationV1 emitter', () => {
+  for (const name of readdirSync(join(ROOT, 'scripts', 'hooks-impl')).filter((entry) => entry.endsWith('.mjs'))) {
+    const source = readFileSync(join(ROOT, 'scripts', 'hooks-impl', name), 'utf8');
+    assert.doesNotMatch(source, /(?:from\s+|import\s*\()['\"][^'\"]*route-observation\.mjs['\"]/, name);
+  }
 });
 
 test('mutatingFenced requires both fence flags on mutating CLI lines (fixtures)', () => {

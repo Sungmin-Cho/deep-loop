@@ -21,6 +21,7 @@ export const RUNTIME_CAPABILITIES = Object.freeze({
     session_effort_allowed: 'kernel-set',            // session-profile validateRuntimeProfile
     compact_supported: true,                         // next-action withAdvice
     handoff_continuity_note: 'desktop-model-effort',  // handoff markdown
+    observation_runtime: 'claude_code',              // route-observation RouteObservationV1 producer runtime
   }),
   codex: Object.freeze({
     skill_token_style: 'dollar',
@@ -40,6 +41,7 @@ export const RUNTIME_CAPABILITIES = Object.freeze({
     session_effort_allowed: 'kernel-set',
     compact_supported: true,
     handoff_continuity_note: 'codex-preflight',
+    observation_runtime: 'codex',
   }),
   grok: Object.freeze({
     skill_token_style: 'slash',
@@ -59,6 +61,7 @@ export const RUNTIME_CAPABILITIES = Object.freeze({
     session_effort_allowed: 'none',
     compact_supported: false,
     handoff_continuity_note: 'grok-attended',
+    observation_runtime: 'grok',
   }),
 });
 

@@ -665,6 +665,53 @@ test('#2(c): APPROVE with a real report under the ws worktree succeeds; event re
   assert.equal(ev.data.findings, 'ok');
 });
 
+test('recordReviewOutcome uses an injected now for the recorded-path event timestamp', () => {
+  const fixedNow = Date.parse('2026-08-10T00:00:00Z');
+  const { root, runId, fence } = freshRun();
+  const { checkerId } = boundChecker(root, runId, fence, 'plan');
+
+  recordReviewOutcome(root, runId, {
+    episodeId: checkerId, verdict: 'REQUEST_CHANGES', fence, now: fixedNow,
+  });
+
+  const outcome = eventLog(root, runId).findLast(event => event.type === 'review-outcome');
+  assert.equal(outcome.ts, '2026-08-10T00:00:00.000Z');
+});
+
+test('recordReviewOutcome without now retains a valid wall-clock event timestamp', () => {
+  const { root, runId, fence } = freshRun();
+  const { checkerId } = boundChecker(root, runId, fence, 'plan');
+  const before = Date.now();
+
+  recordReviewOutcome(root, runId, {
+    episodeId: checkerId, verdict: 'REQUEST_CHANGES', fence,
+  });
+
+  const after = Date.now();
+  const outcome = eventLog(root, runId).findLast(event => event.type === 'review-outcome');
+  const timestamp = Date.parse(outcome.ts);
+  assert.equal(Number.isFinite(timestamp), true);
+  assert.ok(timestamp >= before && timestamp <= after, `${outcome.ts} must be within the call interval`);
+});
+
+test('recordReviewOutcome rejects invalid injected now values without mutation', () => {
+  for (const now of ['not-a-date', Number.NaN, {}]) {
+    const { root, runId, fence } = freshRun();
+    const { checkerId } = boundChecker(root, runId, fence, 'plan');
+    recordEpisode(root, runId, checkerId, {
+      status: 'in_progress', fence, now: Date.parse('2026-08-09T00:00:00Z'),
+    });
+    const beforeEvents = eventLog(root, runId).length;
+
+    assert.throws(() => recordReviewOutcome(root, runId, {
+      episodeId: checkerId, verdict: 'REQUEST_CHANGES', fence, now,
+    }), /INVALID_NOW: event timestamp/);
+
+    assert.equal(readState(root, runId).data.episodes.find(e => e.id === checkerId).status, 'in_progress');
+    assert.equal(eventLog(root, runId).length, beforeEvents);
+  }
+});
+
 // impl-R2 Fix 4: an existing root-contained file that is NOT under the reviewed workstream's worktree (e.g. a stale
 // README.md) cannot be reused as evidence; a report UNDER the worktree is accepted (positive control).
 test('#2(Fix4): a real root file outside the reviewed worktree is refused; a report under the worktree is accepted', () => {

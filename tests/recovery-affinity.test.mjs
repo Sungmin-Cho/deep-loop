@@ -17,6 +17,7 @@ import { contentHash, unwrap } from '../scripts/lib/envelope.mjs';
 import { initRun } from '../scripts/lib/initrun.mjs';
 import { newWorkstream } from '../scripts/lib/workspace.mjs';
 import { newEpisode, recordEpisode } from '../scripts/lib/episode.mjs';
+import { recordReviewOutcome } from '../scripts/lib/review.mjs';
 import {
   captureReconciledRunSnapshot,
   pauseRun,
@@ -129,11 +130,15 @@ function openAffinityFixture(runtime = 'claude', episodePhase = 'maker-in-progre
     } else if (episodePhase === 'checker-blocked') {
       recordEpisode(root, runId, checkerId, { status: 'blocked', fence });
     } else if (episodePhase === 'checker-rejected') {
-      recordEpisode(root, runId, checkerId, {
-        status: 'rejected',
-        proof: { verdict: 'REQUEST_CHANGES' },
+      recordReviewOutcome(root, runId, {
+        episodeId: checkerId,
+        verdict: 'REQUEST_CHANGES',
         fence,
       });
+      assert.equal(
+        readState(root, runId).data.episodes.find(e => e.id === checkerId).review_source,
+        'recorded-path',
+      );
     }
   }
   pauseRun(root, runId, {

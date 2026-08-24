@@ -9,11 +9,12 @@ import { MUTATION_TURN_FLOOR } from './budget.mjs';
 import { assertScopeAllows, bindMakerScope } from './session-scope.mjs';
 import { normalizePortableRelativePath, pathWithin } from './fs-safe.mjs';
 import { assertRoutingDigest, assertRoutingRecord } from './router-adapter.mjs';
+import { observeTerminalEpisode } from './route-observation.mjs';
 
 const NON_TERMINAL = ['pending', 'in_progress', 'blocked'];
-const RECORDABLE_TERMINAL = ['done', 'approved', 'rejected'];   // record 가 설정 가능한 터미널 (abandoned 제외)
-const TERMINAL = RECORDABLE_TERMINAL;                            // 하위 호환 — done 가드/검증 등 기존 참조 유지
-const ALL_TERMINAL = [...RECORDABLE_TERMINAL, 'abandoned'];     // 4개 전체 터미널 (abandonEpisode 가드 포함)
+const RECORDABLE_TERMINAL = ['done'];
+const TERMINAL = RECORDABLE_TERMINAL;
+const ALL_TERMINAL = ['done', 'approved', 'rejected', 'abandoned'];
 const WORKSTREAM_TERMINAL = new Set(['ready', 'merged', 'abandoned']);
 
 function artifactExpectation(loop, workstreamId) {
@@ -193,9 +194,10 @@ export function abandonEpisode(root, runId, episodeId, {
   if (!fence || typeof fence.owner !== 'string' || !Number.isInteger(fence.generation)) throw new Error('FENCE_REQUIRED: abandonEpisode');
   if (!episodeId || typeof episodeId !== 'string' || !episodeId.length) throw new Error('EPISODE_INPUT_INVALID: episodeId');
   if (!reason || typeof reason !== 'string' || !reason.length) throw new Error('EPISODE_INPUT_INVALID: reason');
+  let committed = null;
   appendAnchored(root, runId, {
     type: 'episode-abandon', data: { id: episodeId, reason }, now,
-  }, (loop) => {
+  }, (loop, _spent, tx) => {
     const ep = loop.episodes.find(e => e.id === episodeId);
     ep.status = 'abandoned';
     ep.abandon_reason = reason;
@@ -209,6 +211,9 @@ export function abandonEpisode(root, runId, episodeId, {
     // `ack`/`recordReviewed` is a no-op — an abandoned maker is out of episodes_total and must never be re-counted
     // into episodes_human_reviewed (which would make reviewed/total exceed 1 and wrongly drop comprehension debt to 0).
     ep.human_reviewed = true;
+    committed = {
+      loop: structuredClone(loop), event: tx.event, episodeId, terminalStatus: 'abandoned',
+    };
   }, (loop) => {
     const r = leaseCheck(loop, fence); if (!r.ok) throw new Error('LEASE_FENCED: ' + r.reason);
     const ep = loop.episodes.find(e => e.id === episodeId);
@@ -227,6 +232,7 @@ export function abandonEpisode(root, runId, episodeId, {
       }
     }
   }, { floor: MUTATION_TURN_FLOOR });
+  return { observation: observeTerminalEpisode(root, runId, committed) };
 }
 
 export function recordEpisode(root, runId, episodeId, {
@@ -238,11 +244,15 @@ export function recordEpisode(root, runId, episodeId, {
   // Cheap input validation BEFORE appendAnchored (no state access needed). Codex impl r7 🔴:
   // a null/non-array `artifacts` or null/non-object `proof` would otherwise throw INSIDE the mutate
   // (after the event is appended), staling event_log_head → BUDGET_TAMPERED on next reconcile.
+  if (status === 'approved' || status === 'rejected') {
+    throw new Error('EPISODE_TERMINAL_VIA_REVIEW: approved/rejected are written only by review record / review import');
+  }
   if (![...NON_TERMINAL, ...TERMINAL].includes(status)) throw new Error(`EPISODE_STATUS_INVALID: ${status}`);
   if (!Array.isArray(artifacts) || !artifacts.every(a => typeof a === 'string')) throw new Error('EPISODE_INPUT_INVALID: artifacts must be an array of strings');
   if (proof === null || typeof proof !== 'object' || Array.isArray(proof)) throw new Error('EPISODE_INPUT_INVALID: proof must be an object');
   if (routing !== undefined && status !== 'in_progress') throw new Error('EPISODE_ROUTING_STATUS_INVALID');
   const frozenRouting = normalizeRoutingInput(routing);
+  let committed = null;
   appendAnchored(root, runId, {
     type: 'episode-record',
     data: { id: episodeId, status, artifacts, ...(frozenRouting !== undefined ? { routing: frozenRouting } : {}) },
@@ -268,6 +278,11 @@ export function recordEpisode(root, runId, episodeId, {
     if (artifacts.length) ep.artifacts = artifacts;
     if (frozenRouting !== undefined) ep.routing = structuredClone(frozenRouting);
     for (const [k, v] of Object.entries(proof)) if (/^result_[A-Za-z0-9_]+$/.test(k)) ep[k] = v;
+    if (status === 'done') {
+      committed = {
+        loop: structuredClone(loop), event: tx.event, episodeId, terminalStatus: status,
+      };
+    }
   }, (loop) => {
     // Codex r3 🔴: All throwing validations inside preCheck (run on fresh loop, before append)
     if (fence) { const r = leaseCheck(loop, fence); if (!r.ok) throw new Error('LEASE_FENCED: ' + r.reason); }
@@ -276,6 +291,9 @@ export function recordEpisode(root, runId, episodeId, {
     // Codex r3 🔴2 + R1 f2/R2 f1: 현재 status 가 터미널(abandoned 포함)이면 요청 status 무관하게 재기록 불가.
     if (ALL_TERMINAL.includes(ep.status)) {
       throw new Error('EPISODE_ALREADY_TERMINAL: ' + episodeId);
+    }
+    if (ep.role === 'checker' && status === 'done') {
+      throw new Error(`EPISODE_CHECKER_DONE_FORBIDDEN: ${episodeId} checker terminal is written only by review record / review import / episode abandon`);
     }
     if (frozenRouting !== undefined) {
       if (status !== 'in_progress') throw new Error('EPISODE_ROUTING_STATUS_INVALID');
@@ -338,11 +356,9 @@ export function recordEpisode(root, runId, episodeId, {
         const submitted = new Set(artifacts);
         const uncovered = expected.filter(a => !submitted.has(a));
         if (uncovered.length) throw new Error('EPISODE_ARTIFACTS_INCOMPLETE: ' + uncovered.join(','));
-      } else if (status === 'approved' && !['APPROVE', 'CONCERN'].includes(proof.verdict)) {
-        throw new Error(`EPISODE_TERMINAL_NO_PROOF: ${episodeId} approved requires proof.verdict=APPROVE|CONCERN (accepted concern)`);
-      } else if (status === 'rejected' && proof.verdict !== 'REQUEST_CHANGES') {
-        throw new Error(`EPISODE_TERMINAL_NO_PROOF: ${episodeId} rejected requires proof.verdict=REQUEST_CHANGES`);
       }
     }
   }, { floor: MUTATION_TURN_FLOOR });
+  if (!committed) return undefined;
+  return { observation: observeTerminalEpisode(root, runId, committed) };
 }

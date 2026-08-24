@@ -78,7 +78,7 @@ test('validateResult requires the five verdicts and seven metadata fields', () =
           changed_files: ['solution.json'],
           isolation_receipt: {
             schema_version: 1, boundary: 'node-permission-model:permission',
-            covered_effects: ['child-process','file-write','network-write'], profile_id: 'deep-loop-current-v1.21',
+            covered_effects: ['child-process','file-write','network-write'], profile_id: 'deep-loop-current-v1.22',
             allowed_effects: ['read-only'], declared_command: ['node','--test','.eval/verify-outcome.test.mjs'],
             executed_argv: ['--permission','.eval/verify-outcome.test.mjs'], exit: 0, timed_out: false,
             observed_effects: [], passed: true,
@@ -93,7 +93,7 @@ test('validateResult requires the five verdicts and seven metadata fields', () =
     }],
     kernel_findings: [],
     profile_comparison_stub: [],
-    meta: { model: 'none:fixture', harness: 'none:fixture', profile: 'deep-loop-current-v1.21', kernel_version: '1.21.0', node: 'v26', runtime: 'fixture', task_bank_sha256: '0'.repeat(64) },
+    meta: { model: 'none:fixture', harness: 'none:fixture', profile: 'deep-loop-current-v1.22', kernel_version: '1.22.0', node: 'v26', runtime: 'fixture', task_bank_sha256: '0'.repeat(64) },
   };
   assert.equal(validateResult(result).ok, true);
   assert.equal(validateResult({ ...result, results: [{ verdict: 'nope' }] }).ok, false);
@@ -126,7 +126,7 @@ test('host status, row verification, and summary accounting are equivalent by co
       invariant_family: [4], host_binding: null,
     }],
     kernel_findings: [], profile_comparison_stub: [],
-    meta: { model: 'none:fixture', harness: 'none:fixture', profile: 'deep-loop-current-v1.21', kernel_version: '1.21.0', node: 'v26', runtime: 'fixture', task_bank_sha256: '0'.repeat(64) },
+    meta: { model: 'none:fixture', harness: 'none:fixture', profile: 'deep-loop-current-v1.22', kernel_version: '1.22.0', node: 'v26', runtime: 'fixture', task_bank_sha256: '0'.repeat(64) },
   };
   assert.equal(validateResult(base).ok, true);
   const launderedRow = structuredClone(base);
@@ -139,7 +139,7 @@ test('host status, row verification, and summary accounting are equivalent by co
 
 test('profile runtime contract is exact and default-deny', () => {
   const profile = {
-    id: 'deep-loop-current-v1.21', driver: 'fixture', model: 'none:fixture',
+    id: 'deep-loop-current-v1.22', driver: 'fixture', model: 'none:fixture',
     harness: 'none:fixture', allowed_effects: ['read-only'],
     record: { transcript: false, observables: ['exit', 'effects'] },
   };
@@ -174,7 +174,7 @@ test('published schemas execute against the same positive and negative contract 
   for (const value of [validTask, badTask]) {
     assert.equal(validatePublishedSchema('task', value).ok, validateTask(value).ok);
   }
-  const profile = JSON.parse(readFileSync(join(process.cwd(), 'evals', 'profiles', 'deep-loop-current-v1.21.json'), 'utf8'));
+  const profile = JSON.parse(readFileSync(join(process.cwd(), 'evals', 'profiles', 'deep-loop-current-v1.22.json'), 'utf8'));
   const spoof = { ...profile, id: 'host-native', model: 'spoof', harness: 'spoof' };
   for (const value of [profile, spoof]) {
     assert.equal(validatePublishedSchema('profile', value).ok, validateProfile(value).ok);

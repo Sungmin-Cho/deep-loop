@@ -60,7 +60,9 @@ migrated compatibility policies only.
   descriptors, executable trust, isolated Codex transport, review import, durable
   receipts. `DEEP_LOOP_ROOT/scripts/lib/route-flags.mjs` owns `ROUTE_FLAGS` (help and
   unknown-flag vocabulary). `DEEP_LOOP_ROOT/scripts/lib/checkpoint.mjs` owns compact-checkpoint emission, retention
-  and freshness selection.
+  and freshness selection. `DEEP_LOOP_ROOT/scripts/lib/route-observation.mjs` owns the
+  fail-open RouteObservationV1 mapping and emitter; `DEEP_LOOP_ROOT/scripts/lib/episode-predicates.mjs`
+  owns shared episode ordering and proof-capable-checker predicates.
 - Hook and headless glue, spelled out rather than brace-expanded so each path stays
   greppable — `DEEP_LOOP_ROOT/tests/docs.test.mjs` checks these by literal, which is how a stale
   `.sh` wrapper reference was caught once:
@@ -186,6 +188,11 @@ node --test tests/<x>.test.mjs   # single file
 - Every deep-loop artifact except `loop.json` — handoff, compaction-state,
   final-report — is wrapped in the M3 envelope (`producer:"deep-loop"`, ULID `run_id`,
   `parent_run_id` chain).
+  *Exception:* the RouteObservationV1 file (`observations/<subject_sha256>.json`) **omits**
+  `parent_run_id` when it would be null because deep-model-router rejects a
+  present-but-null key. It carries `parent_run_id` only when a valid parent exists, so
+  the chain remains preserved whenever there is one. Do not "fix" it back to
+  `parent_run_id: null`.
 - Skill frontmatter is exactly `name` / `description` / `user-invocable`. `description`
   packs English and Korean trigger phrases; detect the user's language and respond in
   kind.

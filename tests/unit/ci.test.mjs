@@ -124,8 +124,8 @@ test('all six jobs run the same shell-neutral preflight command without dependen
   assert.doesNotMatch(source, /(?:^|\s)(?:bash|sh|pwsh|powershell)(?:\s|$)/im);
 });
 
-test('the npm lockfile carries the 1.21.0 release identity used by every preflight cell', () => {
+test('the npm lockfile carries the 1.22.0 release identity used by every preflight cell', () => {
   const lock = JSON.parse(readFileSync(join(ROOT, 'package-lock.json'), 'utf8'));
-  assert.equal(lock.version, '1.21.0');
-  assert.equal(lock.packages?.['']?.version, '1.21.0');
+  assert.equal(lock.version, '1.22.0');
+  assert.equal(lock.packages?.['']?.version, '1.22.0');
 });

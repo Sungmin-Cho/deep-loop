@@ -5,6 +5,46 @@ All notable changes to deep-loop are documented in this file.
 > Note: the `[1.1.0]`/`[1.2.0]` entries pre-date this changelog file (a known lag between
 > `plugin.json.version` and the changelog); this release does not retro-fill them.
 
+## [1.22.0] — 2026-08-24
+
+### Added
+
+- **C-lite linkage passthrough.** Optional routing `decision_fingerprint` and
+  `request_sha256` are preserved without synthesis. RouteObservationV1 emits
+  `observations/<subject_sha256>.json` best-effort, zero-or-one time per successful
+  terminal episode commit.
+- **No-clobber observation publication.** `durableAtomicCreate` backs the emitter's
+  pre/post-`mkdirSync` run-parent and pre-write, pre/post-`linkSync`, and pre-cleanup
+  observation-parent revalidation. If a detected replacement moved the original
+  directory, the moved-original temp write residue may remain rather than unlinking a
+  rebound pathname.
+- **Opt-in router validation.** The validator is gated by synchronized sibling
+  `package.json` and plugin-manifest versions (`deep-model-router` >= 1.4.0).
+- **Deterministic recorded-path reviews.** `review record --now` supplies a fixed
+  timestamp when one is required.
+
+### Changed
+
+- `epOrder` and `isProofCapableChecker` now live in `episode-predicates.mjs` with
+  compatible re-exports.
+- Direct lib `recordEpisode` calls reject `approved`/`rejected` with
+  `EPISODE_TERMINAL_VIA_REVIEW`; the CLI already returned the same exit-1 outcome.
+- `recordEpisode` rejects checker `done` with `EPISODE_CHECKER_DONE_FORBIDDEN`
+  (lib and CLI exit 1).
+- `recordReviewOutcome` and `commitReviewOutcome` accept optional `now`; omitted
+  values retain the previous wall-clock behavior.
+
+### Notes
+
+- The eval profile is `deep-loop-current-v1.22` in lockstep with this release. The
+  durable schema remains `0.4.0`; `usage` and `timing` remain outside v1 scope.
+- Observation publication is at-most-once: a crash between terminal commit and emit is
+  not recovered. It detects an observed parent-directory replacement and is fail-open.
+  The final path-based `mkdirSync` and `linkSync` windows, after temp write and before
+  cleanup, are outside scope under the cooperative-but-fallible threat model because
+  Node has no dirfd/`mkdirat`/`linkat` API; this is not a claim of race freedom.
+- Deep-suite re-pin remains proposal-only.
+
 ## [1.21.0] — 2026-08-21
 
 ### Changed

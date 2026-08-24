@@ -11,9 +11,9 @@ are illustrative and do not claim observed agent performance.
 | deep-loop-kernel-minimal | outcome-deterministic-bug-201 | true | false | false | false | not-applicable |
 | deep-loop-kernel-minimal | outcome-valid-alternative-211 | true | false | false | false | not-applicable |
 | deep-loop-kernel-minimal | outcome-should-review-213 | false | false | true | false | procedural-rigidity |
-| deep-loop-current-v1.21 | outcome-deterministic-bug-201 | true | false | false | false | not-applicable |
-| deep-loop-current-v1.21 | outcome-valid-alternative-211 | true | false | false | false | not-applicable |
-| deep-loop-current-v1.21 | outcome-should-review-213 | true | false | false | false | not-applicable |
+| deep-loop-current-v1.22 | outcome-deterministic-bug-201 | true | false | false | false | not-applicable |
+| deep-loop-current-v1.22 | outcome-valid-alternative-211 | true | false | false | false | not-applicable |
+| deep-loop-current-v1.22 | outcome-should-review-213 | true | false | false | false | not-applicable |
 | deep-loop-experimental | outcome-deterministic-bug-201 | false | false | false | false | model-error |
 | deep-loop-experimental | outcome-valid-alternative-211 | false | true | true | false | harness-constraint |
 | deep-loop-experimental | outcome-should-review-213 | false | false | false | false | environment-error |

@@ -13,6 +13,9 @@ import { REVIEW_IMPORT_MAX_BYTES } from './bounded-input.mjs';
 import { canonicalProjectRoot } from './project-root.mjs';
 import { sessionRuntime } from './runtime.mjs';
 import { assertScopeAllows } from './session-scope.mjs';
+import { isProofCapableChecker } from './episode-predicates.mjs';
+
+export { isProofCapableChecker };
 
 export const REVIEW_REPORT_BODY_MAX_BYTES = 262_144;
 export const REVIEW_IMPORT_MAX_ARTIFACTS = 256;
@@ -22,14 +25,9 @@ const TOP_LEVEL_KEYS = Object.freeze([
   'attempt_id', 'verdict', 'report_body', 'artifacts',
 ]);
 const ARTIFACT_KEYS = Object.freeze(['path', 'sha256']);
-const REVIEWERS = new Set(['deep-review', 'subagent-checker']);
 const VERDICTS = new Set(['APPROVE', 'REQUEST_CHANGES', 'CONCERN']);
 const SHA256 = /^[0-9a-f]{64}$/;
 export const REVIEW_ATTEMPT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-
-// Closed proof identity set shared by record/import, routing, and finish.
-// Legacy `standalone` (and unknown plugins) may remain in persisted history, but can never create proof.
-export const isProofCapableChecker = checker => checker?.role === 'checker' && REVIEWERS.has(checker.plugin);
 
 const exactKeys = (value, keys) => {
   const actual = Object.keys(value).sort();

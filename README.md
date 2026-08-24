@@ -101,6 +101,10 @@ The durable artifact inventory under `.deep-loop/runs/<run-id>/` includes:
 - `checkpoints/<checkpoint-key>-compact-observation.json` for trusted PostCompact evidence and `checkpoints/<checkpoint-key>-compact-prune.json` for crash-safe pair pruning;
 - `compact-restore-intents/<operation-id>.prepared.json` for a fixed-shape restore publication intent;
 - `transactions/<operation-id>/prepared.json` and `transactions/<operation-id>/committed.json` for the write-ahead log (**WAL**);
+- `observations/<subject_sha256>.json` for RouteObservationV1 route-attempt telemetry,
+  emitted best-effort (zero-or-one) after a successful terminal episode commit; it is
+  never duplicated, never recovered if the process dies between commit and emit, and
+  fails open;
 - `recoveries/<child-run-id>-affinity-recovery.json`, boundary-recovery capsules, and `recoveries/root/<replacement-session-id>.json` root-relocation capsules;
 - `terminal/launch-command.txt` plus bound `terminal/launch-command.meta.json` launch metadata.
 

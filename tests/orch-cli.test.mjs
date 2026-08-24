@@ -9,6 +9,8 @@ import { initRun } from '../scripts/lib/initrun.mjs';
 import { readState, runDir, writeState } from '../scripts/lib/state.mjs';
 import { canonicalProjectRoot, projectRootDigest } from '../scripts/lib/project-root.mjs';
 import { emitHandoff } from '../scripts/lib/handoff.mjs';
+import { newWorkstream } from '../scripts/lib/workspace.mjs';
+import { newEpisode, recordEpisode } from '../scripts/lib/episode.mjs';
 import { migrateAuthenticLegacyTransport } from './helpers/legacy-transport.mjs';
 
 const CLI = join(process.cwd(), 'scripts', 'deep-loop.mjs');
@@ -165,6 +167,67 @@ function cliSnapshot(root, runId) {
 function runResult(root, args) {
   try { return { code: 0, stdout: run(root, args), stderr: '' }; }
   catch (e) { return { code: e.status, stdout: String(e.stdout || ''), stderr: String(e.stderr || '') }; }
+}
+
+const P6A_SEED_NOW = Date.parse('2026-08-09T00:00:00Z');
+const P6A_REVIEW_NOW = '2026-08-10T00:00:00Z';
+
+function seedDeterministicRecordedReviewPair() {
+  const root = mkdtempSync(join(tmpdir(), 'dl-p6a-a-'));
+  const { runId } = initRun(root, {
+    runtime: 'claude', goal: 'p6a', detected: { 'deep-review': true },
+    now: new Date(P6A_SEED_NOW), env: {}, platform: 'linux', run: () => ({ code: 1 }), pid: 4242,
+  });
+  const cloneParent = mkdtempSync(join(tmpdir(), 'dl-p6a-b-'));
+  const cloneRoot = join(cloneParent, 'project');
+  cpSync(root, cloneRoot, { recursive: true });
+  const cloned = JSON.parse(readFileSync(join(runDir(cloneRoot, runId), 'loop.json'), 'utf8'));
+  cloned.project.root = canonicalProjectRoot(cloneRoot);
+  writeState(cloneRoot, runId, cloned);
+
+  const populate = (projectRoot) => {
+    const fence = { owner: runId, generation: 1, intent: 'business' };
+    const worktree = '.worktrees/p6a';
+    const ws = newWorkstream(projectRoot, runId, {
+      title: 'p6a', branch: 'p6a', worktree, fence, now: P6A_SEED_NOW,
+    }).id;
+    mkdirSync(join(projectRoot, worktree), { recursive: true });
+    const artifact = `${worktree}/artifact.txt`;
+    const report = `${worktree}/review.md`;
+    writeFileSync(join(projectRoot, artifact), 'artifact');
+    writeFileSync(join(projectRoot, report), '# deterministic review');
+    const makerId = newEpisode(projectRoot, runId, {
+      plugin: 'deep-work', role: 'maker', kind: 'plan', point: 'plan', workstream: ws,
+      expectedArtifacts: [artifact], fence, now: P6A_SEED_NOW,
+    }).id;
+    recordEpisode(projectRoot, runId, makerId, {
+      status: 'in_progress', fence, now: P6A_SEED_NOW,
+    });
+    recordEpisode(projectRoot, runId, makerId, {
+      status: 'done', artifacts: [artifact], proof: {}, fence, now: P6A_SEED_NOW,
+    });
+    const checkerId = newEpisode(projectRoot, runId, {
+      plugin: 'deep-review', role: 'checker', kind: 'plan-review', point: 'plan',
+      workstream: ws, targetMaker: makerId, fence, now: P6A_SEED_NOW,
+    }).id;
+    return { root: projectRoot, runId, fence, ws, makerId, checkerId, report };
+  };
+  return [populate(root), populate(cloneRoot)];
+}
+
+function runRecordedReview(fixture, now) {
+  return runResult(fixture.root, [
+    'review', 'record', '--episode', fixture.checkerId, '--verdict', 'APPROVE',
+    '--report', fixture.report, '--owner', fixture.runId, '--generation', '1',
+    ...(now === undefined ? [] : ['--now', now]),
+  ]);
+}
+
+function rawReviewOutcome(root, runId) {
+  const raw = readFileSync(join(runDir(root, runId), 'event-log.jsonl'), 'utf8')
+    .trimEnd().split('\n').findLast(line => JSON.parse(line).type === 'review-outcome');
+  assert.ok(raw, 'review-outcome event line must exist');
+  return Buffer.from(`${raw}\n`);
 }
 
 // detect-terminal이 소비하는 host 터미널 신호는 forced-win32 fixture로 새면 안 된다 —
@@ -940,8 +1003,16 @@ test('workstream terminal (abandoned) + review record reach kernel via CLI', () 
   // #2+Fix4: a passing verdict via CLI must carry --report — a real file under the reviewed ws worktree (.claude/worktrees/w2).
   mkdirSync(join(root, '.claude/worktrees/w2'), { recursive: true });
   writeFileSync(join(root, '.claude/worktrees/w2/plan-review.md'), '# plan review');
-  run(root, ['review', 'record', '--episode', disp.checkerEpisodeId, '--verdict', 'APPROVE', '--report', '.claude/worktrees/w2/plan-review.md', '--owner', runId, '--generation', '1']);
+  const recorded = run(root, [
+    'review', 'record', '--episode', disp.checkerEpisodeId, '--verdict', 'APPROVE',
+    '--report', '.claude/worktrees/w2/plan-review.md', '--owner', runId, '--generation', '1',
+    '--now', '2026-08-10T00:00:00Z',
+  ]);
+  assert.equal(JSON.parse(recorded).review_source, 'recorded-path');
   assert.equal(readState(root, runId).data.episodes.find(e => e.id === disp.checkerEpisodeId).status, 'approved');
+  const events = readFileSync(join(runDir(root, runId), 'event-log.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map(line => JSON.parse(line));
+  assert.equal(events.findLast(event => event.type === 'review-outcome').ts, '2026-08-10T00:00:00.000Z');
 });
 
 test('review record derives proof metadata and rejects legacy caller source/workstream/point flags', () => {
@@ -951,6 +1022,70 @@ test('review record derives proof metadata and rejects legacy caller source/work
     assert.equal(result.code, 1, name);
     assert.match(result.stderr, /REVIEW_METADATA_FORBIDDEN/, name);
   }
+});
+
+test('review record without --now preserves its public result and state projections', () => {
+  const [fixture] = seedDeterministicRecordedReviewPair();
+  const before = readState(fixture.root, fixture.runId).data;
+  const result = runRecordedReview(fixture);
+  assert.equal(result.code, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.deepEqual(Object.keys(output).sort(), [
+    'observation', 'passed', 'report', 'report_sha256', 'review_source', 'terminal', 'verdict',
+  ]);
+  assert.deepEqual(output.observation, {
+    emitted: false, reason: 'git-identity-unavailable',
+  });
+  assert.equal(output.terminal, 'approved');
+  assert.equal(output.review_source, 'recorded-path');
+
+  const after = readState(fixture.root, fixture.runId).data;
+  assert.deepEqual(Object.keys(after).sort(), Object.keys(before).sort());
+  assert.equal(before.episodes.find(e => e.id === fixture.checkerId).status, 'pending');
+  assert.equal(after.episodes.find(e => e.id === fixture.checkerId).status, 'approved');
+  assert.equal(after.episodes.find(e => e.id === fixture.makerId).agent_reviewed, true);
+  assert.deepEqual(after.workstreams.find(w => w.id === fixture.ws).review_points_done, ['plan']);
+});
+
+test('review record classifies invalid --now values before mutation', () => {
+  for (const [suffix, message] of [
+    [['--now'], /INVALID_NOW: --now requires a value \(epoch ms or ISO-8601 date\)/],
+    [['--now', 'zzz'], /INVALID_NOW: --now must be epoch ms or an ISO-8601 date \(got: zzz\)/],
+  ]) {
+    const { root, runId } = seed();
+    const before = cliSnapshot(root, runId);
+    const result = runResult(root, [
+      'review', 'record', '--episode', 'checker', '--verdict', 'REQUEST_CHANGES',
+      '--owner', runId, '--generation', '1', ...suffix,
+    ]);
+    assert.equal(result.code, 1, result.stderr);
+    assert.match(result.stderr, message);
+    assert.deepEqual(cliSnapshot(root, runId), before);
+  }
+});
+
+test('review record --now repeats raw event and stdout bytes across identical roots', () => {
+  const [left, right] = seedDeterministicRecordedReviewPair();
+  const leftResult = runRecordedReview(left, P6A_REVIEW_NOW);
+  const rightResult = runRecordedReview(right, P6A_REVIEW_NOW);
+  assert.equal(leftResult.code, 0, leftResult.stderr);
+  assert.equal(rightResult.code, 0, rightResult.stderr);
+  assert.equal(Buffer.from(leftResult.stdout).equals(Buffer.from(rightResult.stdout)), true);
+  const leftRaw = rawReviewOutcome(left.root, left.runId);
+  const rightRaw = rawReviewOutcome(right.root, right.runId);
+  assert.equal(leftRaw.equals(rightRaw), true);
+  assert.equal(JSON.parse(leftRaw).ts, '2026-08-10T00:00:00.000Z');
+
+  const [control] = seedDeterministicRecordedReviewPair();
+  const controlResult = runRecordedReview(control, '2026-08-10T00:00:01Z');
+  assert.equal(controlResult.code, 0, controlResult.stderr);
+  const leftEvent = JSON.parse(leftRaw);
+  const controlEvent = JSON.parse(rawReviewOutcome(control.root, control.runId));
+  const { ts: leftTs, checksum: leftChecksum, ...leftBusiness } = leftEvent;
+  const { ts: controlTs, checksum: controlChecksum, ...controlBusiness } = controlEvent;
+  assert.notEqual(leftTs, controlTs);
+  assert.notEqual(leftChecksum, controlChecksum);
+  assert.deepEqual(leftBusiness, controlBusiness);
 });
 
 test('review record missing episode or verdict remains usage exit 2', () => {

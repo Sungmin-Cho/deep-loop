@@ -540,6 +540,21 @@ function spawnImport(root, runId, raw, extra = []) {
   return { child, done: new Promise(resolve => child.on('close', code => resolve({ code, stdout, stderr }))) };
 }
 
+test('review import keeps its generatedAt timestamp priority over the recorded-path now threading', async () => {
+  const f = fixture();
+  const importNow = '2026-08-10T00:00:00Z';
+  assert.notEqual(importNow, FIXED_NOW, 'the import timestamp must differ from the earlier claim timestamp');
+
+  const result = await spawnImport(
+    f.root, f.runId, JSON.stringify(f.input), ['--now', importNow],
+  ).done;
+
+  assert.equal(result.code, 0, result.stderr);
+  const outcome = eventLog(f.root, f.runId).findLast(event => event.type === 'review-outcome');
+  assert.equal(outcome.ts, '2026-08-10T00:00:00.000Z');
+  assert.equal(outcome.data.review_source, 'imported-stdin');
+});
+
 test('locked commit rebuilds the exact envelope and rejects post-preparation byte tampering', () => {
   const f = fixture();
   const beforeEvents = eventLog(f.root, f.runId).length;

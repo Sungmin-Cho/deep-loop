@@ -8,7 +8,9 @@ import { createFileSymlinkOrSkip } from './helpers/fs-fixtures.mjs';
 import { locateDeepModelRouter } from '../scripts/lib/locate-deep-model-router.mjs';
 import {
   attachRoutingToDescriptor,
+  assertRoutingDigest,
   buildRoutingRecord,
+  isRoutingRecord,
   mayRecordInProgress,
   shouldAttachRouting,
   translateRouteOutcome,
@@ -334,6 +336,52 @@ test('attachRoutingToDescriptor threads selected model/effort onto a spawn descr
   assert.equal(attached.routing_provenance, 'router');
 });
 
+test('adapter: buildRoutingRecord optionally preserves valid router fingerprints', () => {
+  const record = buildRoutingRecord(
+    { route_schema_version: 1, task_class: 'REVIEW' },
+    decision({
+      decision_fingerprint: 'a'.repeat(64),
+      request_sha256: 'b'.repeat(64),
+    }),
+  );
+  assert.equal(record.decision.decision_fingerprint, 'a'.repeat(64));
+  assert.equal(record.decision.request_sha256, 'b'.repeat(64));
+});
+
+test('adapter: invalid or absent router fingerprints are omitted, never normalized to null', () => {
+  const absent = buildRoutingRecord(
+    { route_schema_version: 1, task_class: 'REVIEW' },
+    decision(),
+  );
+  assert.equal(Object.hasOwn(absent.decision, 'decision_fingerprint'), false);
+  assert.equal(Object.hasOwn(absent.decision, 'request_sha256'), false);
+
+  const invalid = buildRoutingRecord(
+    { route_schema_version: 1, task_class: 'REVIEW' },
+    decision({ decision_fingerprint: 'zz', request_sha256: 123 }),
+  );
+  assert.equal(Object.hasOwn(invalid.decision, 'decision_fingerprint'), false);
+  assert.equal(Object.hasOwn(invalid.decision, 'request_sha256'), false);
+});
+
+test('adapter: legacy routing identity and policy digest remain unchanged by optional fingerprints', () => {
+  const legacy = buildRoutingRecord(
+    { route_schema_version: 1, task_class: 'REVIEW' },
+    decision(),
+  );
+  assert.equal(isRoutingRecord(legacy), true);
+  assert.equal(isRoutingRecord({
+    ...legacy,
+    decision: { ...legacy.decision, decision_fingerprint: 'z'.repeat(64) },
+  }), true);
+  assert.doesNotThrow(
+    () => assertRoutingDigest({ episodes: [{ routing: legacy }] }, {
+      ...legacy,
+      decision: { ...legacy.decision, decision_fingerprint: 'z'.repeat(64) },
+    }),
+  );
+});
+
 test('adapter: live DEEP_MODEL_ROUTER_CLI LOW route is dispatchable and freezes identity fields', (t) => {
   const routerCli = existingRouterCli();
   if (!routerCli) {
@@ -382,4 +430,6 @@ test('adapter: live DEEP_MODEL_ROUTER_CLI LOW route is dispatchable and freezes 
   assert.equal(frozen.provenance, 'router');
   assert.equal(frozen.selected_model, translated.decision.selected_model);
   assert.equal(frozen.decision.policy_sha256, translated.decision.policy_sha256);
+  assert.match(frozen.decision.decision_fingerprint, /^[0-9a-f]{64}$/);
+  assert.match(frozen.decision.request_sha256, /^[0-9a-f]{64}$/);
 });
