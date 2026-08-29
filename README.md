@@ -223,6 +223,13 @@ Codex App install/discovery and in-task skill execution are supported by the plu
 | Codex App | Install/discovery and in-task execution | `workstream-session` — manual task change only at the first-terminal boundary | Manual new task only | **Officially supported** by opening a new task, then `$deep-loop:deep-loop-resume` | Optional isolated `codex exec` driver after the boundary | Plugin lifecycle hooks after trust review; version-dependent, graceful absence; App smoke pending |
 | Grok CLI, macOS | Full (attended) | `workstream-session` — same conversation until the first-terminal boundary; compact unsupported | Explicitly approved Darwin terminal/tmux launch using the trusted grok runtime | **Officially supported** via `/deep-loop-resume` | Unsupported — no measured headless | Unsupported — plugin hook matcher `"*"` did not fire |
 
+Grok attended checker dispatch (Route E) is a fail-closed separate-process
+bridge (`claude -p` / `codex exec` under `dispatch_agent.py`), gated on the
+installed model-router cache recording grok-host `verified: true` for a
+read-only reviewer seat. Native Grok `spawn_subagent` isolation is not independence.
+Until that ledger bit is set, Grok `dispatch_checker` stays
+Route D (`needs-human`). Compact and measured headless remain unsupported.
+
 The `workstream-session` continuation policy applies on every host. An attended run defaults to interactive same-conversation work until the first-terminal boundary; unattended runs retain measured headless execution but cannot rotate mid-Workstream. Manual resume is a first-class supported path, not only an error fallback.
 
 **Codex POSIX visible authority:** macOS/Linux automatic visible continuation requires the durable human-approved Codex runtime identity. `cmux` is runnable only when detection bound the same absolute bundled executable to the exact socket with a successful ping. `tmux` is supported after a human approves its canonical executable identity and detection binds that identity to the exact `$TMUX` socket, server PID, and session: the approved binary's `#{session_id}` must match, and an OS-bound pane ancestry proof (`#{pane_pid}` ↔ process ancestry) must independently derive the same session. On macOS, the fixed `/usr/bin/osascript` may launch only the positively detected iTerm2 or Terminal.app entry; finding that system binary alone never activates both launchers. Missing runtime approval returns `runtime-identity-unavailable`, identity or launcher drift fails closed around the spawned CAS, and no path substitutes a bare `codex` or a Claude process.

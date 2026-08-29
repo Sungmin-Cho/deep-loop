@@ -204,6 +204,13 @@ Windows의 결합 경로는 `%USERPROFILE%\.codex\plugins\deep-loop`와 `%USERPR
 | Codex App | install/discovery와 in-task execution | `workstream-session` — first-terminal 경계에서만 수동 task 변경 | 수동 새 task만 | 새 task를 열고 `$deep-loop:deep-loop-resume`을 실행하는 **공식 지원 경로** | 경계 뒤 선택적 격리 `codex exec` 드라이버 | trust review 후 플러그인 lifecycle hook; 버전 의존·우아한 부재, App smoke pending |
 | Grok CLI, macOS | 전체 (attended) | `workstream-session` — first-terminal 경계까지 같은 대화; compact 미지원 | 승인된 Darwin 터미널/tmux에서 trusted grok runtime 실행 | `/deep-loop-resume`를 통한 **공식 지원 경로** | 미지원 — no measured headless | 미지원 — plugin hook matcher `"*"` 미기동 |
 
+Grok attended checker dispatch(Route E)는 fail-closed 별도 프로세스 브리지
+(`dispatch_agent.py` 감독 하의 `claude -p` / `codex exec`)이며, 설치 캐시의
+grok-host `verified: true` read-only reviewer seat에 게이트됩니다. native Grok `spawn_subagent` 격리는 독립성이 아닙니다.
+그 ledger가 켜지기 전에는 Grok
+`dispatch_checker`는 Route D(`needs-human`)입니다. compact와 measured headless는
+계속 미지원입니다.
+
 `workstream-session` continuation policy는 모든 host에 적용됩니다. attended run은 first-terminal 경계까지 interactive 동일 대화 작업이 기본입니다. unattended run은 측정형 headless 실행을 유지하지만 Workstream 중간에는 rotate하지 않습니다. manual resume은 오류 발생 시에만 쓰는 fallback이 아니라 일급 공식 지원 경로입니다.
 
 **Codex POSIX visible authority:** macOS/Linux 자동 visible continuation에는 durable human-approved Codex runtime identity가 필요합니다. `cmux`는 양성 감지가 같은 absolute bundled executable과 exact socket을 성공한 ping으로 묶었을 때만 실행됩니다. `tmux`는 사람이 canonical executable identity를 승인하고 감지가 그 identity를 exact `$TMUX` socket, server PID, session에 묶은 후 지원됩니다. 승인 바이너리가 파생한 `#{session_id}`가 일치해야 하며, OS-bound pane ancestry proof(`#{pane_pid}` ↔ process ancestry)가 같은 session을 독립적으로 파생해야 합니다. macOS에서는 고정 `/usr/bin/osascript`를 통해 양성 감지된 iTerm2 또는 Terminal.app 하나만 실행되며, system binary의 존재만으로 두 런처를 활성화하지 않습니다. runtime 승인이 없으면 `runtime-identity-unavailable`, identity 또는 launcher drift는 spawned CAS 전후에 fail-closed하며 bare `codex`나 Claude process로 대체하지 않습니다.

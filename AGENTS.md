@@ -44,7 +44,11 @@ performs the dispatch — `Skill()`, or a runtime-selected measured headless
 subprocess: **Claude** uses bounded `claude -p` JSON, approved **Codex** uses
 shell-free `codex exec --json` with incremental JSONL. **Grok** has no measured
 headless path. There is no cross-runtime fallback. Grok compact is unsupported
-(plugin matcher `"*"` did not fire on measured Grok 1.0.4).
+(plugin matcher `"*"` did not fire on measured Grok 1.0.4). Grok attended
+`dispatch_checker` may use Route E (a fail-closed separate-process `claude -p` /
+`codex exec` bridge gated by `review bridge-probe`) when the installed
+model-router cache records grok-host `verified: true` for a read-only reviewer
+seat. Native Grok `spawn_subagent` isolation is not independence.
 
 New runs use `workstream-session` with interactive same-conversation affinity until
 the bound Workstream's first terminal event. Attended launch requires explicit
@@ -63,6 +67,11 @@ migrated compatibility policies only.
   and freshness selection. `DEEP_LOOP_ROOT/scripts/lib/route-observation.mjs` owns the
   fail-open RouteObservationV1 mapping and emitter; `DEEP_LOOP_ROOT/scripts/lib/episode-predicates.mjs`
   owns shared episode ordering and proof-capable-checker predicates.
+  `DEEP_LOOP_ROOT/scripts/lib/checker-bridge.mjs` owns the read-only Grok Route E
+  probe (installed-cache locator, fail-closed transport scan, read-only seat check)
+  and the attested spawn/finalize binders. `DEEP_LOOP_ROOT/scripts/bridge-exec.mjs`
+  constructs child argv from the probed mechanism; `DEEP_LOOP_ROOT/scripts/bridge-finalize.mjs`
+  copies stdout only from a SUCCEEDED supervisor receipt. They do not mutate loop state.
 - Hook and headless glue, spelled out rather than brace-expanded so each path stays
   greppable — `DEEP_LOOP_ROOT/tests/docs.test.mjs` checks these by literal, which is how a stale
   `.sh` wrapper reference was caught once:
@@ -121,7 +130,10 @@ Enforced by code and by review. Each is load-bearing; none is a summary of anoth
 5. **Irreversible external actions are proposal-only in v1** — push/PR/merge/publish/
    delete, and marketplace/deep-suite sync. Always separately human-approved; no skill,
    hook or driver auto-executes them. `respawn`'s runtime-selected Claude/Codex spawn
-   is session continuity, not an external-world change.
+   is session continuity, not an external-world change. Route E's read-only
+   `claude -p` / `codex exec` child is review-judgment acquisition, not an
+   external-world change — and it must not be given write permission on the
+   reviewed tree.
 6. **respawn gate order:** budget → breaker → max_sessions → wallclock → auto_handoff,
    not gated by acting tier. The authoritative maker/checker gate samples a fresh
    injectable clock after preflight. Unattended autonomy forces **headless**, and the

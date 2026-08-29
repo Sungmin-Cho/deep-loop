@@ -1,6 +1,7 @@
-import { readdirSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
+import { pathWithin } from './fs-safe.mjs';
 
 const ROUTE_TASK = 'route_task.py';
 const RELATIVE_CHECKOUT = '../deep-model-router';
@@ -20,10 +21,41 @@ function isRouteTask(path) {
   }
 }
 
-function isInstalledCacheRouteTask(path) {
+export function isInstalledCacheRouteTask(path) {
   const text = posix(path);
   return VERSION_RE.test(text)
     && (text.includes('/.claude/plugins/cache/') || text.includes('/.codex/plugins/'));
+}
+
+// Proof-gate locator: realpath must sit under $HOME's installed plugin cache
+// roots. The lexical helper above still accepts a forged
+// `/tmp/x/.claude/plugins/cache/.../route_task.py` tree.
+export function isTrustedInstalledCacheRouteTask(path, { home = homedir() } = {}) {
+  if (typeof path !== 'string' || path.length === 0) return false;
+  let realFile;
+  try { realFile = realpathSync(path); } catch { return false; }
+  if (basename(realFile) !== ROUTE_TASK) return false;
+  if (!VERSION_RE.test(posix(realFile))) return false;
+  const roots = [
+    join(home, '.claude', 'plugins', 'cache'),
+    join(home, '.codex', 'plugins'),
+  ];
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+    let realRoot;
+    try { realRoot = realpathSync(root); } catch { continue; }
+    if (pathWithin(realRoot, realFile)) return true;
+  }
+  return false;
+}
+
+export function skillRootFromRouteTask(routeTaskPath) {
+  if (typeof routeTaskPath !== 'string' || routeTaskPath.length === 0) return null;
+  let realFile;
+  try { realFile = realpathSync(routeTaskPath); } catch { return null; }
+  if (basename(realFile) !== ROUTE_TASK) return null;
+  if (!VERSION_RE.test(posix(realFile))) return null;
+  return dirname(dirname(realFile));
 }
 
 function acceptRouteTask(path) {

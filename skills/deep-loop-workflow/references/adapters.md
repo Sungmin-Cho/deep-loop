@@ -64,7 +64,7 @@ deep-work 예시: `.deep-work/<task>/session-receipt.json`의 `current_phase=idl
 
 ### 상호 배타 checker routing preflight
 
-아래 Route A–D는 **상호 배타(mutually exclusive)**다. `review dispatch` 전에 현재 runtime, attended/unattended 상태, configured reviewer kind, 실제 host capability를 확인해 정확히 하나만 선택한다. Codex CLI가 존재한다는 사실만으로 cooperative subagent capability나 자동 Codex App task 생성을 추론하지 않는다.
+아래 Route A–E는 **상호 배타(mutually exclusive)**다. `review dispatch` 전에 현재 runtime, attended/unattended 상태, configured reviewer kind, 실제 host capability를 확인해 정확히 하나만 선택한다. Codex CLI가 존재한다는 사실만으로 cooperative subagent capability나 자동 Codex App task 생성을 추론하지 않는다.
 
 ### Route A — cooperative fresh subagent
 
@@ -74,7 +74,7 @@ deep-work 예시: `.deep-work/<task>/session-receipt.json`의 `current_phase=idl
 node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" review dispatch --point <review_point> --workstream <workstream_id> --independent-subagent --owner <owner_run_id> --generation <n> --project-root "<canonical_project_root>" --run-id <run_id>
 ```
 
-`--independent-subagent` flag는 cooperative capability가 실제로 있을 때만 전달한다. 반환 descriptor가 `checker.kind === 'agent'`이고 `agent_role === 'code-reviewer'`인지 확인한다. 그 뒤 fresh `code-reviewer`를 host tool(호스트 도구)로 실제 spawn한다. 같은 execution task의 inline 리뷰로 대체하지 않는다. fresh reviewer가 리뷰 대상 worktree 아래에 실제 report를 작성해 반환한 경우에만 아래 Verdict 기록으로 간다.
+`--independent-subagent` flag는 cooperative capability가 실제로 있을 때만 전달한다. 없으면 이 flag를 전달하지 않는다. 반환 descriptor가 `checker.kind === 'agent'`이고 `agent_role === 'code-reviewer'`인지 확인한다. 그 뒤 fresh `code-reviewer`를 host tool(호스트 도구)로 실제 spawn한다. 같은 execution task의 inline 리뷰로 대체하지 않는다. fresh reviewer가 리뷰 대상 worktree 아래에 실제 report를 작성해 반환한 경우에만 아래 Verdict 기록으로 간다.
 
 ### Route B — Codex unattended measured host
 
@@ -98,15 +98,23 @@ node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" review dispatch --point <review_poin
 
 fresh checker는 reviewed worktree 아래의 contained report만 반환한다. 원래 execution session(original execution session)은 report의 존재와 worktree containment를 확인한 뒤에만 아래 Verdict 기록을 수행한다.
 
+### Route E — bridged independent process (grok attended owner)
+
+Grok attended owner 전용. `review bridge-probe --json`이 `ready: true`이고 Route E 전제(E-0–E-7)가 전부 충족될 때만 선택한다. 상세는 `Read("DEEP_LOOP_ROOT/skills/deep-loop-workflow/references/checker-bridge.md")`.
+
+격리는 **별도 프로세스**다: `dispatch_agent.py`가 read-only `claude -p` / `codex exec` 자식을 감독한다. 자식이 checker이며 report 본문을 쓴다(stdout). 이 대화의 inline 리뷰, `deep-review:*` Skill, `spawn_subagent` checker는 금지다. native Grok subagent isolation은 unverified이므로 Route A가 아니다. 이 경로에서 kernel descriptor의 `kind: 'agent'` / `agent_role`은 무시한다 — 호스트 서브에이전트를 spawn하지 않는다.
+
+`review dispatch`는 probe와 전제 확인 **이후**에 실행한다. live 실패는 `review record` 없이 `needs-human`이며 pending checker를 남긴다. owner는 `bridge-finalize.mjs`로 graded stdout을 worktree 아래 byte-identical 사본으로만 물질화한다.
+
 ### Route D — no independent path
 
-독립 경로가 없으면 `needs-human`으로 보고하고 `review dispatch`를 실행하지 않으며, `review record`도 실행하지 않고 proof를 만들지 않는다(fabricated proof 금지). 특히 configured reviewer가 `checker.kind === 'agent'`인데 cooperative capability가 실제로 없으면 이 flag를 전달하지 않고 반드시 그 전에 Route D로 중단하며, `review dispatch`를 호출하지 않아 pending checker를 만들지 않는다. `checker.kind === 'blocked'`가 사전에 확정되면 `needs-human`으로 보고하고 proof를 만들지 않는다.
+독립 경로가 없으면 `needs-human`으로 보고하고 `review dispatch`를 실행하지 않으며, `review record`도 실행하지 않고 proof를 만들지 않는다(fabricated proof 금지). 특히 configured reviewer가 `checker.kind === 'agent'`인데 cooperative capability가 실제로 없고 **Route E 전제도 불충족이면** 이 flag를 전달하지 않고 반드시 그 전에 Route D로 중단하며, `review dispatch`를 호출하지 않아 pending checker를 만들지 않는다. `checker.kind === 'blocked'`가 사전에 확정되면 `needs-human`으로 보고하고 proof를 만들지 않는다.
 
-Grok Build 호스트는 Route D만 사용한다. 이 대화에서 `review dispatch`, `deep-review:*`, `spawn_subagent` checker를 호출하지 않는다. 사람 또는 Claude/Codex 세션이 현행 review argv를 실행한다(`--runtime` 없음). `review record` / `review import`에도 `--runtime`을 추가하지 않는다.
+Grok 호스트에서 Route E 전제가 하나라도 실패하면 Route D다. 이 대화에서 `deep-review:*`, `spawn_subagent` checker를 호출하지 않는다. 사람 또는 Claude/Codex 세션이 현행 review argv를 실행한다(`--runtime` 없음). `review record` / `review import`에도 `--runtime`을 추가하지 않는다.
 
 ### Verdict 기록
 
-Route A 또는 Route C에서 실제 contained report가 원래 execution session으로 돌아온 경우에만 이 단계를 수행한다. Route B는 host import가 소유하고 Route D는 proof가 없으므로 이 명령을 실행하지 않는다.
+Route A, Route C, 또는 Route E에서 실제 contained report가 원래 execution session으로 돌아온 경우에만 이 단계를 수행한다. Route B는 host import가 소유하고 Route D는 proof가 없으므로 이 명령을 실행하지 않는다.
 
 APPROVE/CONCERN(통과)은 실재하는 리뷰 리포트 파일을 `--report`로 첨부해야 한다 — **리뷰 대상 workstream의 기록된 worktree(`<recorded-worktree>/…`, 신규 기본 `.worktrees/<slug>`) 하위 경로**여야 하며(무관한 root 파일 재사용 차단), 없거나 밖이면 `REVIEW_NO_EVIDENCE`. 커널이 checker episode에서 workstream/point/target maker/source를 파생하고 리포트 경로+content hash를 event-log에 남기므로 caller는 해당 메타데이터 flag를 전달하지 않는다. REQUEST_CHANGES도 fresh checker가 반환한 실제 verdict여야 한다:
 ```

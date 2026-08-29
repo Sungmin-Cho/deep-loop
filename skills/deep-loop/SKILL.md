@@ -108,6 +108,7 @@ node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" insights latest --json --project-roo
 ```
 
   커널이 review dispatch 뒤 반환하는 descriptor만 qualified host invocation skill id `deep-review:deep-review-loop`를 사용한다. 이 qualified id를 durable JSON에 저장하지 않는다.
+  Grok Build 호스트 새 run에는 durable reviewer `subagent-checker`를 추천한다 — `deep-review-loop`는 grok에서 Route D로만 닫힌다. Route E bridged checker는 `subagent-checker`만 소비한다.
 - **미감지 시**: codex 2-way / 서브에이전트 checker / standalone 중 선택 → 사용자 확정
 
 cooperative subagent를 선택하면 durable reviewer enum은 `subagent-checker`다. 그 경우 complete durable `review` JSON은 다음과 같다:
