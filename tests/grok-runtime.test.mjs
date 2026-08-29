@@ -1025,6 +1025,10 @@ function seedBridgeCache(home, yaml = BRIDGE_UNVERIFIED_YAML) {
   writeFileSync(join(skill, 'config', 'model-routing.yaml'), yaml);
 }
 
+function isolatedHomeEnv(home) {
+  return { ...process.env, HOME: home, USERPROFILE: home };
+}
+
 test('T-bridge-probe: grok seed + unverified cache is ready:false, exit 0, durable bytes unchanged', () => {
   const { root, runId } = seedGrok();
   const before = durableBytes(root, runId);
@@ -1033,7 +1037,7 @@ test('T-bridge-probe: grok seed + unverified cache is ready:false, exit 0, durab
   const result = spawnSync(process.execPath, [
     CLI, 'review', 'bridge-probe', '--json',
     '--project-root', root, '--run-id', runId,
-  ], { encoding: 'utf8', env: { ...process.env, HOME: home } });
+  ], { encoding: 'utf8', env: isolatedHomeEnv(home) });
   assert.equal(result.status, 0, result.stderr);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.ok, true);
@@ -1087,7 +1091,7 @@ test('T-bridge-probe: missing dispatcher is dispatcher-missing', () => {
   const result = spawnSync(process.execPath, [
     CLI, 'review', 'bridge-probe', '--json',
     '--project-root', root, '--run-id', runId,
-  ], { encoding: 'utf8', env: { ...process.env, HOME: home } });
+  ], { encoding: 'utf8', env: isolatedHomeEnv(home) });
   assert.equal(result.status, 0, result.stderr);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.ready, false);
