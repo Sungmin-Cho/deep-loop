@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const skillPath = (dir) => join(ROOT, 'skills', dir, 'SKILL.md');
 const _rf = readFileSync;
-const WORKFLOW_REFS = ['adapters.md', 'review-strategy.md', 'handoff-respawn.md', 'hill-climbing.md'];
+const WORKFLOW_REFS = ['adapters.md', 'review-strategy.md', 'handoff-respawn.md', 'hill-climbing.md', 'checker-bridge.md'];
 
 // Portable recursive .md walk (no reliance on Node ≥20.12 Dirent.parentPath) — Node ≥20 (engines) safe.
 function walkMdFiles(dir) {
@@ -1028,7 +1028,7 @@ test('checker routing contract is explicit, mutually exclusive, and closes every
   assert.match(unattended, /execution skill[\s\S]{0,180}review record[\s\S]{0,120}(?:않|never)/i,
     'host-owned checker path must not be recorded by the execution skill');
 
-  const interactive = adapters.match(/### Route C[\s\S]*?(?=\n### Route D)/)?.[0] || '';
+  const interactive = adapters.match(/### Route C[\s\S]*?(?=\n### Route E)/)?.[0] || '';
   assert.match(interactive, /interactive[\s\S]{0,260}(?:distinct|별도)[\s\S]{0,160}(?:fresh session|fresh task|새 세션|새 task)/i);
   assert.match(interactive, /reviewed worktree|리뷰 대상 worktree/i);
   assert.match(interactive, /Claude[\s\S]{0,180}Skill\([\s\S]{0,300}Codex[\s\S]{0,180}\$<checker\.skill>/i);
@@ -1036,6 +1036,27 @@ test('checker routing contract is explicit, mutually exclusive, and closes every
   assert.match(interactive, /contained report|containment[\s\S]{0,160}report|포함[\s\S]{0,160}리포트/i);
   assert.match(interactive, /original execution session|원래 execution session/i);
   assert.match(interactive, /same-task|같은 task[\s\S]{0,200}\$<checker\.skill>[\s\S]{0,180}(?:proof|증명)[\s\S]{0,80}(?:금지|아님)/i);
+
+  const bridged = adapters.match(/### Route E[\s\S]*?(?=\n### Route D)/)?.[0] || '';
+  assert.match(bridged, /bridge-probe/);
+  assert.ok(bridged.indexOf('bridge-probe') < bridged.indexOf('review dispatch'),
+    'Route E must probe before review dispatch');
+  assert.match(bridged, /verified|separate.process|separate-process/i);
+  assert.match(bridged, /자식[\s\S]{0,80}(?:checker|report)|stdout/);
+  assert.match(bridged, /spawn_subagent/);
+  assert.match(bridged, /needs-human|live 실패/);
+  assert.match(bridged, /kind:\s*'agent'[\s\S]{0,160}(?:무시|ignore)/i);
+
+  const bridgeRef = readFileSync(new URL('../skills/deep-loop-workflow/references/checker-bridge.md', import.meta.url), 'utf8');
+  assert.match(bridgeRef, /--dispatcher/);
+  assert.match(bridgeRef, /--mechanism/);
+  assert.match(bridgeRef, /bridge-finalize[\s\S]{0,220}--receipt/);
+  assert.match(bridgeRef, /kind:\s*'agent'[\s\S]{0,200}(?:ignore|무시|do not spawn)/i);
+  assert.match(bridgeRef, /LLM-evaluated/);
+  assert.match(bridgeRef, /exactly one line[\s\S]{0,80}verdict:/);
+  assert.match(bridgeRef, /ready_directions/);
+  assert.match(bridgeRef, /to_openai/);
+  assert.match(bridgeRef, /REVIEW_CONTRACT_UNENFORCEABLE/);
 
   const blocked = adapters.match(/### Route D[\s\S]*?(?=\n### Verdict 기록)/)?.[0] || '';
   assert.match(blocked, /needs-human/);
@@ -1048,6 +1069,9 @@ test('checker routing contract is explicit, mutually exclusive, and closes every
   const record = cont.indexOf('review record', branch);
   assert.ok(branch !== -1 && record > branch,
     'continue must defer to the checker routing contract before review record');
+  assert.match(cont, /grok[\s\S]{0,400}(?:bridge-probe|Route E)/);
+  assert.match(cont, /(?:전제|ready:false|실패)[\s\S]{0,300}Route D/);
+  assert.doesNotMatch(cont, /grok이면 Route D만 사용한다/);
 });
 
 test('review strategy separates durable reviewer enums from host invocation skill ids', () => {
@@ -1599,6 +1623,7 @@ test('Route D review argv stays current and has no --runtime', () => {
     skillPath('deep-loop-continue'),
     join(ROOT, 'skills', 'deep-loop-workflow', 'references', 'adapters.md'),
     join(ROOT, 'skills', 'deep-loop-workflow', 'references', 'review-strategy.md'),
+    join(ROOT, 'skills', 'deep-loop-workflow', 'references', 'checker-bridge.md'),
   ]) {
     const src = readFileSync(file, 'utf8');
     for (const line of kernelCommandLines(src)) {

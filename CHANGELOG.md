@@ -5,6 +5,24 @@ All notable changes to deep-loop are documented in this file.
 > Note: the `[1.1.0]`/`[1.2.0]` entries pre-date this changelog file (a known lag between
 > `plugin.json.version` and the changelog); this release does not retro-fill them.
 
+## [Unreleased]
+
+### Added
+
+- **Route E (Grok attended bridged checker).** Read-only `review bridge-probe`
+  reports whether the installed model-router cache records a grok-host
+  `verified: true` separate-process reviewer seat. Until that ledger bit is
+  set, Grok `dispatch_checker` stays Route D. Native Grok `spawn_subagent`
+  isolation is not treated as independence. `review dispatch` / `record` /
+  `import` still take no `--runtime`. Spawn binds the probed mechanism
+  (placeholder substitution only); finalize copies stdout only from a
+  `SUCCEEDED` supervisor receipt.
+
+### Changed
+
+- Grok continue / adapter / review-strategy prose no longer hard-codes
+  “Grok ⇒ always Route D”; Route D is the negation of Route E preconditions.
+
 ## [1.22.0] — 2026-08-24
 
 ### Added

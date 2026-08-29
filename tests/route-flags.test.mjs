@@ -28,6 +28,7 @@ const EXPECTED_KEYS = Object.freeze([
   'workstream new', 'workstream set', 'workstream terminal',
   'episode new', 'episode record', 'episode abandon',
   'review configure', 'review dispatch', 'review record', 'review import',
+  'review bridge-probe',
   'handoff emit', 'respawn', 'state get', 'state patch',
   'pause', 'recover', 'recovery acquire', 'adapter resolve',
   'budget check', 'budget record', 'budget extend',
@@ -46,7 +47,7 @@ function invoke(args) {
 
 test('ROUTE_FLAGS lists every rawRouteKey the dispatcher can produce', () => {
   assert.deepEqual(Object.keys(ROUTE_FLAGS).sort(), [...EXPECTED_KEYS].sort());
-  assert.equal(EXPECTED_KEYS.length, 63);
+  assert.equal(EXPECTED_KEYS.length, 64);
   const source = readFileSync(CLI, 'utf8');
   const inventory = source.match(/const MUTATING_ROUTE_INVENTORY = Object\.freeze\(\[([\s\S]*?)\]\);/)?.[1];
   assert.ok(inventory);

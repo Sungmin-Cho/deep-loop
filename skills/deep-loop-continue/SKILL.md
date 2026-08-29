@@ -235,9 +235,9 @@ node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" episode record --id <episode_id> --s
 
 ### dispatch_checker
 
-먼저 `references/adapters.md`의 **상호 배타 checker routing** Route A–D 중 실제 가능한 경로를 선택하되 아직 dispatch하지 않는다. durable `session_runtime`이 grok이면 Route D만 사용한다 — 이 대화에서 `review dispatch`, `deep-review:*`, `spawn_subagent` checker를 호출하지 않는다. Route D이면 `needs-human`으로 중단하며 계약 파일도 쓰지 않는다. Route A/B/C일 때만 아래 계약 준비를 수행한 뒤 선택한 경로로 dispatch한다.
+먼저 `references/adapters.md`의 **상호 배타 checker routing** Route A–E 중 실제 가능한 경로를 선택하되 아직 dispatch하지 않는다. durable `session_runtime`이 grok이면 먼저 `review bridge-probe --json`과 Route E 전제(E-0–E-7)를 평가한다. 전부 충족하면 **Route E**(`Read("DEEP_LOOP_ROOT/skills/deep-loop-workflow/references/checker-bridge.md")`)로 dispatch한다 — bridge 자식이 유일한 checker이며, 이 대화의 inline 리뷰·`deep-review:*` Skill 호출·`spawn_subagent` checker는 여전히 금지다. 전제가 하나라도 실패하면 현행 그대로 Route D(`needs-human`)로 중단하며 계약 파일도 쓰지 않는다. grok에서 Route A/B/C는 선택하지 않는다. Route D이면 `needs-human`으로 중단하며 계약 파일도 쓰지 않는다. Route A/B/C/E일 때만 아래 계약 준비를 수행한 뒤 선택한 경로로 dispatch한다.
 
-Route A/B/C 선택 후, 실제 spawn 전에 maker와 **별도** route를 한 번 수행한다. 성공한 결정은 아래 review dispatch의 `--routing` JSON으로 checker 생성 시 심는다. 생성 후 episode record로 routing을 추가하지 않는다. HIGH/CRITICAL 실패·human_gate면 review dispatch와 spawn을 하지 않고 `await_human`. 라우터 부재·LOW/MEDIUM degrade면 `--routing` 없이 dispatch하고 session_profile을 쓴다.
+Route A/B/C/E 선택 후, 실제 spawn 전에 maker와 **별도** route를 한 번 수행한다. 성공한 결정은 아래 review dispatch의 `--routing` JSON으로 checker 생성 시 심는다. 생성 후 episode record로 routing을 추가하지 않는다. HIGH/CRITICAL 실패·human_gate면 review dispatch와 spawn을 하지 않고 `await_human`. 라우터 부재·LOW/MEDIUM degrade면 Claude/Codex에서는 `--routing` 없이 dispatch하고 session_profile을 쓴다. **grok Route E는 degrade-진행이 없다** — routing이 없으면 Route D다.
 
 먼저 recipe를 **상태에서** 읽는다(이전 대화 컨텍스트를 가정하지 말 것 — 이 값이 아래 분기의 유일한 근거다):
 
@@ -275,9 +275,10 @@ node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" review dispatch --point <review_poin
   아래 `review record`를 실행하지 않는다.
 
 - **Route C — interactive independent skill session:** reviewed worktree를 root로 하는 distinct fresh session/task가 실제 준비됐을 때만 flag 없는 위 dispatch를 실행한다. Claude fresh session은 `Skill({ skill: checker.skill, args: checker.args })`, Codex fresh task는 `$<checker.skill>`에 args를 전달한다. Codex 자동 task 생성은 지원하지 않으므로 사람이 수동 task 생성을 완료해야 한다. 같은 task의 `$<checker.skill>` 실행은 proof가 아니다.
+- **Route E — bridged independent process:** grok attended이고 `review bridge-probe`가 `ready: true`이며 전제 E-0–E-7이 충족될 때만 위 dispatch를 실행한다. 그 다음 `references/checker-bridge.md`의 spawn/finalize만 따른다. 자식 stdout이 report다. owner는 report 본문을 쓰지 않는다. live 실패는 record 없이 `needs-human`이다.
 - **Route D — no independent path:** `needs-human`으로 보고하고 dispatch/record/proof 생성을 모두 중단한다. pending checker를 만들지 않는다.
 
-Route A 또는 Route C의 fresh checker가 리뷰 대상 worktree 아래 실제 contained report를 반환한 경우에만 원래 execution session이 다음 단계로 간다. 커널은 checker episode에서 workstream/point/target maker/source를 파생하므로 해당 caller flag를 전달하지 않는다. **APPROVE/CONCERN(통과)은 checker가 실제로 작성한 리뷰 리포트 파일을 `--report`로 첨부해야 한다 — 리뷰 대상 workstream의 기록된 worktree(`<recorded-worktree>/…`, 신규 기본 `.worktrees/<slug>`) 하위 경로**여야 하며(무관한 root 파일 재사용 차단), 없거나 밖이면 `REVIEW_NO_EVIDENCE`(exit 1). REQUEST_CHANGES도 fresh checker가 실제 반환한 verdict여야 한다:
+Route A 또는 Route C의 fresh checker가 리뷰 대상 worktree 아래 실제 contained report를 반환한 경우에만, 그리고 Route E에서 `bridge-finalize.mjs`가 graded stdout 사본을 만든 경우에만, 원래 execution session이 다음 단계로 간다. 커널은 checker episode에서 workstream/point/target maker/source를 파생하므로 해당 caller flag를 전달하지 않는다. **APPROVE/CONCERN(통과)은 checker가 실제로 작성한 리뷰 리포트 파일을 `--report`로 첨부해야 한다 — 리뷰 대상 workstream의 기록된 worktree(`<recorded-worktree>/…`, 신규 기본 `.worktrees/<slug>`) 하위 경로**여야 하며(무관한 root 파일 재사용 차단), 없거나 밖이면 `REVIEW_NO_EVIDENCE`(exit 1). REQUEST_CHANGES도 fresh checker가 실제 반환한 verdict여야 한다:
 ```
 node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" review record --episode <checker_episode_id> --verdict <APPROVE|REQUEST_CHANGES|CONCERN> --report "<review-report-path>" --owner <owner_run_id> --generation <n> --project-root "<canonical_project_root>" --run-id <run_id>
 ```

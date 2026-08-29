@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { error } from './lib/log.mjs';
@@ -40,6 +41,7 @@ import {
   importReviewOutcome,
   recordReviewOutcome,
 } from './lib/review.mjs';
+import { probeCheckerBridge } from './lib/checker-bridge.mjs';
 import { readBoundedText } from './lib/bounded-input.mjs';
 import { nextAction } from './lib/next-action.mjs';
 import { emitHandoff } from './lib/handoff.mjs';
@@ -1347,6 +1349,26 @@ const handlers = {
   },
   review: async (a) => {
     const [verb, ...rest] = a;
+    if (verb === 'bridge-probe') {
+      const f = parseFlags(rest);
+      if (f.json !== true) { error('USAGE: review bridge-probe requires --json'); return 2; }
+      const root = rootOf(f);
+      const runId = exactReadRunId(f);
+      if (!runId) return exactReadFailureCode(f);
+      const captured = verifiedExactSnapshot(root, runId);
+      if (!captured.ok) return reportVerifiedExactFailure(captured);
+      try {
+        json(probeCheckerBridge({
+          loopData: captured.snapshot.data,
+          home: homedir(),
+          env: process.env,
+        }));
+        return 0;
+      } catch (cause) {
+        error(String(cause?.message || cause));
+        return 1;
+      }
+    }
     if (verb === 'configure') {
       const allowed = new Set(['profile', 'source-checker', 'confirm', 'owner', 'generation', 'project-root', 'run-id', 'now']);
       if (!exactFlagGrammar(rest, allowed)) { error('USAGE: review configure has invalid grammar'); return 2; }

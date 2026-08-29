@@ -222,6 +222,10 @@ test('user docs publish the Grok attended-Darwin contract, closed compact, and 1
     assert.match(source, /1\.18[\s\S]{0,80}grok[\s\S]{0,200}1\.17\.0[\s\S]{0,160}validateSessionRuntime/i,
       `${path} must publish the 1.18→1.17.0 grok fail-stop`);
     assert.match(source, /fail-stop/i, `${path} must say grok downgrade fail-stops`);
+    assert.match(source, /verified:\s*true|verified: true/,
+      `${path} must gate the Grok bridged checker on grok-host verified: true`);
+    assert.match(source, /spawn_subagent[\s\S]{0,80}(?:not independence|독립성)/i,
+      `${path} must deny native Grok spawn_subagent independence`);
   }
 });
 

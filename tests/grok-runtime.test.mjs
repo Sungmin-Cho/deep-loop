@@ -60,6 +60,7 @@ const FIELDS = [
   'max_effort_supported', 'executable_name', 'version_probe',
   'supported_platforms', 'measured_headless', 'session_effort_allowed',
   'compact_supported', 'handoff_continuity_note', 'observation_runtime',
+  'independent_checker_bridge',
 ];
 
 function walkScripts(dir = join(ROOT, 'scripts'), out = []) {
@@ -302,13 +303,16 @@ test('T-caps: grok row is complete and new fields have scripts/ consumers', () =
   assert.equal(row.compact_supported, false);
   assert.equal(row.handoff_continuity_note, 'grok-attended');
   assert.equal(row.observation_runtime, 'grok');
+  assert.equal(row.independent_checker_bridge, 'model-router-separate-process');
+  assert.equal(runtimeCapability('claude', 'independent_checker_bridge'), null);
+  assert.equal(runtimeCapability('codex', 'independent_checker_bridge'), null);
   assert.equal(runtimeCapability('claude', 'session_effort_allowed'), 'kernel-set');
   assert.equal(runtimeCapability('codex', 'session_effort_allowed'), 'kernel-set');
   assert.equal(runtimeCapability('claude', 'compact_supported'), true);
   assert.equal(runtimeCapability('grok', 'handoff_continuity_note'), 'grok-attended');
 
   const sources = walkScripts().map(file => readFileSync(file, 'utf8')).join('\n');
-  for (const field of ['supported_platforms', 'measured_headless', 'session_effort_allowed', 'compact_supported', 'handoff_continuity_note', 'observation_runtime']) {
+  for (const field of ['supported_platforms', 'measured_headless', 'session_effort_allowed', 'compact_supported', 'handoff_continuity_note', 'observation_runtime', 'independent_checker_bridge']) {
     assert.match(sources, new RegExp(`runtimeCapability\\([^\\n]*'${field}'`), `consumer for ${field}`);
   }
 });
@@ -993,6 +997,101 @@ test('T-skills: slash≠Claude; Path M/V; grok never Step 1a / --worktree; compa
   const detectSrc = readFileSync(join(ROOT, 'scripts/lib/detect.mjs'), 'utf8');
   assert.match(detectSrc, /join\('\.grok', 'installed-plugins'\)/);
   assert.doesNotMatch(detectSrc, /marketplace-cache/);
+});
+
+// ── T-bridge-probe ──────────────────────────────────────────────────────────
+
+const BRIDGE_UNVERIFIED_YAML = `transports:
+  grok:
+    native: { mechanism: subagent, isolation: unverified }
+    to_claude:
+      mechanism: "claude -p --model <id> --effort <effort> --permission-mode <mode> \\"<prompt>\\""
+      isolation: separate_process
+      verified: false
+    to_openai:
+      mechanism: "codex exec -m <id> -c model_reasoning_effort=<effort> -s <sandbox> --skip-git-repo-check \\"<prompt>\\""
+      isolation: separate_process
+      verified: false
+fallbacks:
+  grok: {}
+`;
+
+function seedBridgeCache(home, yaml = BRIDGE_UNVERIFIED_YAML) {
+  const skill = join(home, '.claude', 'plugins', 'cache', 'x', 'deep-model-router', '9.9.9', 'skills', 'model-router');
+  mkdirSync(join(skill, 'scripts'), { recursive: true });
+  mkdirSync(join(skill, 'config'), { recursive: true });
+  writeFileSync(join(skill, 'scripts', 'route_task.py'), 'print(1)\\n');
+  writeFileSync(join(skill, 'scripts', 'dispatch_agent.py'), 'print(1)\\n');
+  writeFileSync(join(skill, 'config', 'model-routing.yaml'), yaml);
+}
+
+test('T-bridge-probe: grok seed + unverified cache is ready:false, exit 0, durable bytes unchanged', () => {
+  const { root, runId } = seedGrok();
+  const before = durableBytes(root, runId);
+  const home = mkdtempSync(join(tmpdir(), 'dl-bridge-home-'));
+  seedBridgeCache(home);
+  const result = spawnSync(process.execPath, [
+    CLI, 'review', 'bridge-probe', '--json',
+    '--project-root', root, '--run-id', runId,
+  ], { encoding: 'utf8', env: { ...process.env, HOME: home } });
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.ready, false);
+  assert.ok(payload.reasons.some((reason) => String(reason).startsWith('transport-unverified:')));
+  assert.deepEqual(durableBytes(root, runId), before);
+});
+
+test('T-bridge-probe: missing --json is usage 2; missing run-id is usage 2', () => {
+  const { root, runId } = seedGrok();
+  const noJson = spawnSync(process.execPath, [
+    CLI, 'review', 'bridge-probe',
+    '--project-root', root, '--run-id', runId,
+  ], { encoding: 'utf8' });
+  assert.equal(noJson.status, 2);
+  const noRun = spawnSync(process.execPath, [
+    CLI, 'review', 'bridge-probe', '--json',
+    '--project-root', root,
+  ], { encoding: 'utf8' });
+  assert.equal(noRun.status, 2);
+});
+
+test('T-bridge-probe: claude run is bridge-not-applicable', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dl-bridge-claude-'));
+  const { runId } = initRun(root, {
+    runtime: 'claude',
+    goal: 'g',
+    now: NOW0,
+    env: {},
+    platform: 'darwin',
+    run: () => ({ code: 1 }),
+  });
+  const result = spawnSync(process.execPath, [
+    CLI, 'review', 'bridge-probe', '--json',
+    '--project-root', root, '--run-id', runId,
+  ], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ready, false);
+  assert.ok(payload.reasons.includes('bridge-not-applicable:claude'));
+});
+
+test('T-bridge-probe: missing dispatcher is dispatcher-missing', () => {
+  const { root, runId } = seedGrok();
+  const home = mkdtempSync(join(tmpdir(), 'dl-bridge-home-'));
+  const skill = join(home, '.claude', 'plugins', 'cache', 'x', 'deep-model-router', '9.9.9', 'skills', 'model-router');
+  mkdirSync(join(skill, 'scripts'), { recursive: true });
+  mkdirSync(join(skill, 'config'), { recursive: true });
+  writeFileSync(join(skill, 'scripts', 'route_task.py'), 'print(1)\\n');
+  writeFileSync(join(skill, 'config', 'model-routing.yaml'), BRIDGE_UNVERIFIED_YAML);
+  const result = spawnSync(process.execPath, [
+    CLI, 'review', 'bridge-probe', '--json',
+    '--project-root', root, '--run-id', runId,
+  ], { encoding: 'utf8', env: { ...process.env, HOME: home } });
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ready, false);
+  assert.ok(payload.reasons.includes('dispatcher-missing'));
 });
 
 // ── T-down ──────────────────────────────────────────────────────────────────

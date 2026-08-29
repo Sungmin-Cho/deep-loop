@@ -48,10 +48,10 @@ cooperative subagent 선택의 durable review JSON에는 `"reviewer": "subagent-
 
 reviewer 선택은 `references/adapters.md`의 상호 배타 Route A–D 중 하나와 실제로 결합되어야 한다.
 
-- configured reviewer가 agent/subagent이면 cooperative fresh-subagent host tool이 실제로 사용 가능한지 확인한다. 없으면 `review dispatch` 전에 `needs-human`으로 중단한다. Codex CLI 설치만으로 capability를 추정하지 않는다.
+- configured reviewer가 agent/subagent이면 cooperative fresh-subagent host tool이 실제로 사용 가능한지 확인한다. 없으면 — 그리고 grok에서 Route E 전제도 불충족이면 — `review dispatch` 전에 `needs-human`으로 중단한다. Codex CLI 설치만으로 capability를 추정하지 않는다.
 - Codex unattended measured run은 host-owned Route B를 사용한다. execution skill은 checker를 한 번 dispatch하고 yield하며, measured host가 isolated read-only 두 번째 Codex checker의 claim/spawn/import/accounting을 소유한다.
 - interactive independent skill reviewer는 Route C를 사용한다. Claude/Codex 모두 reviewed worktree를 root로 하는 별도 fresh session/task가 필요하다. Codex automatic task 생성은 지원하지 않으므로 사람이 수동으로 새 task를 만든다고 확인한 경우에만 dispatch한다.
-- Grok Build 호스트는 Route D만 사용한다. 이 대화에서 `review dispatch`, `deep-review:*`, `spawn_subagent` checker를 호출하지 않는다. 사람 또는 Claude/Codex 세션이 현행 argv(`--runtime` 없음)로 review를 실행한다.
+- Grok attended owner는 Route E 전제(`review bridge-probe` `ready: true` + E-0–E-7)가 충족되면 bridged independent process를 사용한다. 이 대화에서 `deep-review:*`와 `spawn_subagent` checker는 호출하지 않는다. 전제가 실패하면 Route D다. 사람 또는 Claude/Codex 세션이 현행 argv(`--runtime` 없음)로 review를 실행할 수 있다. Grok 호스트 새 run에는 reviewer `subagent-checker`를 추천한다(`deep-review-loop`는 grok에서 Route D로만 닫힌다).
 - 위 경로가 하나도 없으면 Route D다. dispatch/record/fabricated proof 없이 `needs-human`으로 보고한다. `standalone`은 proof 없는 completed 전이를 허용한다는 뜻이 아니다.
 
 ## `review` JSON 형태
