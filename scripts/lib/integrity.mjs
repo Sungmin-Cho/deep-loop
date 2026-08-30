@@ -63,7 +63,7 @@ import {
 } from './compact-restore-intent.mjs';
 import { leaseCheck } from './lease.mjs';
 import { nextAction } from './next-action.mjs';
-import { sessionRuntime, validateSessionRuntime } from './runtime.mjs';
+import { compactSupportedOnHost, sessionRuntime, validateSessionRuntime } from './runtime.mjs';
 import { isOpenScope, ownerSession } from './session-scope.mjs';
 
 const logPath = (root, runId) => join(runDir(root, runId), 'event-log.jsonl');
@@ -2537,6 +2537,7 @@ function reconcileRestoreIntent(root, request, guard, loop, raw, intent, faultAt
 function commitOrReplayCompactRestoreInternal(root, runId, normalizedRequest, {
   now = Date.now(),
   faultAt = () => {},
+  skipHostGate = false,
 } = {}) {
   const request = { ...normalizedRequest, runId };
   return withLock(root, runId, guard => {
@@ -2558,10 +2559,24 @@ function commitOrReplayCompactRestoreInternal(root, runId, normalizedRequest, {
     assertProjectRootBinding(root, loop);
     assertRestoreFence(loop, request);
     const affinity = restoreAffinity(loop);
-    if (reconcileCompactPruneTombstonesLocked(root, runId, guard, {
-      checkpointKey: request.checkpointKey,
-    })) {
-      throw new Error('CHECKPOINT_INELIGIBLE');
+    retained ??= findCompactRestoreIntentLocked(runDir(root, runId), runId, guard);
+    const checkpointPath = join(runDir(root, runId), 'checkpoints', `${request.checkpointKey}-compact.json`);
+    let filePresent = false;
+    try {
+      const stat = lstatSync(checkpointPath);
+      filePresent = stat.isFile() && !stat.isSymbolicLink();
+    } catch {
+      filePresent = false;
+    }
+    if (!filePresent) {
+      if (skipHostGate !== true && !compactSupportedOnHost(loop) && !retained) {
+        throw new Error(`CHECKPOINT_RUNTIME_UNSUPPORTED: ${request.runtime} compact_supported=false`);
+      }
+      if (reconcileCompactPruneTombstonesLocked(root, runId, guard, {
+        checkpointKey: request.checkpointKey,
+      })) {
+        throw new Error('CHECKPOINT_INELIGIBLE');
+      }
     }
     const strict = strictRestoreFile(root, runId, request);
     request.contextSha256 = strict.envelope.payload.context_sha256;
@@ -2588,6 +2603,15 @@ function commitOrReplayCompactRestoreInternal(root, runId, normalizedRequest, {
     if (replay) {
       assertNoUnresolvedGenericPublicationLocked(root, runId, guard);
       return restoreDescriptor(request, replay, 'replayed');
+    }
+
+    if (skipHostGate !== true && !compactSupportedOnHost(loop)) {
+      throw new Error(`CHECKPOINT_RUNTIME_UNSUPPORTED: ${request.runtime} compact_supported=false`);
+    }
+    if (reconcileCompactPruneTombstonesLocked(root, runId, guard, {
+      checkpointKey: request.checkpointKey,
+    })) {
+      throw new Error('CHECKPOINT_INELIGIBLE');
     }
 
     validateStrictBytes(strict.bytes, {
@@ -2659,12 +2683,13 @@ export function __testCommitOrReplayCompactRestore(
   root,
   runId,
   normalizedRequest,
-  { now = Date.now(), faultAt: requestedFault } = {},
+  { now = Date.now(), faultAt: requestedFault, skipHostGate = false } = {},
 ) {
   if (!RESTORE_FAULTS.has(requestedFault)) throw new Error('TEST_FAULT_INVALID');
   let armed = true;
   return commitOrReplayCompactRestoreInternal(root, runId, normalizedRequest, {
     now,
+    skipHostGate,
     faultAt(label) {
       if (armed && label === requestedFault) {
         armed = false;

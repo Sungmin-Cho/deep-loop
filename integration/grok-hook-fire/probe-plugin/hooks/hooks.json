@@ -1,0 +1,29 @@
+{
+  "description": "Production-only deep-loop compact matchers for the issue 64 hook-fire fixture. Dual-matcher diagnostics live in probe-plugin-matcher-diag.",
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "node -e \"const{join}=require('node:path');const{pathToFileURL}=require('node:url');const r=process.env.CLAUDE_PLUGIN_ROOT||process.env.PLUGIN_ROOT;if(!r){process.exit(0)}else{import(pathToFileURL(join(r,'hooks-impl','record-event.mjs')).href).then(m=>m.main('PreCompact:*')).catch(()=>process.exit(0))}\"" }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "node -e \"const{join}=require('node:path');const{pathToFileURL}=require('node:url');const r=process.env.CLAUDE_PLUGIN_ROOT||process.env.PLUGIN_ROOT;if(!r){process.exit(0)}else{import(pathToFileURL(join(r,'hooks-impl','record-event.mjs')).href).then(m=>m.main('PostCompact:*')).catch(()=>process.exit(0))}\"" }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          { "type": "command", "command": "node -e \"const{join}=require('node:path');const{pathToFileURL}=require('node:url');const r=process.env.CLAUDE_PLUGIN_ROOT||process.env.PLUGIN_ROOT;if(!r){process.exit(0)}else{import(pathToFileURL(join(r,'hooks-impl','record-event.mjs')).href).then(m=>m.main('SessionStart:compact')).catch(()=>process.exit(0))}\"" }
+        ]
+      }
+    ]
+  }
+}

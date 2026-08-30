@@ -39,7 +39,7 @@ import { emitHandoff } from '../scripts/lib/handoff.mjs';
 import { offerDesktop, confirmDesktop } from '../scripts/lib/spawn-optin.mjs';
 import { driveHeadless, driveHeadlessRun } from '../scripts/lib/headless-host.mjs';
 import { dispatchReview } from '../scripts/lib/review.mjs';
-import { newWorkstream } from '../scripts/lib/workspace.mjs';
+import { newWorkstream, setWorkstreamStatus } from '../scripts/lib/workspace.mjs';
 import { newEpisode, recordEpisode } from '../scripts/lib/episode.mjs';
 import { detectPlugins } from '../scripts/lib/detect.mjs';
 import { approveAttendedLaunch } from '../scripts/lib/attended-launch.mjs';
@@ -47,6 +47,15 @@ import { validate } from '../scripts/lib/schema.mjs';
 import { readState, writeState, runDir } from '../scripts/lib/state.mjs';
 import { migrateAuthenticLegacyTransport } from './helpers/legacy-transport.mjs';
 import { canonicalRealpath, createFileSymlinkOrSkip } from './helpers/fs-fixtures.mjs';
+import {
+  __testEmitCompactCheckpoint,
+  __testRestoreCompactCheckpoint,
+  emitCompactCheckpoint,
+  observeCompactCheckpoint,
+  restoreCompactCheckpoint,
+} from '../scripts/lib/checkpoint.mjs';
+import { runPreCompactHandoff } from '../scripts/hooks-impl/precompact-handoff.mjs';
+import { nextAction } from '../scripts/lib/next-action.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = join(ROOT, 'scripts', 'deep-loop.mjs');
@@ -59,7 +68,7 @@ const FIELDS = [
   'requires_process_receipt_settlement', 'requires_posix_visible_executable_trust',
   'max_effort_supported', 'executable_name', 'version_probe',
   'supported_platforms', 'measured_headless', 'session_effort_allowed',
-  'compact_supported', 'handoff_continuity_note', 'observation_runtime',
+  'compact_supported', 'compact_measured_cli_versions', 'handoff_continuity_note', 'observation_runtime',
   'independent_checker_bridge',
 ];
 
@@ -93,6 +102,40 @@ function seedGrok(overrides = {}) {
   });
   return { root, runId };
 }
+
+function seedGrokBound() {
+  const fixture = seedGrok();
+  const fence = { owner: fixture.runId, generation: 1 };
+  const worktree = '.claude/worktrees/grok-compact';
+  mkdirSync(join(fixture.root, worktree), { recursive: true });
+  const present = `${worktree}/present.txt`;
+  writeFileSync(join(fixture.root, present), 'present');
+  const workstreamId = newWorkstream(fixture.root, fixture.runId, {
+    title: 'grok-compact',
+    branch: 'feature/grok-compact',
+    worktree,
+    fence,
+  }).id;
+  setWorkstreamStatus(fixture.root, fixture.runId, workstreamId, 'in_progress', { fence });
+  const episodeId = newEpisode(fixture.root, fixture.runId, {
+    plugin: 'deep-work',
+    role: 'maker',
+    kind: 'implementation',
+    point: 'implementation',
+    workstream: workstreamId,
+    expectedArtifacts: [present],
+    fence,
+  }).id;
+  recordEpisode(fixture.root, fixture.runId, episodeId, { status: 'in_progress', fence });
+  return { ...fixture, fence, workstreamId, episodeId };
+}
+
+const grokManualAdmission = Object.freeze({
+  admission: 'human-attested',
+  source: 'direct-human-skill',
+  confirmManualCompact: true,
+  env: {},
+});
 
 function seedGrokLegacy() {
   const fixture = seedGrok();
@@ -301,6 +344,8 @@ test('T-caps: grok row is complete and new fields have scripts/ consumers', () =
   assert.equal(row.measured_headless, false);
   assert.equal(row.session_effort_allowed, 'none');
   assert.equal(row.compact_supported, false);
+  assert.deepEqual(row.compact_measured_cli_versions, []);
+  assert.ok(Object.isFrozen(row.compact_measured_cli_versions));
   assert.equal(row.handoff_continuity_note, 'grok-attended');
   assert.equal(row.observation_runtime, 'grok');
   assert.equal(row.independent_checker_bridge, 'model-router-separate-process');
@@ -312,7 +357,7 @@ test('T-caps: grok row is complete and new fields have scripts/ consumers', () =
   assert.equal(runtimeCapability('grok', 'handoff_continuity_note'), 'grok-attended');
 
   const sources = walkScripts().map(file => readFileSync(file, 'utf8')).join('\n');
-  for (const field of ['supported_platforms', 'measured_headless', 'session_effort_allowed', 'compact_supported', 'handoff_continuity_note', 'observation_runtime', 'independent_checker_bridge']) {
+  for (const field of ['supported_platforms', 'measured_headless', 'session_effort_allowed', 'compact_supported', 'compact_measured_cli_versions', 'handoff_continuity_note', 'observation_runtime', 'independent_checker_bridge']) {
     assert.match(sources, new RegExp(`runtimeCapability\\([^\\n]*'${field}'`), `consumer for ${field}`);
   }
 });
@@ -1016,6 +1061,9 @@ fallbacks:
   grok: {}
 `;
 
+const BRIDGE_VERIFIED_YAML = BRIDGE_UNVERIFIED_YAML
+  .replaceAll('verified: false', 'verified: true');
+
 function seedBridgeCache(home, yaml = BRIDGE_UNVERIFIED_YAML) {
   const skill = join(home, '.claude', 'plugins', 'cache', 'x', 'deep-model-router', '9.9.9', 'skills', 'model-router');
   mkdirSync(join(skill, 'scripts'), { recursive: true });
@@ -1145,4 +1193,295 @@ test('T-skills detect: ~/.grok/installed-plugins is scanned and marketplace-cach
   const detected = detectPlugins(root, home);
   assert.equal(detected['deep-review'].installed, true);
   assert.equal(detected['deep-work'].installed, false);
+});
+
+test('S1 grok emit refuses CHECKPOINT_RUNTIME_UNSUPPORTED with mutation 0', () => {
+  const fixture = seedGrokBound();
+  const before = durableBytes(fixture.root, fixture.runId);
+  const cli = spawnSync(process.execPath, [
+    CLI, 'checkpoint', 'emit',
+    '--runtime', 'grok',
+    '--owner', fixture.runId,
+    '--generation', '1',
+    '--project-root', fixture.root,
+    '--run-id', fixture.runId,
+  ], { encoding: 'utf8' });
+  assert.equal(cli.status, 1, cli.stderr);
+  assert.match(cli.stderr, /CHECKPOINT_RUNTIME_UNSUPPORTED/);
+  assert.throws(() => emitCompactCheckpoint(fixture.root, fixture.runId, {
+    fence: fixture.fence,
+    runtime: 'grok',
+    now: NOW1,
+  }), /CHECKPOINT_RUNTIME_UNSUPPORTED/);
+  assert.deepEqual(durableBytes(fixture.root, fixture.runId), before);
+  assert.equal(existsSync(join(runDir(fixture.root, fixture.runId), 'checkpoints')), false);
+});
+
+test('S1 grok emit wrong generation exit 3', () => {
+  const fixture = seedGrokBound();
+  const before = durableBytes(fixture.root, fixture.runId);
+  const cli = spawnSync(process.execPath, [
+    CLI, 'checkpoint', 'emit',
+    '--runtime', 'grok',
+    '--owner', fixture.runId,
+    '--generation', '9',
+    '--project-root', fixture.root,
+    '--run-id', fixture.runId,
+  ], { encoding: 'utf8' });
+  assert.equal(cli.status, 3, cli.stderr);
+  assert.match(cli.stderr, /LEASE_FENCED/);
+  assert.deepEqual(durableBytes(fixture.root, fixture.runId), before);
+});
+
+test('S1 grok observe leftover refuses mutation 0', () => {
+  const fixture = seedGrokBound();
+  const dir = join(runDir(fixture.root, fixture.runId), 'checkpoints');
+  mkdirSync(dir, { recursive: true });
+  const leftoverPath = join(dir, `${'a'.repeat(64)}-compact.json`);
+  writeFileSync(leftoverPath, '{}');
+  const before = durableBytes(fixture.root, fixture.runId);
+  assert.throws(() => observeCompactCheckpoint(fixture.root, fixture.runId, {
+    checkpointRel: 'checkpoints/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-compact.json',
+    trigger: 'manual',
+    fence: fixture.fence,
+    runtime: 'grok',
+    now: NOW1,
+  }), /CHECKPOINT_RUNTIME_UNSUPPORTED/);
+  assert.deepEqual(durableBytes(fixture.root, fixture.runId), before);
+});
+
+test('S1 grok observe seeded tombstone unchanged', () => {
+  const fixture = seedGrokBound();
+  const dir = join(runDir(fixture.root, fixture.runId), 'checkpoints');
+  mkdirSync(dir, { recursive: true });
+  const key = 'b'.repeat(64);
+  const tombstone = join(dir, `${key}-compact-prune.json`);
+  writeFileSync(tombstone, '{"kind":"compact-prune"}');
+  const leftover = join(dir, `${key}-compact.json`);
+  writeFileSync(leftover, '{}');
+  const beforeTombstone = readFileSync(tombstone);
+  const before = durableBytes(fixture.root, fixture.runId);
+  assert.throws(() => observeCompactCheckpoint(fixture.root, fixture.runId, {
+    checkpointRel: `checkpoints/${key}-compact.json`,
+    trigger: 'manual',
+    fence: fixture.fence,
+    runtime: 'grok',
+    now: NOW1,
+  }), /CHECKPOINT_RUNTIME_UNSUPPORTED/);
+  assert.deepEqual(readFileSync(tombstone), beforeTombstone);
+  assert.deepEqual(durableBytes(fixture.root, fixture.runId), before);
+});
+
+test('S1 grok new restore refuses mutation 0', () => {
+  const fixture = seedGrokBound();
+  const emitted = __testEmitCompactCheckpoint(fixture.root, fixture.runId, {
+    fence: fixture.fence,
+    runtime: 'grok',
+    now: NOW1,
+    __testSkipHostGate: true,
+  });
+  const before = durableBytes(fixture.root, fixture.runId);
+  assert.throws(() => restoreCompactCheckpoint(fixture.root, fixture.runId, {
+    checkpointRel: emitted.checkpoint_rel,
+    fence: fixture.fence,
+    runtime: 'grok',
+    ...grokManualAdmission,
+    now: NOW1 + 1000,
+  }), /CHECKPOINT_RUNTIME_UNSUPPORTED/);
+  assert.deepEqual(durableBytes(fixture.root, fixture.runId), before);
+});
+
+test('S1 grok new restore seeded tombstone unchanged', () => {
+  const fixture = seedGrokBound();
+  const emitted = __testEmitCompactCheckpoint(fixture.root, fixture.runId, {
+    fence: fixture.fence,
+    runtime: 'grok',
+    now: NOW1,
+    __testSkipHostGate: true,
+  });
+  const tombstone = join(
+    runDir(fixture.root, fixture.runId),
+    'checkpoints',
+    `${emitted.checkpoint_key}-compact-prune.json`,
+  );
+  writeFileSync(tombstone, '{"kind":"compact-prune"}');
+  const beforeTombstone = readFileSync(tombstone);
+  const before = durableBytes(fixture.root, fixture.runId);
+  assert.throws(() => restoreCompactCheckpoint(fixture.root, fixture.runId, {
+    checkpointRel: emitted.checkpoint_rel,
+    fence: fixture.fence,
+    runtime: 'grok',
+    ...grokManualAdmission,
+    now: NOW1 + 1000,
+  }), /CHECKPOINT_RUNTIME_UNSUPPORTED/);
+  assert.deepEqual(readFileSync(tombstone), beforeTombstone);
+  assert.deepEqual(durableBytes(fixture.root, fixture.runId), before);
+});
+
+for (const faultAt of [
+  'restore:intent-written',
+  'event:appended',
+  'state:written',
+]) {
+  test(`R7 ${faultAt} matching recover under capability-false`, () => {
+    const fixture = seedGrokBound();
+    const emitted = __testEmitCompactCheckpoint(fixture.root, fixture.runId, {
+      fence: fixture.fence,
+      runtime: 'grok',
+      now: NOW1,
+      __testSkipHostGate: true,
+    });
+    assert.throws(() => __testRestoreCompactCheckpoint(fixture.root, fixture.runId, {
+      checkpointRel: emitted.checkpoint_rel,
+      fence: fixture.fence,
+      runtime: 'grok',
+      ...grokManualAdmission,
+      now: NOW1 + 1000,
+      faultAt,
+      __testSkipHostGate: true,
+    }), new RegExp(`TEST_FAULT:${faultAt}`));
+    const restored = restoreCompactCheckpoint(fixture.root, fixture.runId, {
+      checkpointRel: emitted.checkpoint_rel,
+      fence: fixture.fence,
+      runtime: 'grok',
+      ...grokManualAdmission,
+      now: NOW1 + 2000,
+    });
+    assert.ok(['committed', 'replayed'].includes(restored.disposition), restored.disposition);
+  });
+}
+
+test('R7 restore:intent-cleanup exactCursorReplay under capability-false', () => {
+  const fixture = seedGrokBound();
+  const emitted = __testEmitCompactCheckpoint(fixture.root, fixture.runId, {
+    fence: fixture.fence,
+    runtime: 'grok',
+    now: NOW1,
+    __testSkipHostGate: true,
+  });
+  assert.throws(() => __testRestoreCompactCheckpoint(fixture.root, fixture.runId, {
+    checkpointRel: emitted.checkpoint_rel,
+    fence: fixture.fence,
+    runtime: 'grok',
+    ...grokManualAdmission,
+    now: NOW1 + 1000,
+    faultAt: 'restore:intent-cleanup',
+    __testSkipHostGate: true,
+  }), /TEST_FAULT:restore:intent-cleanup/);
+  const before = durableBytes(fixture.root, fixture.runId);
+  const restored = restoreCompactCheckpoint(fixture.root, fixture.runId, {
+    checkpointRel: emitted.checkpoint_rel,
+    fence: fixture.fence,
+    runtime: 'grok',
+    ...grokManualAdmission,
+    now: NOW1 + 2000,
+  });
+  assert.equal(restored.disposition, 'replayed');
+  assert.deepEqual(durableBytes(fixture.root, fixture.runId), before);
+});
+
+test('R7 unmatched retained intent CHECKPOINT_RESTORE_REQUEST_MISMATCH', () => {
+  const fixture = seedGrokBound();
+  const first = __testEmitCompactCheckpoint(fixture.root, fixture.runId, {
+    fence: fixture.fence,
+    runtime: 'grok',
+    hostSessionEvidence: { provider: 'grok', id: 'sess-a' },
+    now: NOW1,
+    __testSkipHostGate: true,
+  });
+  const second = __testEmitCompactCheckpoint(fixture.root, fixture.runId, {
+    fence: fixture.fence,
+    runtime: 'grok',
+    hostSessionEvidence: { provider: 'grok', id: 'sess-b' },
+    now: NOW1 + 500,
+    __testSkipHostGate: true,
+  });
+  assert.throws(() => __testRestoreCompactCheckpoint(fixture.root, fixture.runId, {
+    checkpointRel: first.checkpoint_rel,
+    fence: fixture.fence,
+    runtime: 'grok',
+    ...grokManualAdmission,
+    now: NOW1 + 1000,
+    faultAt: 'restore:intent-written',
+    __testSkipHostGate: true,
+  }), /TEST_FAULT:restore:intent-written/);
+  const intentDir = join(runDir(fixture.root, fixture.runId), 'compact-restore-intents');
+  const intentName = readdirSync(intentDir).find(name => name.endsWith('.prepared.json'));
+  const envelope = JSON.parse(readFileSync(join(intentDir, intentName), 'utf8'));
+  assert.notEqual(envelope.payload.request_binding.checkpoint_key, second.checkpoint_key);
+  assert.throws(() => restoreCompactCheckpoint(fixture.root, fixture.runId, {
+    checkpointRel: second.checkpoint_rel,
+    fence: fixture.fence,
+    runtime: 'grok',
+    ...grokManualAdmission,
+    now: NOW1 + 2000,
+  }), /CHECKPOINT_RESTORE_REQUEST_MISMATCH/);
+});
+
+test('R5 grok emit identical with BRIDGE_UNVERIFIED_YAML and verified:true cache', () => {
+  const errors = [];
+  for (const yaml of [BRIDGE_UNVERIFIED_YAML, BRIDGE_VERIFIED_YAML]) {
+    const fixture = seedGrokBound();
+    const home = mkdtempSync(join(tmpdir(), 'dl-r5-home-'));
+    seedBridgeCache(home, yaml);
+    const before = durableBytes(fixture.root, fixture.runId);
+    const result = spawnSync(process.execPath, [
+      CLI, 'checkpoint', 'emit',
+      '--runtime', 'grok',
+      '--owner', fixture.runId,
+      '--generation', '1',
+      '--project-root', fixture.root,
+      '--run-id', fixture.runId,
+    ], { encoding: 'utf8', env: isolatedHomeEnv(home) });
+    errors.push({ status: result.status, stderr: result.stderr.trim() });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /CHECKPOINT_RUNTIME_UNSUPPORTED/);
+    assert.deepEqual(durableBytes(fixture.root, fixture.runId), before);
+  }
+  assert.equal(errors[0].status, errors[1].status);
+  assert.equal(errors[0].stderr, errors[1].stderr);
+});
+
+test('R5 review bridge-probe identical with and without a grok checkpoint file', () => {
+  const fixture = seedGrokBound();
+  const home = mkdtempSync(join(tmpdir(), 'dl-r5-probe-'));
+  seedBridgeCache(home);
+  const probe = () => spawnSync(process.execPath, [
+    CLI, 'review', 'bridge-probe', '--json',
+    '--project-root', fixture.root, '--run-id', fixture.runId,
+  ], { encoding: 'utf8', env: isolatedHomeEnv(home) });
+  const before = probe();
+  assert.equal(before.status, 0, before.stderr);
+  mkdirSync(join(runDir(fixture.root, fixture.runId), 'checkpoints'), { recursive: true });
+  writeFileSync(join(runDir(fixture.root, fixture.runId), 'checkpoints', `${'c'.repeat(64)}-compact.json`), '{}');
+  const after = probe();
+  assert.equal(after.status, 0, after.stderr);
+  assert.equal(before.stdout, after.stdout);
+});
+
+test('R5 static scan checkpoint and hooks-impl do not import checker-bridge', () => {
+  const files = [
+    'scripts/lib/checkpoint.mjs',
+    'scripts/hooks-impl/precompact-handoff.mjs',
+    'scripts/hooks-impl/postcompact-observe.mjs',
+    'scripts/hooks-impl/sessionstart-restore.mjs',
+    'scripts/lib/checker-bridge.mjs',
+  ].map(rel => [rel, readFileSync(join(ROOT, rel), 'utf8')]);
+  for (const [rel, src] of files.slice(0, 4)) {
+    assert.doesNotMatch(src, /checker-bridge/, rel);
+  }
+  assert.doesNotMatch(files[4][1], /from '\.\/checkpoint\.mjs'|hooks-impl\/precompact|hooks-impl\/postcompact|hooks-impl\/sessionstart/);
+});
+
+test('S1 grok-owned PreCompact is checkpoint-failed with mutation 0', async () => {
+  const fixture = seedGrokBound();
+  const before = durableBytes(fixture.root, fixture.runId);
+  const result = await runPreCompactHandoff({
+    hook_event_name: 'PreCompact',
+    trigger: 'manual',
+    cwd: fixture.root,
+  }, { root: fixture.root, now: NOW1 });
+  assert.equal(result.ok, false);
+  assert.equal(result.action, 'checkpoint-failed');
+  assert.deepEqual(durableBytes(fixture.root, fixture.runId), before);
 });

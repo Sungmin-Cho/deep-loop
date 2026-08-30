@@ -17,7 +17,7 @@ import {
 } from './fs-safe.mjs';
 import { nextAction } from './next-action.mjs';
 import { canonicalProjectRoot, projectRootDigest } from './project-root.mjs';
-import { runtimeCapability, sessionRuntime, skillToken, validateSessionRuntime } from './runtime.mjs';
+import { compactSupportedOnHost, runtimeCapability, sessionRuntime, skillToken, validateSessionRuntime } from './runtime.mjs';
 import { validate } from './schema.mjs';
 import { isOpenScope, ownerSession } from './session-scope.mjs';
 import { runDir, withReconciledMutationLock } from './state.mjs';
@@ -60,6 +60,12 @@ const DESCRIPTOR_SLASH_COMMANDS = new Set([
   '/deep-loop-handoff',
   '/deep-loop-status',
 ]);
+function assertCompactHostEnabled(loop, runtime) {
+  if (!compactSupportedOnHost(loop)) {
+    throw new Error(`CHECKPOINT_RUNTIME_UNSUPPORTED: ${runtime} compact_supported=false`);
+  }
+}
+
 const PRUNE_FILE = /^([0-9a-f]{64})-compact-prune\.json$/;
 const INSPECT_KEYS = Object.freeze([
   'ok', 'phase', 'reason', 'checkpoint_rel', 'checkpoint_key', 'context_sha256',
@@ -642,6 +648,7 @@ export function emitCompactCheckpoint(root, runId, {
 } = {}) {
   return withFencedReconciledMutationLock(root, runId, (guard, snapshot) => {
     assertFence(snapshot.data, fence, runtime);
+    assertCompactHostEnabled(snapshot.data, runtime);
     reconcilePruneTombstonesLocked(root, runId, guard);
     if (authenticLegacy(snapshot.data)) {
       assertFence(snapshot.data, fence, runtime);
@@ -659,6 +666,9 @@ export function emitCompactCheckpoint(root, runId, {
 export function __testEmitCompactCheckpoint(root, runId, options = {}) {
   return withFencedReconciledMutationLock(root, runId, (guard, snapshot) => {
     assertFence(snapshot.data, options.fence, options.runtime);
+    if (options.__testSkipHostGate !== true) {
+      assertCompactHostEnabled(snapshot.data, options.runtime);
+    }
     reconcilePruneTombstonesLocked(root, runId, guard);
     if (authenticLegacy(snapshot.data)) {
       assertFence(snapshot.data, options.fence, options.runtime);
@@ -1125,6 +1135,9 @@ function observeLocked(root, runId, guard, snapshot, options) {
 function observeCompactCheckpointInternal(root, runId, options) {
   return withFencedReconciledMutationLock(root, runId, (guard, snapshot) => {
     assertFence(snapshot.data, options.fence, options.runtime);
+    if (options.__testSkipHostGate !== true) {
+      assertCompactHostEnabled(snapshot.data, options.runtime);
+    }
     reconcilePruneTombstonesLocked(root, runId, guard);
     return observeLocked(root, runId, guard, snapshot, options);
   }, { fence: options.fence, runtime: options.runtime });
@@ -1197,6 +1210,7 @@ export function __testRestoreCompactCheckpoint(root, runId, options = {}) {
   return __testCommitOrReplayCompactRestore(root, runId, request, {
     now: options.now ?? Date.now(),
     faultAt: options.faultAt,
+    skipHostGate: options.__testSkipHostGate === true,
   });
 }
 

@@ -3,7 +3,7 @@ import { checkBreaker } from './breaker.mjs';
 import { computeDebt } from './comprehension.mjs';
 import { makerReviewed, unsatisfiedReviewPoints, rejectionResolved } from './review.mjs';
 import { finishProofState } from './finish.mjs';
-import { readableSessionRuntime, runtimeCapability } from './runtime.mjs';
+import { classifyCompactHostForLoop, readableSessionRuntime } from './runtime.mjs';
 
 function currentSessionTurns(loop) {
   const s = (loop.session_chain?.sessions || []).find(x => x.run_id === loop.session_chain?.lease?.owner_run_id);
@@ -227,9 +227,11 @@ export function nextAction(loop, { now = Date.now(), unattended = false } = {}) 
     return A(gate, { type: 'handoff', reason: 'per_session_turn_cap' }, '/deep-loop-handoff');
   }
   const sessionRuntimeId = readableSessionRuntime(loop);
-  const compactSupported = sessionRuntimeId != null
-    && runtimeCapability(sessionRuntimeId, 'compact_supported') === true;
-  const withAdvice = (r) => compactSupported && (workstreamCadence.advice || migratedCap.advice)
+  const compactAdviceState = sessionRuntimeId == null
+    ? 'unsupported'
+    : classifyCompactHostForLoop(loop);
+  const withAdvice = (r) => (compactAdviceState === 'enabled' || compactAdviceState === 'needs-approval')
+    && (workstreamCadence.advice || migratedCap.advice)
     ? { ...r, action: { ...r.action, advice: 'compact', advice_reason: 'per_session_turn_cap' } }
     : r;
 

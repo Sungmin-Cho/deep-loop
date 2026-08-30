@@ -20,6 +20,7 @@ export const RUNTIME_CAPABILITIES = Object.freeze({
     measured_headless: true,                         // headless-host skip rewrite / would-spawn pause
     session_effort_allowed: 'kernel-set',            // session-profile validateRuntimeProfile
     compact_supported: true,                         // next-action withAdvice
+    compact_measured_cli_versions: null,             // compactSupportedOnHost — unrestricted
     handoff_continuity_note: 'desktop-model-effort',  // handoff markdown
     observation_runtime: 'claude_code',              // route-observation RouteObservationV1 producer runtime
     independent_checker_bridge: null,                // checker-bridge:probeCheckerBridge
@@ -41,6 +42,7 @@ export const RUNTIME_CAPABILITIES = Object.freeze({
     measured_headless: true,
     session_effort_allowed: 'kernel-set',
     compact_supported: true,
+    compact_measured_cli_versions: null,
     handoff_continuity_note: 'codex-preflight',
     observation_runtime: 'codex',
     independent_checker_bridge: null,                // checker-bridge:probeCheckerBridge
@@ -62,11 +64,50 @@ export const RUNTIME_CAPABILITIES = Object.freeze({
     measured_headless: false,
     session_effort_allowed: 'none',
     compact_supported: false,
+    compact_measured_cli_versions: Object.freeze([]),
     handoff_continuity_note: 'grok-attended',
     observation_runtime: 'grok',
     independent_checker_bridge: 'model-router-separate-process', // checker-bridge:probeCheckerBridge
   }),
 });
+
+export function classifyCompactHost({
+  compact_supported,
+  compact_measured_cli_versions,
+  approval,
+  session_runtime,
+} = {}) {
+  if (compact_supported !== true) return 'unsupported';
+  if (compact_measured_cli_versions === null) return 'enabled';
+  if (!Array.isArray(compact_measured_cli_versions) || compact_measured_cli_versions.length === 0) {
+    return 'unsupported';
+  }
+  const runtime = approval && typeof approval === 'object' && !Array.isArray(approval)
+    ? approval.runtime
+    : undefined;
+  const version = approval && typeof approval === 'object' && !Array.isArray(approval)
+    ? approval.version
+    : undefined;
+  if (runtime !== session_runtime || typeof version !== 'string' || version.length === 0) {
+    return 'needs-approval';
+  }
+  if (compact_measured_cli_versions.includes(version)) return 'enabled';
+  return 'version-mismatch';
+}
+
+export function classifyCompactHostForLoop(loop) {
+  const runtime = sessionRuntime(loop);
+  return classifyCompactHost({
+    compact_supported: runtimeCapability(runtime, 'compact_supported'),
+    compact_measured_cli_versions: runtimeCapability(runtime, 'compact_measured_cli_versions'),
+    approval: loop?.autonomy?.runtime_executable_approval ?? null,
+    session_runtime: runtime,
+  });
+}
+
+export function compactSupportedOnHost(loop) {
+  return classifyCompactHostForLoop(loop) === 'enabled';
+}
 
 export function runtimeCapability(runtime, field) {
   const selected = validateSessionRuntime(runtime);

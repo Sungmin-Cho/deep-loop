@@ -1,0 +1,6 @@
+{
+  "name": "deep-loop-hook-probe",
+  "version": "0.0.0",
+  "description": "Issue 64 hook-fire probe. Records host hook delivery only; not a measurement by itself.",
+  "author": { "name": "Sungmin Cho" }
+}
