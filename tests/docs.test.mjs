@@ -217,7 +217,7 @@ test('user docs publish the Grok attended-Darwin contract, closed compact, and 1
       `${path} must declare Grok as attended Darwin`);
     assert.match(source, /Grok compact is unsupported/i,
       `${path} must publish the Task 3 compact-off sentence`);
-    assert.match(source, /matcher `"\*"`.{0,160}did not fire on measured Grok 1\.0\.4/i,
+    assert.match(source, /matcher `"\*"`.{0,160}did not fire on measured Grok 1\.0\.4 and 1\.0\.13/i,
       `${path} must cite the measured matcher no-fire`);
     assert.match(source, /1\.18[\s\S]{0,80}grok[\s\S]{0,200}1\.17\.0[\s\S]{0,160}validateSessionRuntime/i,
       `${path} must publish the 1.18→1.17.0 grok fail-stop`);

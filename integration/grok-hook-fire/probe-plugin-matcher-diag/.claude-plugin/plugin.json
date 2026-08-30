@@ -1,0 +1,6 @@
+{
+  "name": "deep-loop-hook-probe-matcher-diag",
+  "version": "0.0.0",
+  "description": "Issue 64 matcher-diagnostic probe. Never a PASS capture; distinguishes no-fire from matcher-mismatch.",
+  "author": { "name": "Sungmin Cho" }
+}

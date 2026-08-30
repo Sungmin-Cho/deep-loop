@@ -1,10 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { emitLegacyCompactCheckpointFromTrustedHook } from '../scripts/lib/checkpoint.mjs';
+import { emitCompactCheckpoint, emitLegacyCompactCheckpointFromTrustedHook } from '../scripts/lib/checkpoint.mjs';
+import { newEpisode, recordEpisode } from '../scripts/lib/episode.mjs';
+import { newWorkstream, setWorkstreamStatus } from '../scripts/lib/workspace.mjs';
+import { runDir } from '../scripts/lib/state.mjs';
 import { runSessionStartRestore } from '../scripts/hooks-impl/sessionstart-restore.mjs';
 import { emitHandoff } from '../scripts/lib/handoff.mjs';
 import { buildInitialLoop, initRun } from '../scripts/lib/initrun.mjs';
@@ -94,6 +97,42 @@ test('grok and unreadable loops never receive compact advice from either cadence
   const grokRotate = nextAction(capLoop('grok', 'rotate-per-unit'), { now: NOW });
   assert.equal(grokRotate.action.type, 'handoff');
   assert.equal(grokRotate.action.reason, 'per_session_turn_cap');
+});
+
+test('R4 claude and codex fenced emits succeed with runtime_executable_approval null', () => {
+  for (const runtime of ['claude', 'codex']) {
+    const { root, runId } = seedRuntime(runtime);
+    const fence = { owner: runId, generation: 1 };
+    const worktree = `.claude/worktrees/r4-${runtime}`;
+    mkdirSync(join(root, worktree), { recursive: true });
+    const present = `${worktree}/present.txt`;
+    writeFileSync(join(root, present), 'present');
+    const workstreamId = newWorkstream(root, runId, {
+      title: `r4-${runtime}`,
+      branch: `feature/r4-${runtime}`,
+      worktree,
+      fence,
+    }).id;
+    setWorkstreamStatus(root, runId, workstreamId, 'in_progress', { fence });
+    const episodeId = newEpisode(root, runId, {
+      plugin: 'deep-work',
+      role: 'maker',
+      kind: 'implementation',
+      point: 'implementation',
+      workstream: workstreamId,
+      expectedArtifacts: [present],
+      fence,
+    }).id;
+    recordEpisode(root, runId, episodeId, { status: 'in_progress', fence });
+    const loop = JSON.parse(readFileSync(join(runDir(root, runId), 'loop.json'), 'utf8'));
+    assert.equal(loop.autonomy.runtime_executable_approval, null);
+    const emitted = emitCompactCheckpoint(root, runId, {
+      fence,
+      runtime,
+      now: NOW + 1,
+    });
+    assert.equal(emitted.ok, true, runtime);
+  }
 });
 
 test('claude and codex loops still receive compact advice at the cap', () => {
