@@ -1,6 +1,6 @@
 {
   "name": "deep-loop",
-  "version": "1.22.0",
+  "version": "1.22.1",
   "description": "Loop Engineering control plane for Claude Code, Codex CLI, Codex App, Grok CLI, and native Windows",
   "author": { "name": "Sungmin Cho" },
   "repository": "https://github.com/Sungmin-Cho/deep-loop.git",

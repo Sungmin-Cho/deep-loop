@@ -5,7 +5,7 @@ All notable changes to deep-loop are documented in this file.
 > Note: the `[1.1.0]`/`[1.2.0]` entries pre-date this changelog file (a known lag between
 > `plugin.json.version` and the changelog); this release does not retro-fill them.
 
-## [Unreleased]
+## [1.22.1] — 2026-09-03
 
 ### Added
 
@@ -30,6 +30,10 @@ All notable changes to deep-loop are documented in this file.
   keep user-global MCP servers out of a bridged seat. An unknown token is
   `mechanism-untrusted`, so a router that boots its Claude bridge seats lean
   was read as one whose recipe cannot be trusted.
+- The transport scanner now distinguishes YAML aliases from literal stars in
+  double-quoted mechanism strings. Shipped maker globs such as `Write(./**)`
+  no longer make the entire model-router config `config-ambiguous`; unquoted
+  alias/anchor syntax remains fail-closed.
 
 ## [1.22.0] — 2026-08-24
 

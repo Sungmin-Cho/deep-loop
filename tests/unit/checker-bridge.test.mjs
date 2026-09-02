@@ -101,6 +101,59 @@ test('scanTransports rejects duplicate hosts and unknown indent', () => {
   assert.equal(scanTransports(dup, 'grok').reason, 'config-ambiguous');
 });
 
+test('scanTransports accepts glob stars inside quoted mechanisms but rejects YAML aliases', () => {
+  const quotedGlob = `transports:
+  claude_code:
+    to_xai:
+      mechanism_maker: "grok --allow Write(./**) --prompt-file /dev/stdin"
+      isolation: separate_process
+      verified: true
+  grok:
+    to_claude:
+      mechanism_reviewer: "claude -p --model <id> --effort <effort> --permission-mode plan --allowedTools Read,Glob,Grep,LS --strict-mcp-config \\"<prompt>\\""
+      isolation: separate_process
+      verified: true
+fallbacks:
+  grok: {}
+`;
+  const accepted = scanTransports(quotedGlob, 'grok');
+  assert.equal(accepted.ok, true, accepted.reason);
+  assert.match(accepted.hosts.claude_code.directions.to_xai.mechanism_maker, /\*\*/);
+
+  const alias = quotedGlob.replace(
+    'mechanism_maker: "grok --allow Write(./**) --prompt-file /dev/stdin"',
+    'mechanism_maker: *shared_mechanism',
+  );
+  assert.equal(scanTransports(alias, 'grok').reason, 'config-ambiguous');
+});
+
+test('scanTransports rejects malformed double-quoted mechanism scalars bytewise', () => {
+  const yamlFor = (scalar) => `transports:
+  grok:
+    to_claude:
+      mechanism_reviewer: ${scalar}
+      isolation: separate_process
+      verified: true
+fallbacks:
+  grok: {}
+`;
+  const valid = String.raw`"claude -p --allowedTools Read \"<prompt>\""`;
+  assert.equal(scanTransports(yamlFor(valid), 'grok').ok, true);
+
+  const malformed = [
+    '"claude -p ' + '\\' + '"',       // dangling escape consumes the apparent closing quote
+    '"claude "oops" -p"',           // interior quotes are not escaped
+    String.raw`"claude \q -p"`,       // unsupported YAML escape in this bounded subset
+    '*shared_mechanism',               // plain-scalar alias
+    '&shared_mechanism',               // plain-scalar anchor
+  ];
+  for (const scalar of malformed) {
+    const result = scanTransports(yamlFor(scalar), 'grok');
+    assert.equal(result.ok, false, scalar);
+    assert.equal(result.reason, 'config-ambiguous', scalar);
+  }
+});
+
 test('parseMechanism treats current grok.to_claude as not read-only and grok.to_openai as sandbox-substitutable', () => {
   const claude = parseMechanism(
     '"claude -p --model <id> --effort <effort> --permission-mode <mode> \\"<prompt>\\""',
@@ -516,4 +569,3 @@ test('materializeFromReceipt copies only a SUCCEEDED review receipt and refuses 
   assert.equal(ok.verdict, 'APPROVE');
   assert.equal(readFileSync(dest, 'utf8'), body);
 });
-
