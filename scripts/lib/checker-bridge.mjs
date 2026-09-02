@@ -83,8 +83,26 @@ function commentStrippedLines(text) {
 function unquoteYamlScalar(value) {
   if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
     const inner = value.slice(1, -1);
-    if (/\\[^"\\]/.test(inner)) return null;
-    return inner.replaceAll('\\"', '"').replaceAll('\\\\', '\\');
+    let decoded = '';
+    for (let i = 0; i < inner.length; i += 1) {
+      const char = inner[i];
+      // An interior double quote must be escaped in a double-quoted YAML
+      // scalar. Accepting it would let the line-oriented scanner bless a
+      // document a YAML parser rejects.
+      if (char === '"') return null;
+      if (char !== '\\') {
+        decoded += char;
+        continue;
+      }
+      // This bounded scanner supports only the two escapes its mechanism
+      // strings actually emit. A dangling slash, an unsupported YAML escape,
+      // or an escaped apparent closing quote therefore fails closed.
+      const next = inner[i + 1];
+      if (next !== '"' && next !== '\\') return null;
+      decoded += next;
+      i += 1;
+    }
+    return decoded;
   }
   return value;
 }
@@ -185,7 +203,9 @@ export function scanTransports(yamlText, hostKey) {
         // escapes fail-closed while preserving the plain-scalar alias guard.
         const quotedScalar = value.startsWith('"') && value.endsWith('"')
           && unquoteYamlScalar(value) !== null;
-        if (value.includes('{')
+        const hasQuoteBoundary = value.startsWith('"') || value.endsWith('"');
+        if ((hasQuoteBoundary && !quotedScalar)
+          || value.includes('{')
           || (!quotedScalar && /[&*]/.test(value))
           || value.includes('<<:')) return fail('config-ambiguous');
       }

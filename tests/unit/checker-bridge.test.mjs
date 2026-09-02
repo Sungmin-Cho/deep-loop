@@ -110,7 +110,7 @@ test('scanTransports accepts glob stars inside quoted mechanisms but rejects YAM
       verified: true
   grok:
     to_claude:
-      mechanism_reviewer: "claude -p --model <id> --effort <effort> --permission-mode plan --allowedTools Read,Glob,Grep,LS --strict-mcp-config \"<prompt>\""
+      mechanism_reviewer: "claude -p --model <id> --effort <effort> --permission-mode plan --allowedTools Read,Glob,Grep,LS --strict-mcp-config \\"<prompt>\\""
       isolation: separate_process
       verified: true
 fallbacks:
@@ -125,6 +125,33 @@ fallbacks:
     'mechanism_maker: *shared_mechanism',
   );
   assert.equal(scanTransports(alias, 'grok').reason, 'config-ambiguous');
+});
+
+test('scanTransports rejects malformed double-quoted mechanism scalars bytewise', () => {
+  const yamlFor = (scalar) => `transports:
+  grok:
+    to_claude:
+      mechanism_reviewer: ${scalar}
+      isolation: separate_process
+      verified: true
+fallbacks:
+  grok: {}
+`;
+  const valid = String.raw`"claude -p --allowedTools Read \"<prompt>\""`;
+  assert.equal(scanTransports(yamlFor(valid), 'grok').ok, true);
+
+  const malformed = [
+    '"claude -p ' + '\\' + '"',       // dangling escape consumes the apparent closing quote
+    '"claude "oops" -p"',           // interior quotes are not escaped
+    String.raw`"claude \q -p"`,       // unsupported YAML escape in this bounded subset
+    '*shared_mechanism',               // plain-scalar alias
+    '&shared_mechanism',               // plain-scalar anchor
+  ];
+  for (const scalar of malformed) {
+    const result = scanTransports(yamlFor(scalar), 'grok');
+    assert.equal(result.ok, false, scalar);
+    assert.equal(result.reason, 'config-ambiguous', scalar);
+  }
 });
 
 test('parseMechanism treats current grok.to_claude as not read-only and grok.to_openai as sandbox-substitutable', () => {
