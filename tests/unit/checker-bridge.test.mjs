@@ -289,6 +289,35 @@ test('parseMechanism requires --allowedTools as the immediate value of that flag
   assert.equal(equalsForm.readonlySeat, true);
 });
 
+test('parseMechanism accepts --strict-mcp-config, which takes no value', () => {
+  // deep-model-router 1.9.0 ships this token on both `to_claude` recipes: it
+  // drops every MCP server the user's global config would otherwise load into
+  // the seat. An unknown token is `mechanism-untrusted`, so without it in the
+  // boolean allowlist a router that boots its Claude bridge seats lean reads as
+  // one whose recipe cannot be trusted.
+  const reviewer = parseMechanism(
+    '"claude -p --model <id> --effort <effort> --permission-mode plan --allowedTools Read,Glob,Grep,LS --strict-mcp-config \\"<prompt>\\""',
+    'to_claude',
+  );
+  assert.equal(reviewer.ok, true, reviewer.reason);
+  assert.equal(reviewer.readonlySeat, true);
+  // Accepting the token changes nothing else: a write-capable permission mode
+  // is still refused, and a recipe without --allowedTools is still not a
+  // read-only seat.
+  const writable = parseMechanism(
+    '"claude -p --model <id> --effort <effort> --permission-mode acceptEdits --allowedTools Read --strict-mcp-config \\"<prompt>\\""',
+    'to_claude',
+  );
+  assert.equal(writable.ok, false);
+  assert.equal(writable.reason, 'seat-not-readonly');
+  const general = parseMechanism(
+    '"claude -p --model <id> --effort <effort> --permission-mode <mode> --strict-mcp-config \\"<prompt>\\""',
+    'to_claude',
+  );
+  assert.equal(general.ok, false);
+  assert.equal(general.reason, 'seat-not-readonly');
+});
+
 test('scanTransports rejects quoted verified booleans and inline to_* mappings', () => {
   const quoted = READY_CLAUDE.replaceAll('verified: true', 'verified: "true"');
   const scannedQuoted = scanTransports(quoted, 'grok');

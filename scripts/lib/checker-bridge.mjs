@@ -24,7 +24,12 @@ const WRITE_TOKENS = new Set([
 const CLAUDE_VALUE_FLAGS = new Set([
   '--model', '--effort', '--permission-mode', '--allowedTools', '--allowed-tools',
 ]);
-const CLAUDE_BOOL_FLAGS = new Set(['-p']);
+// `--strict-mcp-config` takes no value: it drops every MCP server the user's
+// global config would otherwise load into the seat. deep-model-router 1.9.0
+// ships it on both `to_claude` recipes, and an unknown token here is
+// `mechanism-untrusted` — so without this entry a router that boots its Claude
+// bridge seats lean is read as one whose recipe cannot be trusted.
+const CLAUDE_BOOL_FLAGS = new Set(['-p', '--strict-mcp-config']);
 const OPENAI_VALUE_FLAGS = new Set(['-m', '-c', '-s']);
 const OPENAI_BOOL_FLAGS = new Set(['exec', '--skip-git-repo-check']);
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS']);

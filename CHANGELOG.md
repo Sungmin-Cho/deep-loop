@@ -23,6 +23,14 @@ All notable changes to deep-loop are documented in this file.
 - Grok continue / adapter / review-strategy prose no longer hard-codes
   “Grok ⇒ always Route D”; Route D is the negation of Route E preconditions.
 
+### Fixed
+
+- The checker-bridge mechanism parser accepts `--strict-mcp-config`, a
+  valueless flag deep-model-router 1.9.0 ships on both `to_claude` recipes to
+  keep user-global MCP servers out of a bridged seat. An unknown token is
+  `mechanism-untrusted`, so a router that boots its Claude bridge seats lean
+  was read as one whose recipe cannot be trusted.
+
 ## [1.22.0] — 2026-08-24
 
 ### Added
