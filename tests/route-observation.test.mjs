@@ -593,7 +593,7 @@ test('emitter validates maxFileBytes first and maps reachable size and kernel-ve
   delete fromManifest.kernelVersion;
   const emitted = emitRouteObservation(f.root, RUN_ID, fromManifest);
   assert.equal(emitted.emitted, true);
-  assert.equal(JSON.parse(readFileSync(f.path, 'utf8')).envelope.producer_version, '1.22.0');
+  assert.equal(JSON.parse(readFileSync(f.path, 'utf8')).envelope.producer_version, '1.22.1');
 });
 
 test('omitted kernelVersion reads the loaded deep-loop manifest for an ordinary consumer project', () => {
@@ -604,7 +604,7 @@ test('omitted kernelVersion reads the loaded deep-loop manifest for an ordinary 
   const result = emitRouteObservation(f.root, RUN_ID, options);
   assert.equal(result.emitted, true);
   const actualVersion = JSON.parse(readFileSync(join(HERE, '..', '.claude-plugin', 'plugin.json'), 'utf8')).version;
-  assert.equal(actualVersion, '1.22.0');
+  assert.equal(actualVersion, '1.22.1');
   const document = JSON.parse(readFileSync(f.path, 'utf8'));
   assert.equal(document.envelope.producer_version, actualVersion);
   assert.equal(document.envelope.provenance.tool_versions['deep-loop'], actualVersion);

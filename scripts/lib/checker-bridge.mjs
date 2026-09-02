@@ -176,7 +176,18 @@ export function scanTransports(yamlText, hostKey) {
       const value = match[2];
       if (value.startsWith('|') || value.startsWith('>')) return fail('config-ambiguous');
       if (key === 'verified' || key === 'isolation' || key.startsWith('mechanism')) {
-        if (value.includes('{') || /[&*]/.test(value) || value.includes('<<:')) return fail('config-ambiguous');
+        // `*` / `&` introduce YAML aliases and anchors only in plain scalars.
+        // Inside the double-quoted mechanism shape this scanner already
+        // accepts, they are literal argv bytes — notably the shipped
+        // `Write(./**)` / `Edit(./**)` maker globs. Rejecting them there made
+        // the whole config ambiguous before the requested grok host was ever
+        // inspected. Parsing the quote with the same strict helper keeps bad
+        // escapes fail-closed while preserving the plain-scalar alias guard.
+        const quotedScalar = value.startsWith('"') && value.endsWith('"')
+          && unquoteYamlScalar(value) !== null;
+        if (value.includes('{')
+          || (!quotedScalar && /[&*]/.test(value))
+          || value.includes('<<:')) return fail('config-ambiguous');
       }
       const dir = hosts[currentHost].directions[currentDir];
       if (Object.hasOwn(dir, key)) return fail('config-ambiguous');

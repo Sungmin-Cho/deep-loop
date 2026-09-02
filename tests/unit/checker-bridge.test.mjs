@@ -101,6 +101,32 @@ test('scanTransports rejects duplicate hosts and unknown indent', () => {
   assert.equal(scanTransports(dup, 'grok').reason, 'config-ambiguous');
 });
 
+test('scanTransports accepts glob stars inside quoted mechanisms but rejects YAML aliases', () => {
+  const quotedGlob = `transports:
+  claude_code:
+    to_xai:
+      mechanism_maker: "grok --allow Write(./**) --prompt-file /dev/stdin"
+      isolation: separate_process
+      verified: true
+  grok:
+    to_claude:
+      mechanism_reviewer: "claude -p --model <id> --effort <effort> --permission-mode plan --allowedTools Read,Glob,Grep,LS --strict-mcp-config \"<prompt>\""
+      isolation: separate_process
+      verified: true
+fallbacks:
+  grok: {}
+`;
+  const accepted = scanTransports(quotedGlob, 'grok');
+  assert.equal(accepted.ok, true, accepted.reason);
+  assert.match(accepted.hosts.claude_code.directions.to_xai.mechanism_maker, /\*\*/);
+
+  const alias = quotedGlob.replace(
+    'mechanism_maker: "grok --allow Write(./**) --prompt-file /dev/stdin"',
+    'mechanism_maker: *shared_mechanism',
+  );
+  assert.equal(scanTransports(alias, 'grok').reason, 'config-ambiguous');
+});
+
 test('parseMechanism treats current grok.to_claude as not read-only and grok.to_openai as sandbox-substitutable', () => {
   const claude = parseMechanism(
     '"claude -p --model <id> --effort <effort> --permission-mode <mode> \\"<prompt>\\""',
@@ -516,4 +542,3 @@ test('materializeFromReceipt copies only a SUCCEEDED review receipt and refuses 
   assert.equal(ok.verdict, 'APPROVE');
   assert.equal(readFileSync(dest, 'utf8'), body);
 });
-
