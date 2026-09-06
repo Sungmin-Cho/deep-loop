@@ -42,6 +42,10 @@ export function resolveAdapter(name) {
       then: p.dispatch.then || null,
       ...(p.dispatch.explicit_fallback === true ? { explicit_fallback: true } : {}),
       args: fill(p.dispatch.args_template, brief),
+      ...(brief.goalDriven === true ? {
+        required_stages: p.dispatch.then && brief.implementation !== false ? ['primary', 'continuation'] : ['primary'],
+        completion: 'execution-return',
+      } : {}),
     }),
     awaitResult: (ref) => ({ kind: p.await.kind, path: p.await.path_template ? fill(p.await.path_template, ref) : null, doneWhen: p.await.done_when }),
     checker: (ref, reviewConfig = {}) => checkerDescriptor(reviewConfig.reviewer || 'subagent-checker', {

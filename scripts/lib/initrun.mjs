@@ -14,7 +14,7 @@ import { normalizeGoalContract, normalizeGoalPolicy } from './goal-contract.mjs'
 export function buildInitialLoop({ runtime, goal, protocol, recipe, detected = {}, review, now = new Date(), runId, git = {}, env = process.env, platform = process.platform, run = defaultProbeRun, pid = process.pid, model = null, effort = null, continuationPolicy = null, goalContract, supervision, boundaryMode }) {
   validateSessionRuntime(runtime);
   assertRuntimePlatform(runtime, platform);
-  validateRuntimeProfile(runtime, { model, effort });
+  validateRuntimeProfile(runtime, { model, effort }, { goalDriven: goalContract !== undefined });
   if (review?.reviewer === 'standalone') throw new Error('REVIEWER_STANDALONE_INVALID: standalone reviewer is supported only for legacy-state resolution');
   if (continuationPolicy != null && continuationPolicy !== 'workstream-session') {
     throw new Error(`UNSUPPORTED_RUNTIME_POLICY: new runs require workstream-session, got ${continuationPolicy}`);
@@ -55,7 +55,7 @@ export function buildInitialLoop({ runtime, goal, protocol, recipe, detected = {
 export function initRun(root, { runtime, goal, protocol, recipe, review, detected = {}, now = new Date(), git = {}, env = process.env, platform = process.platform, run = defaultProbeRun, pid = process.pid, model = null, effort = null, continuation = null, goalContract, supervision, boundaryMode }) {
   validateSessionRuntime(runtime);
   assertRuntimePlatform(runtime, platform);
-  validateRuntimeProfile(runtime, { model, effort });
+  validateRuntimeProfile(runtime, { model, effort }, { goalDriven: goalContract !== undefined });
   if (continuation != null && continuation !== 'workstream-session') {
     throw new Error(`UNSUPPORTED_RUNTIME_POLICY: new runs require workstream-session, got ${continuation}`);
   }

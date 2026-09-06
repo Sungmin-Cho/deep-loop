@@ -25,6 +25,7 @@ export const RUNTIME_CAPABILITIES = Object.freeze({
     observation_runtime: 'claude_code',              // route-observation RouteObservationV1 producer runtime
     independent_checker_bridge: null,                // checker-bridge:probeCheckerBridge
     goal_checker_transports: Object.freeze(['native']), // goal-review dispatch; measured transports added by their host adapter
+    goal_effort_passthrough: Object.freeze([]),
   }),
   codex: Object.freeze({
     skill_token_style: 'dollar',
@@ -48,6 +49,7 @@ export const RUNTIME_CAPABILITIES = Object.freeze({
     observation_runtime: 'codex',
     independent_checker_bridge: null,                // checker-bridge:probeCheckerBridge
     goal_checker_transports: Object.freeze(['native']),
+    goal_effort_passthrough: Object.freeze(['max', 'ultra']), // actual model support is checked by process preflight
   }),
   grok: Object.freeze({
     skill_token_style: 'slash',
@@ -71,6 +73,7 @@ export const RUNTIME_CAPABILITIES = Object.freeze({
     observation_runtime: 'grok',
     independent_checker_bridge: 'model-router-separate-process', // checker-bridge:probeCheckerBridge
     goal_checker_transports: Object.freeze([]),
+    goal_effort_passthrough: Object.freeze([]),
   }),
 });
 

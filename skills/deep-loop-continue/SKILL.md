@@ -11,6 +11,7 @@ user-invocable: true
 > **비가역 외부 행동(push/PR/publish/merge/delete)은 proposal-only**, 항상 사람 승인(human approval)을 받는다.
 > **maker/checker 분리 유지** — 같은 세션이 동일 workstream의 maker와 checker를 겸하지 않는다.
 > 스킬은 durable state를 **읽기만** 하며, 모든 변경은 public kernel CLI로만 요청한다.
+> 이미 받은 대상 특정 승인은 같은 작업에서 유지한다. 추가 질문은 실제 누락 정보나 새 권한에 한정한다.
 
 ## 실행 루트와 호스트 호출
 
@@ -134,7 +135,22 @@ node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" session-profile set --session-profil
 - handoff가 진행 중이어도 다음 분기를 추측하지 않는다. 항상 §1의 새
   `next-action` 응답만 따른다.
 
-## 1. 게이트 검사 (항상 먼저)
+## 0.75. 목표 실행 분기
+
+공통 root/runtime 확인과 필요한 compact capsule admission을 마친 뒤 상태 버전을 읽는다:
+
+```
+node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" state get --field schema_version --project-root "<canonical_project_root>" --run-id <run_id>
+```
+
+`0.5.0`이면 `Read("DEEP_LOOP_ROOT/skills/deep-loop-workflow/references/goal-execution.md")`의
+**Continue**를 수행한다. 이후의 legacy action 표로 fall through하지 않는다. `plan_next_work`는
+목표 안에서 AI가 다음 작업을 판단하도록 요청하는 action이다. 정상 작업·fix·리뷰·종료를
+연결하고, 실제 승인된 목표가 끝날 때까지 현재 owner에서 진행한다.
+
+`0.4.0`은 아래 기존 경로를 그대로 사용한다. 상태 버전이나 완료 표식을 직접 고치지 않는다.
+
+## 1. 게이트 검사 (legacy 경로에서 항상 먼저)
 
 ```
 node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" next-action --json --project-root "<canonical_project_root>" --run-id <run_id>
@@ -169,7 +185,7 @@ Artifact 상세 교정 규칙은 `deep-loop-workflow`의 `## 핵심 불변식`�
 
 `max_parallel` 환경에서 여러 active workstream이 있어도, 항상 `action.workstream_id`가 지정하는 workstream의 worktree만 진입한다 — 임의 active workstream이 아님.
 
-## 2. Action 분기 (next-action이 반환한 `action.type`대로, 스스로 판단 추가 금지)
+## 2. Legacy Action 분기 (next-action이 반환한 `action.type`대로, 스스로 판단 추가 금지)
 
 ### dispatch_maker
 

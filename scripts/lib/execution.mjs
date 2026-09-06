@@ -13,6 +13,7 @@ import { resolveAdapter, guardTierProtocol } from './adapters.mjs';
 import { checkBudget } from './budget.mjs';
 import { checkBreaker } from './breaker.mjs';
 import { observeTerminalEpisode } from './route-observation.mjs';
+import { computeDebt } from './comprehension.mjs';
 
 const terminal = new Set(['done', 'approved', 'rejected', 'abandoned']);
 function target(loop, episodeId, fence, { allowUnbound = false, attemptId } = {}) {
@@ -38,7 +39,8 @@ function dispatchGate(loop, now, stage, role = 'maker') {
 }
 
 function invocation(loop, episode, execution) {
-  const primary = resolveAdapter(loop.routing.protocol).dispatch({ task: execution.task });
+  const primary = resolveAdapter(loop.routing.protocol).dispatch({ task: execution.task, goalDriven: true,
+    implementation: episode.point === 'implementation' || ['implementation', 'fix'].includes(episode.kind) });
   if (execution.stage === 'primary') return primary;
   const plan = (episode.execution_history || []).findLast(item => item.stage === 'primary' && item.phase === 'returned')?.artifacts[0];
   return { kind: 'skill', role: 'maker', skill: primary.then, then: null, args: plan, plan_path: plan, task: execution.task };
@@ -62,6 +64,7 @@ export function prepareExecution(root, runId, { episodeId, mode, stage = 'primar
       const { episode } = target(loop, episodeId, fence, { allowUnbound: true });
       if (episode.role !== 'maker') throw new Error('EXECUTION_CHECKER_REQUIRES_CLAIM');
       const prior = episode.execution;
+      if (!prior && episode.kind !== 'fix' && computeDebt(loop).blocked) throw new Error('EXECUTION_COMPREHENSION_BLOCKED');
       if (prior && ['running', 'prepared'].includes(prior.phase) && prior.stage === stage) {
         if (prior.task !== task || prior.mode !== mode || (routing !== undefined && JSON.stringify(routing) !== JSON.stringify(episode.routing))) throw new Error('EXECUTION_INTENT_FROZEN');
         existing = { execution: structuredClone(prior), invocation: invocation(loop, episode, prior), created: false };
@@ -69,9 +72,9 @@ export function prepareExecution(root, runId, { episodeId, mode, stage = 'primar
       }
       if (prior && !attemptIsQuiescent(prior)) throw new Error('EXECUTION_LIVENESS_UNKNOWN');
       if ((episode.execution_history || []).length >= 64) throw new Error('EXECUTION_HISTORY_LIMIT');
-      const adapter = resolveAdapter(loop.routing.protocol).dispatch({ task });
       const implementation = episode.point === 'implementation' || ['implementation', 'fix'].includes(episode.kind);
-      const requiredStages = prior?.required_stages || (adapter.then && implementation ? ['primary', 'continuation'] : ['primary']);
+      const adapter = resolveAdapter(loop.routing.protocol).dispatch({ task, goalDriven: true, implementation });
+      const requiredStages = prior?.required_stages || adapter.required_stages;
       const primary = [prior, ...(episode.execution_history || [])].filter(Boolean)
         .findLast(item => item.stage === 'primary' && item.phase === 'returned');
       const retryingContinuation = prior?.stage === 'continuation' && prior.phase === 'blocked' && attemptIsQuiescent(prior);

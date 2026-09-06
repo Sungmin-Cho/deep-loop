@@ -33,6 +33,8 @@ export function makeGoalFixture(options = {}) {
   if (options.supervision !== undefined) initArgs.push('--supervision', options.supervision);
   if (options.boundaryMode !== undefined) initArgs.push('--boundary-mode', options.boundaryMode);
   if (options.review !== undefined) initArgs.push('--review', JSON.stringify(options.review));
+  if (options.model !== undefined) initArgs.push('--model', options.model);
+  if (options.effort !== undefined) initArgs.push('--effort', options.effort);
   const initial = invoke(initArgs);
   if (initial.exit !== 0) {
     rmSync(root, { recursive: true, force: true });

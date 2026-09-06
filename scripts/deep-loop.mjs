@@ -1317,6 +1317,12 @@ const handlers = {
   },
   goal: async (a) => {
     const [verb, ...rest] = a; const f = parseFlags(rest);
+    if (verb === 'capabilities') {
+      const runtime = reqStr(f, 'runtime'); if (!runtime) { error('USAGE: --runtime is required'); return 2; }
+      try {
+        json({ runtime, implemented_transports: [...runtimeCapability(runtime, 'goal_checker_transports')], host_verification_required: true }); return 0;
+      } catch (cause) { const failure = kernelFailure(cause); error(failure.message); return failure.code; }
+    }
     const root = rootOf(f);
     if (verb === 'status') {
       const runId = exactReadRunId(f); if (!runId) return exactReadFailureCode(f);

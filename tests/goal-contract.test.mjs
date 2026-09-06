@@ -133,3 +133,18 @@ test('public workstream mapping requires known goal IDs and rejects invalid depe
     assert.deepEqual(f.state(), before);
   }
 });
+
+test('goal profile metadata preserves modern native effort without changing legacy validation', (t) => {
+  // Runtime catalog declares these levels. This verifies honest forwarding,
+  // not model availability; measured transport preflight is the execution gate.
+  for (const effort of ['max', 'ultra']) {
+    const loop = build({ runtime: 'codex', model: 'gpt-6-astra', effort });
+    assert.equal(loop.autonomy.session_effort, effort);
+    assert.equal(validate(loop).ok, true, validate(loop).errors.join(';'));
+  }
+  assert.throws(() => build({ goalContract: undefined, runtime: 'codex', model: 'gpt-6-astra', effort: 'max' }), /UNSUPPORTED_RUNTIME_EFFORT/);
+  const f = makeGoalFixture({ runtime: 'codex', model: 'gpt-6-astra', effort: 'max' }); t.after(f.cleanup);
+  const changed = f.cli(['session-profile', 'set', '--session-profile', JSON.stringify({ effort: 'ultra' })]);
+  assert.equal(changed.exit, 0, changed.stderr);
+  assert.equal(f.state().autonomy.session_effort, 'ultra');
+});

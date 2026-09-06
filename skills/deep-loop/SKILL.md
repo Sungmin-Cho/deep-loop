@@ -1,6 +1,6 @@
 ---
 name: deep-loop
-description: "Loop Engineering control plane entry — starts a durable cross-plugin orchestration run over the deep-suite. Detects siblings, matches a recipe/protocol, asks the review strategy, decomposes the goal into workstreams, creates the run, and prints the next command. Triggered by '/deep-loop \"<goal>\"', 'start a loop', 'loop engineering', 'orchestrate this work', '루프 시작', '딥루프 시작', '루프 엔지니어링', cross-platform Skill({ skill: \"deep-loop:deep-loop\", args: \"<goal>\" })."
+description: "Use when starting a durable long-running goal or coordinating multiple workstreams. Triggers: '/deep-loop \"<goal>\"', 'start a loop', 'loop engineering', 'orchestrate this work', '루프 시작', '딥루프 시작', '장기 목표 실행', cross-platform Skill({ skill: \"deep-loop:deep-loop\", args: \"<goal>\" })."
 user-invocable: true
 ---
 
@@ -11,6 +11,7 @@ user-invocable: true
 > **비가역 외부 행동(push/PR/publish/merge/delete)은 proposal-only**, 항상 사람 승인을 받는다.
 > **maker/checker 분리 유지** — 같은 세션이 동일 workstream의 maker와 checker를 겸하지 않는다.
 > 스킬은 durable state를 **읽기만** 하며, 모든 변경은 public kernel CLI로만 요청한다.
+> 같은 작업에 이미 받은 대상 특정 승인은 유지한다. 새 권한이 필요한 경우에만 추가 승인을 받는다.
 
 ## 실행 루트와 호스트 호출
 
@@ -64,7 +65,18 @@ node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" detect-plugins --project-root "<cano
 
 이 route 확인은 실행 방식의 선택일 뿐이며, proposal-only 행동(push/PR/merge/publish/delete)의 별도·대상 특정 사람 승인을 대체하지 않는다. 이 절의 판단 기준은 §2-2.5와 같은 prose-only 규율이다(자동 테스트는 마커 존재만 고정한다).
 
-### 2-2. Recipe + Protocol 결정
+### 2-1.6. 새 목표 실행 (v0.5)
+
+새 run은 `Read("DEEP_LOOP_ROOT/skills/deep-loop-workflow/references/goal-execution.md")`의
+**Entry → Continue** 경로로 진행한다. 원래 목표의 결과 조건을 goal contract에 보존하고,
+사용자의 명시적 조건이 없으면 delegated supervision / continue boundary / implementation
+review를 사용한다. 필요한 설계·계획 리뷰와 recipe 계약은 유지한다. 일상적인 분해·방법 선택을
+매번 사용자에게 재승인받지 않는다. 실행이 위임됐다면 생성 후 실제 다음 작업까지 이어간다.
+
+이 경로는 아래 legacy 초기화 절로 fall through하지 않는다. 기존 v0.4 run과 사용자가 명시적으로
+선택한 legacy 초기화만 아래 호환성 절을 사용한다. 활성 run의 버전을 바꾸지 않는다.
+
+### 2-2. Recipe + Protocol 결정 (legacy 초기화)
 
 ```
 node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" recipe-match --goal "<goal>" --project-root "<canonical_project_root>"

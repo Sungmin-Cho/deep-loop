@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, isAbsolute, join, posix, win32 } from 'node:path';
 import { normalizePortableRelativePath } from './fs-safe.mjs';
-import { SESSION_RUNTIMES } from './runtime.mjs';
+import { SESSION_RUNTIMES, runtimeCapability } from './runtime.mjs';
 import { isRoutingRecord } from './router-adapter.mjs';
 import { validateGoalState } from './goal-contract.mjs';
 
@@ -559,6 +559,10 @@ export function validate(loopJson, schema = loadSchema()) {
     const sm = autonomy.session_model;
     if (sm !== undefined && typeof sm !== 'string') errors.push('autonomy.session_model must be string');
     const runtime = autonomy.session_runtime;
+    if (autonomy.session_effort === 'ultra' && (loopJson.schema_version !== '0.5.0'
+      || !SESSION_RUNTIMES.includes(runtime) || !runtimeCapability(runtime, 'goal_effort_passthrough').includes('ultra'))) {
+      errors.push('ultra effort requires an eligible v0.5 runtime profile');
+    }
     const source = autonomy.runtime_source;
     if (runtime === undefined && source !== undefined) {
       errors.push('autonomy.runtime_source requires autonomy.session_runtime');

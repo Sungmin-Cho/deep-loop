@@ -74,6 +74,7 @@ export const ROUTE_FLAGS = Object.freeze({
   'review dispatch': route(['point', 'workstream', 'independent-subagent', 'routing', ...F, ...L]),
   'review claim': route(['episode', ...F, ...L]),
   'goal dispatch': route(['transport', ...F, ...L]),
+  'goal capabilities': route(['runtime', ...L]),
   'goal start': route(['id', 'attempt', 'handle', ...F, ...L]),
   'goal record': route(['stdin', ...F, ...L]),
   'goal reconcile': route(['id', 'attempt', 'observation', ...F, ...L]),

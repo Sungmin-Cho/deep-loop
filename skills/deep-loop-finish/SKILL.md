@@ -10,6 +10,7 @@ user-invocable: true
 > **loop.json + handoff 파일이 source of truth** — 이전 대화 컨텍스트를 가정하지 말 것.
 > **비가역 외부 행동(push/PR/publish/merge/delete)은 proposal-only**, 항상 사람 승인(human approval)을 받는다.
 > **artifacts 삭제 ❌** — 생성된 artifact 파일을 절대 삭제하거나 덮어쓰지 않는다.
+> 동일 작업에 이미 받은 대상 특정 외부 행동 승인은 유지한다. 새 권한을 추정하지 않는다.
 
 ## 실행 루트와 호스트 호출
 
@@ -30,6 +31,14 @@ node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" state get --field session_chain.leas
 ```
 
 `<owner_run_id>`는 `session_chain.lease.owner_run_id`, `<generation>`은 `session_chain.lease.generation`에서 얻는다. insights emit과 finish는 이 current fence와 불변 `<run_id>`를 함께 전달한다.
+
+## 단계 0.5: v0.5 원래 목표 확인
+
+상태 버전이 `0.5.0`이면 `goal status --json`으로 실제 전체 목표 proof를 읽고
+`Read("DEEP_LOOP_ROOT/skills/deep-loop-workflow/references/goal-execution.md")`의 **Finish**를 따른다.
+누락된 작업은 계속 수행하고, 오래된 proof는 새 목표 리뷰로 확인한다. 단순히 maker가 끝났다는
+이유로 완료하지 않는다. 정상적으로 복구 가능한 누락을 무조건 사용자 상태 수정으로 넘기지 않는다.
+측정 headless goal driver에서는 마지막 turn 계상을 위해 finish 직전 host에 yield한다.
 
 ## 단계 1: Final Report 작성
 
@@ -110,7 +119,8 @@ proof 요건:
 node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" finish --status completed --report final-report.md --proof '{}' --owner <owner_run_id> --generation <n> --project-root "<canonical_project_root>" --run-id <run_id>
 ```
 
-`FINISH_PROOF_UNMET` 에러 시 무엇이 빠졌는지 보고하고 사람이 결정하도록 한다.
+v0.4의 `FINISH_PROOF_UNMET` 에러는 기존 진단 절차로 처리한다. v0.5는 fresh `next-action`과
+`goal status --json`에 따라 실제 누락 작업·리뷰를 이어간다. 명시적 hard gate나 실제 새 권한은 유지한다.
 
 ### stopped (사람 명시 중단)
 
