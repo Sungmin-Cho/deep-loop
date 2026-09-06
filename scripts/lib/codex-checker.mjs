@@ -227,6 +227,7 @@ export function runIndependentCodexChecker({
   effort = null,
   timeoutMs,
   usageReceipt = null,
+  goalDriven = false,
   runProcess = runStreamingProcessSync,
 } = {}) {
   const root = absolutePath(projectRoot, 'checker-project-root-invalid');
@@ -240,6 +241,7 @@ export function runIndependentCodexChecker({
     model,
     effort,
     sandbox: 'read-only',
+    goalDriven,
   });
   const cwdIndex = entry.argv.indexOf('-C');
   if (cwdIndex < 0) throw new Error('checker-entry-invalid');
@@ -250,6 +252,7 @@ export function runIndependentCodexChecker({
   entry.captureFinalMessage = true;
   const result = runProcess(entry, {
     timeoutMs,
+    ...(goalDriven ? { processGroup: 'required', captureRawJsonl: true } : {}),
     ...(usageReceipt == null ? {} : { usageReceipt }),
   });
   if (!result || result.ok !== true) return result || { ok: false, reason: 'checker-worker-invalid' };
@@ -265,6 +268,7 @@ export function runIndependentCodexChecker({
   }
   return {
     ok: true,
+    ...(goalDriven ? { process_group: result.process_group, termination: result.termination, rawJsonl: result.rawJsonl, rawJsonlTruncated: result.rawJsonlTruncated } : {}),
     usage: result.usage,
     finalMessage: Buffer.from(result.finalMessage),
     ...(result.usageReceipt != null ? { usageReceipt: result.usageReceipt } : {}),

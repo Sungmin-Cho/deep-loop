@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync, realpathSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { captureLatestInsightsSet, latestInsights } from './insights.mjs';
@@ -711,6 +711,10 @@ function commitReviewOutcome(root, runId, {
         }
       } else {
         if (evidence.preparationError) throw evidence.preparationError;
+        const observedOutput = lockedContext.checker.execution?.observation?.output_sha256;
+        if (isGoalDriven(loop) && observedOutput !== undefined && observedOutput !== evidence.rawSha256) {
+          throw new Error('REVIEW_OUTPUT_HASH_MISMATCH: import differs from observed checker bytes');
+        }
         const binding = validateImportedEvidence(root, loop, evidence.input, lockedContext);
         const prepared = prepareImportedReview(root, runId, evidence.input, binding, { now: evidence.generatedAt });
         if (prepared.report !== evidence.report || prepared.reportRel !== evidence.reportRel
@@ -797,6 +801,7 @@ export function importReviewOutcome(root, runId, options = {}, internal = {}) {
     const checked = checkedContext(preState, input.checker_episode_id, { reviewSource: 'imported-stdin' });
     const binding = validateImportedEvidence(root, preState, input, checked);
     evidence = prepareImportedReview(root, runId, input, binding, { now });
+    evidence.rawSha256 = createHash('sha256').update(raw).digest('hex');
     afterMaterialize(Object.freeze({
       report: evidence.report,
       reportAbs: evidence.reportAbs,

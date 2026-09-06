@@ -29,11 +29,13 @@ const DEFAULT_DEEP_LOOP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), 
 const CONTINUITY_NOTES = Object.freeze({
   'desktop-model-effort': '> desktop transport는 URL로 model/effort를 전달할 수 없으니, desktop 재개 시 이 값으로 세션을 맞추세요.',
   'codex-preflight': '> Codex model과 low/medium/high/xhigh effort 매핑은 격리 descriptor에 고정되며 max effort는 fail-closed다. 실행은 별도 executable 승인·preflight 전까지 비활성이다.',
+  'codex-goal-preflight': '> Codex v0.5 model과 goal effort(max/ultra 포함)는 persistent goal-owner descriptor에 고정된다. 실행은 별도 executable 승인·goal-mode preflight 전까지 비활성이다.',
   'grok-attended': '> Grok는 attended Darwin 세션 런타임이다. desktop transport와 측정 headless 경로가 없고 effort를 seed하지 않으므로, 재개는 승인된 실행파일 정체성으로 사람이 연 세션에서만 가능하다.',
 });
 
-function continuityNote(runtime) {
-  const key = runtimeCapability(runtime, 'handoff_continuity_note');
+function continuityNote(runtime, { goalDriven = false } = {}) {
+  const capability = runtimeCapability(runtime, 'handoff_continuity_note');
+  const key = goalDriven && capability === 'codex-preflight' ? 'codex-goal-preflight' : capability;
   const text = CONTINUITY_NOTES[key];
   if (typeof text !== 'string') throw new Error(`UNKNOWN_HANDOFF_CONTINUITY_NOTE: ${key}`);
   return text;
@@ -112,7 +114,7 @@ function handoffMarkdown(loop, childRunId, reason, descriptor) {
     `## Session continuity`,
     `- model: ${loop.autonomy?.session_model || '(미지정 — CLI 기본값)'}`,
     `- effort: ${loop.autonomy?.session_effort || '(미지정 — CLI 기본값)'}`,
-    continuityNote(descriptor.runtime), '',
+    continuityNote(descriptor.runtime, { goalDriven: descriptor.goalDriven === true }), '',
     `## Episodes`, `- completed: ${doneEp}`, `- abandoned: ${abandonedEp}`, `- current: ${loop.current_episode || '(none)'}`, '',
     `## Workstreams`, wsLines, '',
     `## Triage`, `- actionable: ${(loop.triage?.actionable || []).length}, needs_human: ${(loop.triage?.needs_human || []).length}`, '',
@@ -235,12 +237,13 @@ function buildBoundaryArtifacts(loop, {
   boundaryEvent,
 }) {
   const runtime = sessionRuntime(loop);
+  const goalDriven = loop.schema_version === '0.5.0';
   const effectiveResumePolicy = resumePolicy
     ?? (resolveSpawnMode(loop, { headless, env }) === 'headless' ? 'headless' : 'visible');
   validateRuntimeProfile(runtime, {
     model: loop.autonomy?.session_model ?? null,
     effort: loop.autonomy?.session_effort ?? null,
-  });
+  }, { goalDriven });
   let dt = null;
   if (runtimeCapability(runtime, 'desktop_transport') && loop.autonomy?.spawn_style === 'desktop') {
     try { dt = desktopProbe({ platform }); } catch { dt = null; }
@@ -255,6 +258,7 @@ function buildBoundaryArtifacts(loop, {
     exists,
     model: loop.autonomy?.session_model ?? null,
     effort: loop.autonomy?.session_effort ?? null,
+    goalDriven,
     deepLoopRoot,
     runtimeExecutableIdentity: loop.autonomy?.runtime_executable_approval ?? null,
     launcherIdentity: descriptorLauncherIdentity(loop, runtime, platform),
@@ -471,10 +475,11 @@ export function emitHandoff(root, runId, {
   // fences copied roots and malformed runtime state before reservation or files.
   const { data: initialLoop } = captureReconciledRunSnapshot(root, runId);
   const initialRuntime = sessionRuntime(initialLoop);
+  const initialGoalDriven = initialLoop.schema_version === '0.5.0';
   validateRuntimeProfile(initialRuntime, {
     model: initialLoop.autonomy?.session_model ?? null,
     effort: initialLoop.autonomy?.session_effort ?? null,
-  });
+  }, { goalDriven: initialGoalDriven });
   const canonicalRoot = canonicalProjectRoot(initialLoop.project.root);
   if (initialLoop.autonomy?.continuation_policy === 'workstream-session') {
     return emitBoundaryHandoff(canonicalRoot, runId, {
@@ -526,12 +531,13 @@ export function emitHandoff(root, runId, {
   onBoundary('reserved');
   const { data: loop, hash: generationHash } = captureReconciledRunSnapshot(canonicalRoot, runId);
   const runtime = sessionRuntime(loop);
+  const goalDriven = loop.schema_version === '0.5.0';
   const effectiveResumePolicy = resumePolicy
     ?? (resolveSpawnMode(loop, { headless, env }) === 'headless' ? 'headless' : 'visible');
   validateRuntimeProfile(runtime, {
     model: loop.autonomy?.session_model ?? null,
     effort: loop.autonomy?.session_effort ?? null,
-  });
+  }, { goalDriven });
   const childRunId = res.childRunId;
   const dir = join(runDir(canonicalRoot, runId), 'handoffs');
   const termDir = join(runDir(canonicalRoot, runId), 'terminal');
@@ -560,6 +566,7 @@ export function emitHandoff(root, runId, {
       platform, desktopTarget: dt && dt.ok ? dt.argvTarget : null,
       exists,
       model: loop.autonomy?.session_model ?? null, effort: loop.autonomy?.session_effort ?? null,
+      goalDriven,
       deepLoopRoot,
       runtimeExecutableIdentity: loop.autonomy?.runtime_executable_approval ?? null,
       launcherIdentity: descriptorLauncherIdentity(loop, runtime, platform),

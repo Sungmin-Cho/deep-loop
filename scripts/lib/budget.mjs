@@ -15,6 +15,7 @@ import { sessionRuntime } from './runtime.mjs';
 import { contentHash } from './envelope.mjs';
 import { canonicalProjectRoot, projectRootDigest } from './project-root.mjs';
 import { isOpenScope } from './session-scope.mjs';
+import { inspectGoalOwnerReceipt, markGoalOwnerReceiptSettled } from './goal-owner-receipt.mjs';
 
 // #3: re-exported from integrity.mjs (the floor mechanism's home) so call sites/tests can import it from budget.mjs
 // while state.mjs imports it directly from integrity.mjs (no state↔budget cycle).
@@ -1647,3 +1648,110 @@ export function reconcileBudget(root, runId) {
 }
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+
+// Fixed host-only v0.5 owner-turn accounting. The branded pre-spawn receipt is
+// required even on active runs. Terminal permission is limited to this exact
+// measured turn following an anchored finish by its owner; leaseCheck stays strict.
+export function settleGoalOwnerCost(root, runId, { receipt, fence } = {}) {
+  const exact = inspectGoalOwnerReceipt(receipt, root, runId);
+  if (!fence || fence.owner !== exact.owner || fence.generation !== exact.generation) throw new Error('LEASE_FENCED: owner turn receipt');
+  return withReconciledMutationLock(root, runId, (_guard, { data: loop }) => {
+    const lease = loop.session_chain?.lease;
+    if (lease?.owner_run_id !== exact.owner || lease?.generation !== exact.generation) throw new Error('LEASE_FENCED: owner turn receipt');
+    if (loop.schema_version !== '0.5.0' || sessionRuntime(loop) !== 'codex') throw new Error('OWNER_TURN_RUNTIME_INVALID');
+    const session = loop.session_chain.sessions.find(item => item.run_id === exact.owner);
+    if (!session || !Number.isSafeInteger(session.turns) || session.turns < 0) throw new Error('OWNER_TURN_SESSION_INVALID');
+    if (loop.autonomy.session_model !== exact.profile.model || loop.autonomy.session_effort !== exact.profile.effort) throw new Error('OWNER_TURN_PROFILE_INVALID');
+    const log = verifyLog(root, runId); const head = verifyHead(root, runId, loop.event_log_head);
+    if (!log.ok || !head.ok) throw new Error('LOG_TAMPERED: owner turn settlement');
+    const lines = readLines(root, runId);
+    const anchor = lines.find(event => event.seq === exact.before_seq);
+    if ((exact.before_seq > 0 && anchor?.checksum !== exact.before_checksum)
+      || (exact.before_seq === 0 && exact.before_checksum !== null)) throw new Error('OWNER_TURN_ANCHOR_INVALID');
+    const matches = lines.filter(event => event.type === 'cost' && event.data?.source === 'goal-owner-measured'
+      && event.data?.owner_turn_id === exact.turn_id);
+    if (matches.length > 1) throw new Error('OWNER_TURN_ACCOUNTING_DUPLICATE');
+    const prior = matches[0];
+    const window = lines.filter(event => event.seq > exact.before_seq && (!prior || event.seq < prior.seq));
+    const terminal = ['completed', 'stopped'].includes(loop.status);
+    let finishChecksum = null;
+    if (terminal && (!prior || prior.data?.finish_checksum !== null)) {
+      const finishes = lines.filter(event => event.type === 'finish'); const finish = finishes[0];
+      const floor = finish && lines.find(event => event.seq === finish.seq + 1 && event.type === 'cost'
+        && event.data?.auto_floor === true && event.data?.for === 'finish'
+        && event.data?.owner === exact.owner && event.data?.generation === exact.generation);
+      if (lease.state !== 'active' || finishes.length !== 1 || finish.seq <= exact.before_seq
+        || finish.data?.status !== loop.status || !loop.termination?.finished_at || !floor
+        || lines.some(event => event.seq > finish.seq && event !== floor && event !== prior)) throw new Error('OWNER_TURN_FINISH_PROOF_MISSING');
+      finishChecksum = finish.checksum;
+    } else if (!prior) {
+      const checked = leaseCheck(loop, { ...fence, intent: 'accounting' });
+      if (!checked.ok) throw new Error(`LEASE_FENCED: ${checked.reason}`);
+    }
+    const { tf, tk } = trailingFloor(window, exact.owner, exact.generation);
+    const data = {
+      turns: Math.max(0, exact.usage.num_turns - tf), tokens: Math.max(0, exact.usage.tokens - tk),
+      reported_turns: exact.usage.num_turns, reported_tokens: exact.usage.tokens,
+      input_tokens: exact.usage.input_tokens, output_tokens: exact.usage.output_tokens,
+      ...(exact.usage.cached_input_tokens !== undefined ? { cached_input_tokens: exact.usage.cached_input_tokens } : {}),
+      ...(exact.usage.reasoning_output_tokens !== undefined ? { reasoning_output_tokens: exact.usage.reasoning_output_tokens } : {}),
+      owner: exact.owner, generation: exact.generation, source: 'goal-owner-measured',
+      owner_turn_id: exact.turn_id, owner_receipt_id: exact.receipt_id,
+      process_id: exact.process_id, thread_id: exact.thread_id, expected_thread_id: exact.expected_thread_id,
+      output_sha256: exact.output_sha256, profile: exact.profile,
+      before_seq: exact.before_seq, before_checksum: exact.before_checksum,
+      finish_checksum: finishChecksum, exit_code: exact.exit_code, termination_confirmed: true,
+    };
+    if (prior) {
+      if (JSON.stringify(prior.data) !== JSON.stringify(data)) throw new Error('OWNER_TURN_ACCOUNTING_MISMATCH');
+      markGoalOwnerReceiptSettled(receipt);
+      return { ok: true, recorded: false, reason: 'already-recorded' };
+    }
+    appendEvent(root, runId, { type: 'cost', data });
+    loop.event_log_head = lastLogHead(root, runId);
+    const spent = recomputeSpent(root, runId); loop.budget.spent = spent.turns; loop.budget.tokens_spent = spent.tokens;
+    session.turns += data.turns;
+    writeState(root, runId, loop);
+    markGoalOwnerReceiptSettled(receipt);
+    return { ok: true, recorded: true, reason: 'recorded' };
+  });
+}
+
+// Pure recognition of the fixed writer's terminal bookkeeping event. Callers
+// already hold a verified log+head snapshot. This grants no write authority.
+export function isTerminalGoalOwnerCostEvent(event, loop, lines) {
+  try {
+    const d=event?.data, lease=loop?.session_chain?.lease;
+    const uuid=value=>typeof value==='string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+    const hash=value=>typeof value==='string' && /^[0-9a-f]{64}$/.test(value);
+    if(event?.type!=='cost'||d?.source!=='goal-owner-measured'||loop?.schema_version!=='0.5.0'
+      ||sessionRuntime(loop)!=='codex'||!['completed','stopped'].includes(loop.status)||lease?.state!=='active'
+      ||!hasCanonicalEventData(d,['turns','tokens','reported_turns','reported_tokens','input_tokens','output_tokens',
+        ...['cached_input_tokens','reasoning_output_tokens'].filter(key=>Object.hasOwn(d,key)),
+        'owner','generation','source','owner_turn_id','owner_receipt_id','process_id','thread_id','expected_thread_id',
+        'output_sha256','profile','before_seq','before_checksum','finish_checksum','exit_code','termination_confirmed'])
+      ||d.owner!==lease.owner_run_id||d.generation!==lease.generation||!uuid(d.owner_turn_id)||!uuid(d.thread_id)
+      ||(d.expected_thread_id!==null&&d.expected_thread_id!==d.thread_id)||!hash(d.owner_receipt_id)||!hash(d.output_sha256)
+      ||!Number.isSafeInteger(d.process_id)||d.process_id<1||d.termination_confirmed!==true
+      ||!(d.exit_code===null||Number.isInteger(d.exit_code))||!Number.isSafeInteger(d.before_seq)||d.before_seq<0
+      ||d.profile?.model!==loop.autonomy?.session_model||d.profile?.effort!==loop.autonomy?.session_effort) return false;
+    const usage={num_turns:d.reported_turns,input_tokens:d.input_tokens,output_tokens:d.output_tokens,tokens:d.reported_tokens,
+      ...Object.fromEntries(['cached_input_tokens','reasoning_output_tokens'].filter(key=>Object.hasOwn(d,key)).map(key=>[key,d[key]]))};
+    if(!isMeasuredOneTurnUsage(usage))return false;
+    const finishes=lines.filter(e=>e.type==='finish'),finish=finishes[0];
+    const floor=finish&&lines.find(e=>e.seq===finish.seq+1&&e.type==='cost'&&e.data?.auto_floor===true
+      &&e.data?.for==='finish'&&e.data?.owner===d.owner&&e.data?.generation===d.generation);
+    const anchor=lines.find(e=>e.seq===d.before_seq);
+    if(!lines.includes(event)||finishes.length!==1||!floor||finish.seq<=d.before_seq||event.seq<=floor.seq
+      ||finish.data?.status!==loop.status||!loop.termination?.finished_at||d.finish_checksum!==finish.checksum
+      ||(d.before_seq===0?d.before_checksum!==null:anchor?.checksum!==d.before_checksum)
+      ||lines.some(e=>e.seq>finish.seq&&e!==floor&&e!==event)
+      ||lines.filter(e=>e.type==='cost'&&e.data?.owner_turn_id===d.owner_turn_id).length!==1)return false;
+    const {tf,tk}=trailingFloor(lines.filter(e=>e.seq>d.before_seq&&e.seq<event.seq),d.owner,d.generation);
+    if(d.turns!==Math.max(0,1-tf)||d.tokens!==Math.max(0,usage.tokens-tk))return false;
+    const body={version:1,turn_id:d.owner_turn_id,root:loop.project.root,run_id:loop.run_id,owner:d.owner,generation:d.generation,
+      profile:d.profile,expected_thread_id:d.expected_thread_id,before_seq:d.before_seq,before_checksum:d.before_checksum,
+      thread_id:d.thread_id,process_id:d.process_id,output_sha256:d.output_sha256,usage,termination_confirmed:true,exit_code:d.exit_code};
+    return contentHash(JSON.stringify(body))===d.owner_receipt_id;
+  } catch {return false;}
+}

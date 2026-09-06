@@ -154,3 +154,21 @@ Under the measured headless goal driver, yield for checker service and before
 final finish so the trusted host can settle the current turn. The driver resumes
 the same persistent owner thread for remaining work; it does not start an
 unrelated owner mid-workstream.
+
+## Measured host and bridge execution
+
+`goal drive` is the bounded Codex owner controller. It preserves the exact provider
+conversation while the owner identity remains unchanged; it yields for independent
+review and measured cost settlement. A lost provider binding is unavailable: do not
+substitute `--last` or start an unrelated conversation. The minimal experimental
+profile supports `boundary-mode continue`; current supports canonical handoff.
+
+For an attended Grok goal, use `bridge` only after the installed read-only bridge
+probe is ready. Invoke `goal dispatch --transport bridge`, then
+`goal bridge-descriptor --id <review_id> --attempt <attempt_id> --direction <direction> --model <model> --effort <effort>`
+with the current root/run/owner/generation. The descriptor supplies exact argv and
+required directories. Create those directories, run `start`, `exec`, `finalize`,
+then `record` in order. Finalization is read-only with respect to loop state;
+`goal bridge-record` validates the receipt and raw goal result through the kernel.
+Do not translate an ordinary PASS marker into whole-goal approval or treat cached
+bridge attestation as proof that a live reviewer succeeded.

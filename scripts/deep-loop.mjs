@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { driveGoalRun } from './lib/goal-host.mjs';
+import { buildGoalBridgeDescriptor } from './lib/goal-checker.mjs';
 import { selectWorkstream } from './lib/scope-selection.mjs';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -38,7 +40,7 @@ import { newEpisode, recordEpisode, abandonEpisode } from './lib/episode.mjs';
 import { prepareExecution, startExecution, returnExecution, reconcileExecution } from './lib/execution.mjs';
 import { isGoalDriven } from './lib/goal-contract.mjs';
 import { dispatchGoalReview, startGoalReview, recordGoalReview, reconcileGoalReview, goalProofState,
-  upsertGoalObligation, resolveGoalObligation, GOAL_RESULT_MAX_BYTES } from './lib/goal-review.mjs';
+  upsertGoalObligation, resolveGoalObligation, recordGoalBridgeReview, GOAL_RESULT_MAX_BYTES } from './lib/goal-review.mjs';
 import { projectObservationForCli } from './lib/route-observation.mjs';
 import {
   configureReviewFlags,
@@ -355,7 +357,7 @@ export const MUTATING_ROUTE_INVENTORY = Object.freeze([
   'workstream new', 'workstream select', 'workstream set', 'workstream terminal',
   'episode new', 'episode record', 'episode abandon',
   'execution prepare', 'execution start', 'execution return', 'execution reconcile',
-  'goal dispatch', 'goal start', 'goal record', 'goal reconcile', 'goal obligation', 'goal obligation-resolve',
+  'goal drive', 'goal bridge-descriptor', 'goal bridge-record', 'goal dispatch', 'goal start', 'goal record', 'goal reconcile', 'goal obligation', 'goal obligation-resolve',
   'review configure', 'review dispatch', 'review claim', 'review record', 'review import',
   'handoff emit', 'respawn', 'state patch', 'pause', 'recover', 'recovery acquire',
   'budget record', 'budget extend', 'comprehension ack', 'breaker reset',
@@ -1329,7 +1331,7 @@ const handlers = {
       const captured = verifiedExactSnapshot(root, runId); if (!captured.ok) return reportVerifiedExactFailure(captured);
       json(goalProofState(root, captured.snapshot.data)); return 0;
     }
-    const required = { dispatch: ['transport'], start: ['id', 'attempt', 'handle'], record: [], reconcile: ['id', 'attempt', 'observation'], obligation: ['value'], 'obligation-resolve': ['id'] };
+    const required = { 'bridge-record': ['id','attempt','receipt','sidecar'], 'bridge-descriptor': ['id','attempt','direction','model','effort'], drive: [], dispatch: ['transport'], start: ['id', 'attempt', 'handle'], record: [], reconcile: ['id', 'attempt', 'observation'], obligation: ['value'], 'obligation-resolve': ['id'] };
     if (!required[verb]) { error('USAGE: unknown goal verb'); return 2; }
     for (const name of required[verb]) if (!reqStr(f, name)) { error(`USAGE: --${name} requires a value`); return 2; }
     for (const name of Object.keys(f)) {
@@ -1342,6 +1344,16 @@ const handlers = {
     const common = { fence: { owner: f.owner, generation: intArg(f, 'generation'), intent: 'business' }, now: parseNow(f) };
     try {
       let result;
+      if (verb === 'drive') {
+        const driven = await driveGoalRun({root,runId,expect:common.fence,
+          ...(f['timeout-ms'] === undefined ? {} : {timeoutMs:intArg(f,'timeout-ms')}),
+          ...(f['max-turns'] === undefined ? {} : {maxTurns:intArg(f,'max-turns')}),
+          ...(f['token-limit'] === undefined ? {} : {tokenLimit:intArg(f,'token-limit')}),
+          profile:f.profile ?? 'current'});
+        json({ok:driven.ok,status:driven.status,reason:driven.reason,invocations:driven.invocations?.length ?? 0}); return driven.ok ? 0 : 1;
+      }
+      if (verb === 'bridge-descriptor') result = buildGoalBridgeDescriptor({root,runId,fence:common.fence,id:f.id,attemptId:f.attempt,direction:f.direction,model:f.model,effort:f.effort});
+      if (verb === 'bridge-record') result = recordGoalBridgeReview(root,runId,{...common,id:f.id,attemptId:f.attempt,receiptPath:f.receipt,sidecarPath:f.sidecar});
       if (verb === 'dispatch') result = dispatchGoalReview(root, runId, { ...common, transport: f.transport });
       if (verb === 'start') result = startGoalReview(root, runId, { ...common, id: f.id, attemptId: f.attempt, handle: f.handle });
       if (verb === 'record') result = recordGoalReview(root, runId, { ...common, raw: await readBoundedText(process.stdin, { maxBytes: GOAL_RESULT_MAX_BYTES }) });

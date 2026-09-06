@@ -13,7 +13,7 @@ import { applyReference, materializeFixture, materializeOutcomeSupport } from '.
 import { executeOutcomeCases } from '../evals/lib/outcome-cases.mjs';
 
 const FIXTURE_PROFILE = {
-  id: 'deep-loop-current-v1.22', driver: 'fixture', model: 'none:fixture', harness: 'none:fixture',
+  id: 'deep-loop-current-v1.23', driver: 'fixture', model: 'none:fixture', harness: 'none:fixture',
   allowed_effects: ['read-only'], record: { observables: ['exit', 'effects'] },
 };
 

@@ -25,6 +25,7 @@ import {
 import { nextAction } from './next-action.mjs';
 import { attendedLaunchAuthorized } from './attended-launch.mjs';
 import { resolveLaunchProfile } from './session-profile.mjs';
+import { isGoalDriven } from './goal-contract.mjs';
 
 const DEFAULT_DEEP_LOOP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const captureFreshLoop = (root, runId) => captureReconciledRunSnapshot(root, runId).data;
@@ -588,7 +589,11 @@ export function respawn(root, runId, {
   // the generalized unavailable-entry guard below preserve-pauses (never a rollback/fenced-target spawn).
   const dt = runtimeCapability(runtime, 'desktop_transport') && mode === 'desktop'
     ? desktopProbe({ platform }) : null;
-  const launchProfile = resolveLaunchProfile(loop, { episodeId: loop.current_episode });
+  // A goal handoff rotates the coordinator; terminal worker/checker routing is
+  // not the profile of its new owner conversation. Legacy episode launch stays frozen.
+  const launchProfile = isGoalDriven(loop)
+    ? { model: loop.autonomy?.session_model ?? null, effort: loop.autonomy?.session_effort ?? null }
+    : resolveLaunchProfile(loop, { episodeId: loop.current_episode });
   let _cmds, _entry;
   try {
     // launcherBin + launcherSocket threading (R3/R7-plan): cmux requires the absolute bundled bin + verified socket.
@@ -604,6 +609,7 @@ export function respawn(root, runId, {
       platform, desktopTarget: dt && dt.ok ? dt.argvTarget : null,
       exists: descriptorExists,
       model: launchProfile.model, effort: launchProfile.effort,
+      goalDriven: isGoalDriven(loop),
       codexExecutable, deepLoopRoot,
       runtimeExecutableIdentity, launcherIdentity,
     });

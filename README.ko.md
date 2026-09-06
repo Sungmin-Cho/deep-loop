@@ -10,6 +10,38 @@ deep-loop는 독립 실행 가능한(standalone/독립) Claude Code / Codex / Gr
 
 **Proposal-only** 범위는 push, PR, merge, publish, delete, marketplace/deep-suite sync를 모두 포함하며, 실행 전 각각 **별도 사람 승인(human approval)**이 필요합니다. 설치 안내는 이 저장소가 이미 릴리스·마켓플레이스 동기화되었다는 뜻이 아닙니다.
 
+## 목표 계약 (v1.23.0)
+
+장기 작업과 접근 방식 변경 뒤에도 완료 조건을 유지하려면 목표 계약을 사용합니다. `init-run --goal-contract '<JSON>'`으로 durable schema `0.5.0`에 명시적으로 진입합니다. 해당 옵션이 없는 호출과 기존 run은 `0.4.0` 계약을 유지합니다. 진입 스킬은 사용자의 목표를 명시적인 요구사항 ID와 수락 조건으로 정리한 뒤 목표 기반 run을 만듭니다. 최소 계약 예시는 다음과 같습니다.
+
+```json
+{"version":1,"requirements":[{"id":"REQ-001","statement":"sumNumbers 수정","acceptance":"정수, 음수, 0, 소수 입력의 숫자 합을 반환한다."}],"non_goals":[]}
+```
+
+목표 기반 기본값은 **delegated 감독**, **같은 소유자 대화에서 continue**, 구현 리뷰 지점입니다. 더 엄격한 방식은 `--supervision human`, `--boundary-mode handoff`로 명시합니다. delegated 모드는 에이전트 리뷰를 기록하면서 사람의 확인을 만들어 내지 않으며, 이해 부채로 새 maker 작업을 차단하지 않습니다. 요구사항과 수락 조건이 결과를 규정하고 모델은 유용한 다음 작업, 구현 전략, 선행 작업 순서와 근거 있는 재시도를 판단합니다. 요청한 리뷰 단계가 빠져 있으면 수행할 작업으로 남으며, 자동으로 사람의 상태 수정을 요구하지 않습니다.
+
+워크스트림은 요구사항 ID에 연결됩니다. 완료에는 일반 maker 리뷰 증거, 필수 워크스트림과 의무 사항의 해소, 최신 소스·아티팩트 스냅샷에 대해 모든 요구사항을 평가한 독립 전체 목표 리뷰가 필요합니다. 통합 소스, 관련 워크트리 내용이나 증거 입력이 바뀌면 이전 목표 리뷰는 오래된 증거가 됩니다. 프로세스 성공이나 체크리스트 완료만으로 목표를 완료하지 않습니다. 목표 스냅샷과 정확한 결과 바이트는 run 디렉터리의 `goal-reviews/<review-id>/`에 저장합니다.
+
+`execution prepare/start/reconcile/return`은 실제 시도 ID와 완료 단계를 유지합니다. 관측된 실행 상태에 따라 기존 시도를 재개하며, 상태를 모르는 외부 프로세스는 미해결로 남습니다. `workstream select`는 반환된 scope token으로 같은 소유자 대화에서 준비된 선행 워크스트림으로 이동합니다. scope history는 보류한 작업을 보존하지만 현재 scope만 실행 권한을 갖고, scope epoch는 오래된 compact context를 무효화합니다. 명시적 handoff 모드는 정확한 first-terminal 경계를 유지합니다.
+
+### 실험적 측정 기반 목표 드라이버
+
+명시적으로 승인된 격리 Codex run에서 `goal drive`는 하나의 영속 provider 대화를 실행·재개하고, 독립 checker를 실행하며, 측정한 각 턴의 사용량을 정산합니다. 승인된 런타임 실행 파일, 인증된 Codex home, 신뢰된 checker 지침과 대화 연속성 preflight가 필요합니다. 임의의 `--last` 세션을 재개하지 않습니다. 선택한 run을 생성하고 승인한 뒤의 예시입니다.
+
+```text
+node "<absolute-deep-loop-root>/scripts/deep-loop.mjs" goal drive --project-root "<canonical_project_root>" --run-id <run_id> --owner <owner_run_id> --generation <generation> --timeout-ms 600000 --token-limit 500000 --profile current
+```
+
+시간·토큰·턴 한도를 생략하면 현재 run의 예산을 따릅니다. smoke 프로필은 과제별 10분·측정 토큰 50만 개를 명시하며, minimal 실험 프로필은 continue 경계만 지원합니다.
+
+이 새 경로에는 POSIX process-group 감독과 종료 확인이 필요합니다. native Windows는 실험적 경로에서 지원하지 않으며, 아래 기존 호환 경로와 구분합니다. 사용량 누락, 알 수 없는 프로세스·provider binding, 확인되지 않은 teardown은 드라이버를 멈춥니다. 영속 Codex rollout은 인증된 `CODEX_HOME` 아래에 기록될 수 있습니다. host binding 상실은 증거 부재이며 다른 대화를 시작할 권한이 아닙니다. 일반 terminal CLI 쓰기는 계속 금지됩니다. 실행 전에 발급한 host receipt는 정확히 해당 소유자 턴의 마지막 비용 정산만 허용합니다.
+
+`goal capabilities --runtime <runtime>`은 구현된 transport를 표시하며 검증된 가용성을 뜻하지 않습니다. native 독립 checker 기능과 측정 Codex transport는 실제 host 증거가 필요합니다. Grok은 계속 attended Darwin 전용이며, 별도 프로세스 reviewer bridge는 설치 캐시와 읽기 전용 좌석 probe를 통과해야 합니다. native Grok subagent나 bridge 목록만으로 독립 리뷰 또는 기본 Grok 준비 완료를 주장하지 않습니다.
+
+V0.5는 Codex native effort `max`, `ultra`를 임의 하향 없이 프로필에 전달합니다. 특정 모델·계정에서 그 값을 지원한다는 증거는 아니며 실제 런타임 preflight가 기준입니다. legacy v0.4 effort 검증은 유지하고, 이전 reader는 v0.5 상태의 보장을 조용히 낮추는 대신 해당 상태를 거부합니다.
+
+실행 가능한 fixture는 커널과 행동 oracle을 검사하고, 가짜 transport 테스트는 계약만 검증합니다. real-agent smoke 프로필은 작은 두 과제를 native/current에서 각각 한 번 비교하며 모델, effort, 프로세스, 사용량과 원본 trace를 기록합니다. smoke가 통과해도 통계적 성능 향상, 일반적인 장기 작업 효능이나 모델 성능 저하가 없음을 입증하지는 않습니다. process-group 경계는 이탈한 모든 자손 프로세스의 봉쇄를 보장하지 않습니다.
+
 ## 아키텍처: 2-plane 설계
 
 deep-loop는 엄격한 **2-plane 분리**(spec §1)를 강제합니다:
@@ -69,9 +101,9 @@ node "<absolute-deep-loop-root>/scripts/hooks-impl/drive-headless.mjs" --project
 
 ## 호환성 및 복구 계약
 
-새 run은 Claude Code, Codex CLI, Codex App 모두 `workstream-session`과 `spawn_style='interactive'`로 시작합니다. active host conversation은 정확한 `bound_workstream_first_terminal` 이벤트까지 하나의 bound Workstream을 소유합니다. compaction은 그 대화 안에서 처리하고, normal child handoff는 first-terminal 경계에서만 발행합니다. **No unattended mid-Workstream respawn**이 계약입니다. 따라서 기본 연속성은 interactive이고 `/deep-loop-resume` 또는 `$deep-loop:deep-loop-resume`을 이용한 **manual resume**은 오류 전용 폴백이 아닌 일급 지원 경로입니다.
+legacy v0.4 run과 명시적 handoff 모드의 v0.5 run은 Claude Code, Codex CLI, Codex App 모두 `workstream-session`과 `spawn_style='interactive'`로 시작합니다. active host conversation은 정확한 `bound_workstream_first_terminal` 이벤트까지 하나의 bound Workstream을 소유합니다. compaction은 그 대화 안에서 처리하고, normal child handoff는 first-terminal 경계에서만 발행합니다. **No unattended mid-Workstream respawn**이 계약입니다. 따라서 기본 연속성은 interactive이고 `/deep-loop-resume` 또는 `$deep-loop:deep-loop-resume`을 이용한 **manual resume**은 오류 전용 폴백이 아닌 일급 지원 경로입니다.
 
-Grok CLI는 **attended Darwin-only** session runtime입니다. 새 grok run도 macOS에서 `workstream-session`과 `spawn_style='interactive'`를 쓰며, Linux·Windows·desktop·측정 헤드리스는 거부됩니다. **Grok compact is unsupported.** The Claude-cache-loaded deep-loop plugin hook with matcher `"*"` did not fire on measured Grok 1.0.4 and 1.0.13 PreCompact/PostCompact, so emit+observe stay closed and SessionStart restore is not opened. **다운그레이드:** 1.18 grok run을 1.17.0 커널이 읽으면 `validateSessionRuntime` / 스키마 enum에서 fail-stop합니다. 기존 claude/codex run은 그대로 읽힙니다. durable schema는 `0.4.0`입니다.
+Grok CLI는 **attended Darwin-only** session runtime입니다. 새 grok run도 macOS에서 `workstream-session`과 `spawn_style='interactive'`를 쓰며, Linux·Windows·desktop·측정 헤드리스는 거부됩니다. **Grok compact is unsupported.** The Claude-cache-loaded deep-loop plugin hook with matcher `"*"` did not fire on measured Grok 1.0.4 and 1.0.13 PreCompact/PostCompact, so emit+observe stay closed and SessionStart restore is not opened. **다운그레이드:** 1.18 grok run을 1.17.0 커널이 읽으면 `validateSessionRuntime` / 스키마 enum에서 fail-stop합니다. 기존 claude/codex run은 그대로 읽힙니다. 이 호환 계약의 durable schema는 `0.4.0`이며, 위 목표 계약은 `0.5.0`에 진입합니다.
 
 **1.19 커널 계약.** 모든 변이 라우트는 `PROJECT_ROOT_FENCED`에 **exit 3**을 냅니다(이전 exit 1로 접히던 9개 라우트가 불변식 2와 같아졌습니다). 읽기 전용 `next-action`/`state get`은 exit 1, `path resolve`는 3을 유지합니다. 모르는 플래그는 usage **exit 2**입니다. 라우트 목록은 `node "<absolute-deep-loop-root>/scripts/deep-loop.mjs" help` (`help <handler>`)입니다. Grok loop는 compact advice를 받지 않습니다.
 
@@ -211,7 +243,7 @@ grok-host `verified: true` read-only reviewer seat에 게이트됩니다. native
 `dispatch_checker`는 Route D(`needs-human`)입니다. compact와 measured headless는
 계속 미지원입니다.
 
-`workstream-session` continuation policy는 모든 host에 적용됩니다. attended run은 first-terminal 경계까지 interactive 동일 대화 작업이 기본입니다. unattended run은 측정형 headless 실행을 유지하지만 Workstream 중간에는 rotate하지 않습니다. manual resume은 오류 발생 시에만 쓰는 fallback이 아니라 일급 공식 지원 경로입니다.
+`workstream-session` continuation policy는 모든 host에 적용됩니다. 위 표는 기존 경계 handoff 경로이며, v0.5 continue 모드와 실험적 goal driver는 앞의 목표 계약 절에서 별도로 설명합니다. attended run은 first-terminal 경계까지 interactive 동일 대화 작업이 기본입니다. unattended run은 측정형 headless 실행을 유지하지만 Workstream 중간에는 rotate하지 않습니다. manual resume은 오류 발생 시에만 쓰는 fallback이 아니라 일급 공식 지원 경로입니다.
 
 **Codex POSIX visible authority:** macOS/Linux 자동 visible continuation에는 durable human-approved Codex runtime identity가 필요합니다. `cmux`는 양성 감지가 같은 absolute bundled executable과 exact socket을 성공한 ping으로 묶었을 때만 실행됩니다. `tmux`는 사람이 canonical executable identity를 승인하고 감지가 그 identity를 exact `$TMUX` socket, server PID, session에 묶은 후 지원됩니다. 승인 바이너리가 파생한 `#{session_id}`가 일치해야 하며, OS-bound pane ancestry proof(`#{pane_pid}` ↔ process ancestry)가 같은 session을 독립적으로 파생해야 합니다. macOS에서는 고정 `/usr/bin/osascript`를 통해 양성 감지된 iTerm2 또는 Terminal.app 하나만 실행되며, system binary의 존재만으로 두 런처를 활성화하지 않습니다. runtime 승인이 없으면 `runtime-identity-unavailable`, identity 또는 launcher drift는 spawned CAS 전후에 fail-closed하며 bare `codex`나 Claude process로 대체하지 않습니다.
 

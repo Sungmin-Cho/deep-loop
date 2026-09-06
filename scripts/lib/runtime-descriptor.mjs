@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { posix, win32 } from 'node:path';
 import { isTrustedPsBin, trustedPsCandidates } from './detect-terminal.mjs';
 import { runtimeCapability, skillToken, validateSessionRuntime } from './runtime.mjs';
-import { buildCodexExecEntry } from './codex-runtime.mjs';
+import { buildCodexExecEntry, buildCodexGoalOwnerEntry } from './codex-runtime.mjs';
 import { validateRuntimeProfile } from './session-profile.mjs';
 import { tomlBasicString } from './toml-safe.mjs';
 import { contentHash } from './envelope.mjs';
@@ -366,8 +366,9 @@ function buildCodexEntries({
   launcher, launcherBin, launcherSocket, launcherSession, exists = existsSync,
   model = null, effort = null, codexExecutable = null, deepLoopRoot = null,
   platform = process.platform, runtimeExecutableIdentity = null, launcherIdentity = null,
+  goalDriven = false,
 }) {
-  validateRuntimeProfile('codex', { model, effort });
+  validateRuntimeProfile('codex', { model, effort }, { goalDriven });
   const invocation = resumeInvocation('codex', root, parentRunId);
   const handoffPath = pathFor(platform, root, '.deep-loop', 'runs', parentRunId, handoffRel);
   const manualPrompt = `Read ${JSON.stringify(handoffPath)} first; then run ${invocation}`;
@@ -401,8 +402,9 @@ function buildCodexEntries({
     if (!targetAbsolutePath(deepLoopRoot, platform)) throw new Error('INVALID_DEEP_LOOP_ROOT: explicit absolute deep-loop root required');
     const skillPath = pathFor(platform, deepLoopRoot, 'skills', 'deep-loop-resume', 'SKILL.md');
     const prompt = `Read ${JSON.stringify(handoffPath)} first. Then read ${JSON.stringify(skillPath)} and execute that workflow inline for project root ${JSON.stringify(root)} and run id ${JSON.stringify(parentRunId)}.`;
+    const buildHeadlessEntry = goalDriven ? buildCodexGoalOwnerEntry : buildCodexExecEntry;
     entries.headless = {
-      ...buildCodexExecEntry({ executable: effectiveExecutable, projectRoot: root, prompt, model, effort }),
+      ...buildHeadlessEntry({ executable: effectiveExecutable, projectRoot: root, prompt, model, effort }),
       ...(platform === 'win32' ? { platform: 'win32', shell: false } : {}),
       display: `# Codex CLI headless: ${JSON.stringify(effectiveExecutable)} (isolated descriptor; prompt via stdin)`,
     };
@@ -753,11 +755,13 @@ export function buildRuntimeResumeDescriptor({
   launcher, launcherBin, launcherSocket, launcherSession,
   platform = process.platform, desktopTarget = null, exists = existsSync,
   model = null, effort = null,
+  goalDriven = false,
   codexExecutable = null, deepLoopRoot = null,
   runtimeExecutableIdentity = null, launcherIdentity = null,
 } = {}) {
   const selectedRuntime = validateSessionRuntime(runtime);
-  validateRuntimeProfile(selectedRuntime, { model, effort });
+  if (typeof goalDriven !== 'boolean') throw new Error('INVALID_GOAL_MODE: goalDriven must be boolean');
+  validateRuntimeProfile(selectedRuntime, { model, effort }, { goalDriven });
   validateSpawnArgs({ parentRunId, childRunId, handoffRel });
   const invocation = resumeInvocation(selectedRuntime, root, parentRunId);
   const buildPrompt = RESUME_PROMPTS[selectedRuntime];
@@ -770,6 +774,7 @@ export function buildRuntimeResumeDescriptor({
     root, parentRunId, childRunId, handoffRel,
     launcher, launcherBin, launcherSocket, launcherSession,
     platform, desktopTarget, exists, model, effort,
+    goalDriven,
     codexExecutable, deepLoopRoot,
     runtimeExecutableIdentity, launcherIdentity,
   });
@@ -784,6 +789,7 @@ export function buildRuntimeResumeDescriptor({
     resumeInvocation: invocation,
     resumePrompt,
     entries,
+    ...(goalDriven ? { goalDriven: true } : {}),
   };
 }
 

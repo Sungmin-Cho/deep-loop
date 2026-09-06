@@ -40,6 +40,55 @@ test('Codex JSONL parser returns one measured turn from one terminal event', () 
   });
 });
 
+test('Codex JSONL parser captures one trustworthy provider UUID from thread.started', () => {
+  const providerThreadId = '019d1234-5678-7abc-8def-0123456789ab';
+  const result = parseCodex([
+    JSON.stringify({ type: 'thread.started', thread_id: providerThreadId }),
+    JSON.stringify({ type: 'turn.started' }),
+    completed(),
+  ], { captureProviderThreadId: true });
+
+  assert.deepEqual(result, {
+    ok: true,
+    usage: {
+      num_turns: 1,
+      tokens: 12,
+      input_tokens: 7,
+      output_tokens: 5,
+    },
+    providerThreadId,
+  });
+});
+
+test('provider thread capture fails closed on missing, malformed, repeated, or late bindings', () => {
+  const first = '019d1234-5678-7abc-8def-0123456789ab';
+  const second = '019d1234-5678-7abc-8def-0123456789ac';
+  const cases = [
+    ['missing', [completed()], 'codex-missing-provider-thread'],
+    ['malformed', [
+      JSON.stringify({ type: 'thread.started', thread_id: 'thread-1' }),
+      completed(),
+    ], 'codex-invalid-provider-thread'],
+    ['repeated', [
+      JSON.stringify({ type: 'thread.started', thread_id: first }),
+      JSON.stringify({ type: 'thread.started', thread_id: second }),
+      completed(),
+    ], 'codex-multiple-provider-threads'],
+    ['late', [
+      completed(),
+      JSON.stringify({ type: 'thread.started', thread_id: first }),
+    ], 'codex-provider-thread-after-terminal'],
+  ];
+
+  for (const [label, lines, reason] of cases) {
+    assert.deepEqual(
+      parseCodex(lines, { captureProviderThreadId: true }),
+      { ok: false, reason },
+      label,
+    );
+  }
+});
+
 test('Codex JSONL parser preserves split UTF-8 agent-message bytes across CRLF chunk boundaries', () => {
   const message = '첫 줄\r\n둘째 줄 🙂';
   const stream = Buffer.from([

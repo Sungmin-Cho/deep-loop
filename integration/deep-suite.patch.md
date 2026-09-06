@@ -8,12 +8,16 @@ Marketplace sync remains proposal-only even when every source and preflight gate
 ## Authorized sequence
 
 1. In deep-loop, run `npm run preflight` on the source commit intended for its PR. After separately approved push, PR, and merge, read the merged `main` SHA and verify it is 40 lowercase hexadecimal characters.
-2. After **separate post-merge sync approval**, create a deep-suite branch. In both `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`, change only the existing `deep-loop.source.sha` to `<MERGED_MAIN_SHA>`. The two pins must be byte-identical.
+2. After **separate post-merge sync approval**, create a deep-suite branch and run its canonical `npm run release:bump -- deep-loop <MERGED_MAIN_SHA>` command. It updates the existing deep-loop entry and generated release metadata. Inspect both `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`; the two pins must be byte-identical. Do not hand-edit only one registry or generated marker region.
 3. Update the existing `deep-loop` object in `.claude-plugin/suite-extensions.json` to the inventory below. Do not create a second plugin object.
 4. Run deep-suite `npm run docs:write` to regenerate the generated docs (README/CLAUDE/guide marker regions); never edit generated marker contents by hand.
 5. Run deep-suite `npm run preflight`. Review the marketplace-pin diff, sidecar diff, and generated docs, then use a separately approved deep-suite PR and merge. A later publish, tag, or deletion still needs its own approval.
 
 The pinned-path checker fetches the deep-loop repository at the proposed SHA. A local-only or unpushed SHA cannot satisfy that gate.
+
+The v1.23.0 entry is a release draft until source validation, merge and the separate
+distribution gates complete. Goal-contract discoverability is not evidence of model
+efficacy or of a verified Grok reviewer bridge.
 
 ## Marketplace pin edits
 
@@ -52,7 +56,10 @@ The existing object remains Node-only and declares both hook event types. `Sessi
     "respawn",
     "cross-plugin-routing",
     "budget-breaker-gates",
-    "project-root-recovery"
+    "project-root-recovery",
+    "goal-contract",
+    "goal-completion-proof",
+    "recoverable-execution"
   ],
   "artifacts": {
     "writes": [
@@ -73,6 +80,8 @@ The existing object remains Node-only and declares both hook event types. `Sessi
       ".deep-loop/runs/<run-id>/terminal/launch-command.txt",
       ".deep-loop/runs/<run-id>/terminal/launch-command.meta.json",
       ".deep-loop/runs/<run-id>/reviews/<sha256>.json",
+      ".deep-loop/runs/<run-id>/goal-reviews/<review-id>/snapshot.json",
+      ".deep-loop/runs/<run-id>/goal-reviews/<review-id>/result.json",
       ".deep-loop/runs/<run-id>/preflight/cache/<cache-key>.json",
       ".deep-loop/runs/<run-id>/preflight/accounting/<cache-key>.json",
       ".deep-loop/runs/<run-id>/preflight/process-receipts/<receipt>.json",

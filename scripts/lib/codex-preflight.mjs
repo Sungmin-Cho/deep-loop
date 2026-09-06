@@ -590,6 +590,7 @@ export function ensureCodexPreflight({
   generation,
   model = null,
   effort = null,
+  goalDriven = false,
   timeoutMs = 30 * 60 * 1000,
   durableSchemaContract = null,
   usageParserContract = null,
@@ -606,7 +607,8 @@ export function ensureCodexPreflight({
   settleOrphanAccountingReceipt,
 } = {}) {
   const measuredUsage = [];
-  if (typeof runSync !== 'function' || typeof nonceFactory !== 'function'
+  if (typeof goalDriven !== 'boolean'
+    || typeof runSync !== 'function' || typeof nonceFactory !== 'function'
     || typeof revalidateExecutable !== 'function' || typeof resolveCodexHome !== 'function'
     || typeof inspectResumeSkill !== 'function' || typeof removeWorkspace !== 'function'
     || !Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_TIMEOUT_MS) {
@@ -793,6 +795,7 @@ export function ensureCodexPreflight({
         prompt: readPrompt,
         model,
         effort,
+        goalDriven,
         sandbox: 'read-only',
       }),
       cwd: canonicalProject,
@@ -806,6 +809,7 @@ export function ensureCodexPreflight({
         prompt: writePrompt,
         model,
         effort,
+        goalDriven,
       }),
       cwd: workspace,
       env: writeEnv,
@@ -827,6 +831,7 @@ export function ensureCodexPreflight({
       codexHomeIdentity,
       model,
       effort,
+      goalDriven,
       durableSchemaContract: schemaContract,
       usageParserContract: parserContract,
       resumeSkillIdentity: resumeSkill,

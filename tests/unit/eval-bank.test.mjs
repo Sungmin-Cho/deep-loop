@@ -91,7 +91,7 @@ test('profiles, taxonomy, result schema, and the 12-row synthetic sample match r
   assert.equal(profiles.length, 4);
   profiles.forEach(profile => assert.equal(validateProfile(profile).ok, true, profile.id));
   assert.deepEqual(new Set(profiles.map(profile => profile.id)), new Set([
-    'host-native', 'deep-loop-kernel-minimal', 'deep-loop-current-v1.22', 'deep-loop-experimental',
+    'host-native', 'deep-loop-kernel-minimal', 'deep-loop-current-v1.23', 'deep-loop-experimental',
   ]));
 
   const resultSchema = JSON.parse(readFileSync(join(process.cwd(), 'schemas', 'eval-result.schema.json'), 'utf8'));
@@ -99,7 +99,7 @@ test('profiles, taxonomy, result schema, and the 12-row synthetic sample match r
     'not-applicable', 'harness-constraint', 'procedural-rigidity', 'model-error', 'task-error', 'environment-error',
   ]);
   const readme = readFileSync(join(process.cwd(), 'evals', 'README.md'), 'utf8');
-  assert.match(readme, /agency_loss_incident.*host-native.*deep-loop-current-v1\.22.*valid solution.*deep-loop-experimental.*fails.*harness-constraint.*procedural-rigidity.*hard safety invariant/is);
+  assert.match(readme, /agency_loss_incident.*host-native.*deep-loop-current-v1\.23.*valid solution.*deep-loop-experimental.*fails.*harness-constraint.*procedural-rigidity.*hard safety invariant/is);
   assert.match(readme, /harness_block_incident.*valid solution.*harness.*prevented.*outcome/is);
   assert.match(readme, /`not-applicable`/);
   assert.match(readme, /without (?:a|the) manifest bank[^.]*structural validation only[^.]*does not recompute task-bound evidence/i);
@@ -127,7 +127,7 @@ test('STEP_VOCAB exactly equals production mutating routes plus the explicit eva
   const source = readFileSync(join(process.cwd(), 'scripts', 'deep-loop.mjs'), 'utf8');
   const inventory = source.match(/const MUTATING_ROUTE_INVENTORY\s*=\s*Object\.freeze\(\[([\s\S]*?)\]\);/)?.[1];
   const production = [...inventory.matchAll(/['"]([^'"]+)['"]/g)].map(match => match[1]);
-  const readSurface = ['validate', 'next-action', 'state get', 'checkpoint inspect', 'init-run'];
+  const readSurface = ['validate', 'next-action', 'state get', 'checkpoint inspect', 'init-run', 'goal status'];
   assert.deepEqual([...STEP_VOCAB].sort(), [...new Set([...production, ...readSurface])].sort());
 });
 

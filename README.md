@@ -10,6 +10,38 @@ deep-loop is a standalone Claude Code / Codex / Grok CLI plugin that runs durabl
 
 **Proposal-only** means push, PR, merge, publish, delete, and marketplace/deep-suite sync all require separate **human approval** before execution. Installation does not imply that this repository has been released or synchronized to either marketplace.
 
+## Goal contracts (v1.23.0)
+
+Use a goal contract when completion needs to survive long-running work and changes of approach. `init-run --goal-contract '<JSON>'` opts into durable schema `0.5.0`; calls without it and existing runs retain the `0.4.0` contract. The entry skill compiles the user's goal into explicit requirement IDs and acceptance criteria before creating the goal-driven run. A minimal contract is:
+
+```json
+{"version":1,"requirements":[{"id":"REQ-001","statement":"Fix sumNumbers","acceptance":"Integer, negative, zero and fractional inputs return their numeric sum."}],"non_goals":[]}
+```
+
+Goal-driven defaults are **delegated supervision**, **continue in the same owner conversation**, and an implementation review point. `--supervision human` and `--boundary-mode handoff` select the stricter alternatives explicitly. Delegated supervision records agent review without inventing human acknowledgements; comprehension debt does not block new maker work in that mode. Requirements and acceptance criteria constrain the result, while the model chooses useful work, implementation strategy, prerequisite order and justified retries. Missing requested review phases remain work to perform; they do not become an automatic request for human state repair.
+
+Workstreams map to requirement IDs. Finishing requires ordinary maker review proof, settled required workstreams and obligations, plus an independent whole-goal result covering every requirement against a current source/artifact snapshot. Changing integrated source, relevant worktree content or proof inputs makes the old goal result stale. A successful process or a completed checklist alone is insufficient. Goal snapshots and exact result bytes are stored in `goal-reviews/<review-id>/` under the run directory.
+
+`execution prepare/start/reconcile/return` preserves actual attempt identity and completion stages. Resume an existing attempt using observed execution state; an unknown external process remains unresolved. `workstream select` can move to ready prerequisites within the same owner conversation using the returned scope token. Scope history preserves parked work, but only the current scope authorizes action; the scope epoch invalidates stale compact context. Explicit handoff mode retains the exact first-terminal boundary.
+
+### Experimental measured goal driver
+
+For an explicitly authorized, isolated Codex run, `goal drive` runs and resumes one persistent provider conversation, services independent checkers, and settles each measured turn. It uses the approved runtime executable, authenticated Codex home, trusted checker instructions and continuity preflight; it never resumes an arbitrary `--last` session. Example after creating and approving the selected run:
+
+```text
+node "<absolute-deep-loop-root>/scripts/deep-loop.mjs" goal drive --project-root "<canonical_project_root>" --run-id <run_id> --owner <owner_run_id> --generation <generation> --timeout-ms 600000 --token-limit 500000 --profile current
+```
+
+Omitted time, token and turn limits inherit the current run budget; the smoke profile explicitly uses 10 minutes and 500,000 measured tokens per trial. The minimal experimental profile supports continue boundaries only.
+
+This new driver requires POSIX process-group supervision and confirmed termination. Native Windows is unavailable for this experimental path; the existing compatibility paths below remain separate. Missing usage, an unknown process/provider binding, or unconfirmed teardown stops the driver. Persistent Codex rollouts may be written under its authenticated `CODEX_HOME`. A lost host binding is unavailable evidence, not permission to start a different conversation. Normal terminal CLI writes remain forbidden; a pre-spawn host receipt can authorize only the exact measured owner turn's final cost settlement.
+
+`goal capabilities --runtime <runtime>` lists implemented transports, not verified availability. Native independent checker facilities and measured Codex transport require their actual host evidence. Grok remains attended Darwin only; a separate-process reviewer bridge must pass its installed-cache/read-only-seat probe. Neither native Grok subagents nor a listed bridge imply independent review or default Grok readiness.
+
+V0.5 accepts the Codex native effort values `max` and `ultra` as profile passthrough without silently lowering them. This is not evidence that a particular model/account supports those values; actual runtime preflight is authoritative. Legacy v0.4 effort validation stays unchanged, and old readers reject v0.5 state rather than silently downgrading its guarantees.
+
+Executable fixtures test the kernel and behavioral oracle; fake transport tests establish contracts only. The real-agent smoke profile compares two small tasks once each under native/current policies with explicit model, effort, process, usage and raw-trace receipts. Even successful smoke trials do not establish statistical uplift, broad long-task efficacy or model-performance neutrality. The process-group boundary is not universal containment of escaped descendants.
+
 ## Architecture: 2-Plane Design
 
 deep-loop enforces a strict **2-plane separation** (spec §1):
@@ -79,9 +111,9 @@ node "<absolute-deep-loop-root>/scripts/hooks-impl/drive-headless.mjs" --project
 
 ## Compatibility and recovery contract
 
-New runs use `workstream-session` with `spawn_style='interactive'` on Claude Code, Codex CLI, and Codex App. The active host conversation owns one bound Workstream until its exact `bound_workstream_first_terminal` event; compaction stays in that conversation, and only that first-terminal boundary may publish a normal child handoff. There is **no unattended mid-Workstream respawn**. The default continuation is interactive, and **manual resume** through `/deep-loop-resume` or `$deep-loop:deep-loop-resume` is a first-class supported path rather than an error-only fallback.
+Legacy v0.4 runs and v0.5 runs with explicit handoff mode use `workstream-session` with `spawn_style='interactive'` on Claude Code, Codex CLI, and Codex App. The active host conversation owns one bound Workstream until its exact `bound_workstream_first_terminal` event; compaction stays in that conversation, and only that first-terminal boundary may publish a normal child handoff. There is **no unattended mid-Workstream respawn**. The default continuation is interactive, and **manual resume** through `/deep-loop-resume` or `$deep-loop:deep-loop-resume` is a first-class supported path rather than an error-only fallback.
 
-Grok CLI is an **attended Darwin-only** session runtime: new grok runs also use `workstream-session` with `spawn_style='interactive'` on macOS, and Linux, Windows, desktop, and measured headless are rejected. **Grok compact is unsupported.** The Claude-cache-loaded deep-loop plugin hook with matcher `"*"` did not fire on measured Grok 1.0.4 and 1.0.13 PreCompact/PostCompact, so emit+observe stay closed and SessionStart restore is not opened. **Downgrade:** a 1.18 grok run fail-stops on a 1.17.0 kernel at `validateSessionRuntime` / the schema enum; existing claude/codex runs remain readable. The durable schema stays `0.4.0`.
+Grok CLI is an **attended Darwin-only** session runtime: new grok runs also use `workstream-session` with `spawn_style='interactive'` on macOS, and Linux, Windows, desktop, and measured headless are rejected. **Grok compact is unsupported.** The Claude-cache-loaded deep-loop plugin hook with matcher `"*"` did not fire on measured Grok 1.0.4 and 1.0.13 PreCompact/PostCompact, so emit+observe stay closed and SessionStart restore is not opened. **Downgrade:** a 1.18 grok run fail-stops on a 1.17.0 kernel at `validateSessionRuntime` / the schema enum; existing claude/codex runs remain readable. That compatibility contract uses durable schema `0.4.0`; goal contracts opt into `0.5.0` as described above.
 
 **1.19 kernel contract.** Every mutating route returns **exit 3** for `PROJECT_ROOT_FENCED` (nine routes that used to fold that fence to exit 1 now match invariant 2). Read-only `next-action` and `state get` stay exit 1; `path resolve` stays 3. Unknown flags are usage **exit 2**. Discover routes with `node "<absolute-deep-loop-root>/scripts/deep-loop.mjs" help` (or `help <handler>`). Grok loops no longer receive compact advice.
 
@@ -230,7 +262,7 @@ read-only reviewer seat. Native Grok `spawn_subagent` isolation is not independe
 Until that ledger bit is set, Grok `dispatch_checker` stays
 Route D (`needs-human`). Compact and measured headless remain unsupported.
 
-The `workstream-session` continuation policy applies on every host. An attended run defaults to interactive same-conversation work until the first-terminal boundary; unattended runs retain measured headless execution but cannot rotate mid-Workstream. Manual resume is a first-class supported path, not only an error fallback.
+The `workstream-session` continuation policy applies on every host; the table describes legacy/boundary-handoff paths, while v0.5 continue mode and the experimental goal driver are described above. An attended run defaults to interactive same-conversation work until the first-terminal boundary; unattended runs retain measured headless execution but cannot rotate mid-Workstream. Manual resume is a first-class supported path, not only an error fallback.
 
 **Codex POSIX visible authority:** macOS/Linux automatic visible continuation requires the durable human-approved Codex runtime identity. `cmux` is runnable only when detection bound the same absolute bundled executable to the exact socket with a successful ping. `tmux` is supported after a human approves its canonical executable identity and detection binds that identity to the exact `$TMUX` socket, server PID, and session: the approved binary's `#{session_id}` must match, and an OS-bound pane ancestry proof (`#{pane_pid}` ↔ process ancestry) must independently derive the same session. On macOS, the fixed `/usr/bin/osascript` may launch only the positively detected iTerm2 or Terminal.app entry; finding that system binary alone never activates both launchers. Missing runtime approval returns `runtime-identity-unavailable`, identity or launcher drift fails closed around the spawned CAS, and no path substitutes a bare `codex` or a Claude process.
 

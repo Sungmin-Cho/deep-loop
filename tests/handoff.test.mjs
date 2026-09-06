@@ -518,6 +518,22 @@ test('Codex headless descriptor is runnable only with an explicit absolute execu
   assert.ok(!c.headless.argv.includes('--add-dir'));
 });
 
+test('goal-driven Codex handoff starts a persistent strictly isolated owner at max or ultra effort', () => {
+  for (const effort of ['max', 'ultra']) {
+    const c = buildPosixLaunchCommand({
+      runtime: 'codex', root: '/repo', parentRunId: 'PARENT', childRunId: 'CHILD',
+      handoffRel: 'handoffs/x.md', codexExecutable: '/trusted/codex', deepLoopRoot: '/deep-loop',
+      model: 'gpt-5.6-sol', effort, goalDriven: true,
+    });
+    assert.equal(c.headless.argv[0], 'exec');
+    assert.equal(c.headless.argv.includes('--ephemeral'), false);
+    assert.equal(c.headless.argv.includes('resume'), false, 'a Workstream handoff starts a fresh owner thread');
+    assert.equal(c.headless.argv.includes(`model_reasoning_effort="${effort}"`), true);
+    assert.equal(c.headless.captureProviderThreadId, true);
+    assert.equal(c.headless.argv.includes('project_doc_max_bytes=0'), true);
+  }
+});
+
 test('Codex native Windows headless descriptor accepts a revalidated identity and never a bare runtime', () => {
   const codex = executableIdentity('codex', 'C:\\Program Files & Tools\\Codex\\codex.exe');
   const c = buildLaunchCommand({

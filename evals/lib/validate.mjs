@@ -13,7 +13,7 @@ export const STEP_VOCAB = Object.freeze([
   'checkpoint emit','checkpoint observe','checkpoint restore','lease acquire','lease release',
   'workstream select', 'workstream new','workstream set','workstream terminal','episode new','episode record','episode abandon',
   'execution prepare','execution start','execution return','execution reconcile',
-  'goal dispatch','goal start','goal record','goal reconcile','goal status','goal obligation','goal obligation-resolve',
+  'goal drive','goal bridge-descriptor','goal bridge-record','goal dispatch','goal start','goal record','goal reconcile','goal status','goal obligation','goal obligation-resolve',
   'review configure','review dispatch','review claim','review record','review import','handoff emit','respawn','state patch','pause','recover','recovery acquire',
   'budget record','budget extend','comprehension ack','breaker reset','insights emit',
   'spawn-style offer-desktop','spawn-style confirm-desktop','spawn-style decline-desktop','spawn-style reset-desktop',
@@ -619,7 +619,7 @@ export function validateProfile(profile) {
     || !Array.isArray(profile.record.observables) || profile.record.observables.length !== 2
     || profile.record.observables[0] !== 'exit' || profile.record.observables[1] !== 'effects') return fail('PROFILE_SCHEMA');
   const exactProfiles = {
-    'deep-loop-current-v1.22': ['fixture','none:fixture','none:fixture',false],
+    'deep-loop-current-v1.23': ['fixture','none:fixture','none:fixture',false],
     'host-native': ['agent','host','native',true],
     'deep-loop-kernel-minimal': ['agent','none','deep-loop',true],
     'deep-loop-experimental': ['agent','experimental','deep-loop',true],
@@ -691,7 +691,7 @@ export function validateResult(result, bank = undefined) {
   })).sort((left, right) => left.task_id.localeCompare(right.task_id));
   const actualFindings = [...result.kernel_findings].sort((left, right) => left.task_id.localeCompare(right.task_id));
   if (JSON.stringify(actualFindings) !== JSON.stringify(expectedFindings)) return fail('RESULT_FINDINGS_SEMANTICS');
-  const comparisonProfiles = new Set(['host-native','deep-loop-kernel-minimal','deep-loop-current-v1.22','deep-loop-experimental']);
+  const comparisonProfiles = new Set(['host-native','deep-loop-kernel-minimal','deep-loop-current-v1.23','deep-loop-experimental']);
   if (result.profile_comparison_stub.some(row => !exactKeys(row, [
     'task_id','profile','outcome_pass','agency_loss_incident','harness_block_incident','hard_safety_invariant_violated','attribution',
   ]) || !nonEmptyString(row.task_id) || !comparisonProfiles.has(row.profile)
@@ -704,7 +704,7 @@ export function validateResult(result, bank = undefined) {
   for (const row of result.profile_comparison_stub.filter(item => item.agency_loss_incident)) {
     if (row.profile !== 'deep-loop-experimental') return fail('RESULT_AGENCY_PROFILE');
     const counterpart = result.profile_comparison_stub.some(item => item.task_id === row.task_id
-      && ['host-native','deep-loop-current-v1.22'].includes(item.profile) && item.outcome_pass === true);
+      && ['host-native','deep-loop-current-v1.23'].includes(item.profile) && item.outcome_pass === true);
     if (!counterpart) return fail('RESULT_AGENCY_COUNTERFACTUAL');
   }
   if (bank !== undefined && !validateResultTaskBank(result, bank)) return fail('RESULT_TASK_BINDING');

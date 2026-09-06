@@ -18,7 +18,14 @@ if (split === -1) {
 }
 const flags = argv.slice(0, split);
 const supervisorArgv = argv.slice(split + 1);
+let goalSubject = null;
+try {
+  const rawSubject = argValue(flags, '--goal-subject');
+  if (flags.filter(value => value === '--goal-subject').length > 1) throw new Error('duplicate');
+  if (rawSubject !== null) goalSubject = JSON.parse(rawSubject);
+} catch { process.stderr.write('GOAL_BRIDGE_SUBJECT_INVALID\n'); process.exit(1); }
 const bound = bindBridgeExec({
+  goalSubject,
   cwdFlag: argValue(flags, '--cwd'),
   sidecar: argValue(flags, '--sidecar'),
   dispatcher: argValue(flags, '--dispatcher'),

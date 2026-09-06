@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { runAgentEvaluation } from '../evals/drivers/codex-agent.mjs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
@@ -27,7 +28,7 @@ function flags(argv) {
     const token = argv[index];
     if (!token.startsWith('--')) throw new Error(`UNKNOWN_ARGUMENT:${token}`);
     const name = token.slice(2);
-    if (!['mode','task','out','report','now'].includes(name) || Object.hasOwn(output, name)) throw new Error(`UNKNOWN_OR_DUPLICATE_OPTION:${token}`);
+    if (!['mode','task','out','report','now','profile','executable','codex-home'].includes(name) || Object.hasOwn(output, name)) throw new Error(`UNKNOWN_OR_DUPLICATE_OPTION:${token}`);
     if (name === 'report') output[name] = true;
     else {
       const value = argv[++index];
@@ -51,7 +52,7 @@ function loadTasks(taskId) {
   return tasks;
 }
 
-export function loadFixtureProfile(file = join(ROOT, 'evals', 'profiles', 'deep-loop-current-v1.22.json')) {
+export function loadFixtureProfile(file = join(ROOT, 'evals', 'profiles', 'deep-loop-current-v1.23.json')) {
   let profile;
   try { profile = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { throw new Error(`PROFILE_LOAD_FAILED:${error.code || error.message}`); }
@@ -269,10 +270,17 @@ export function runFixtureEvaluation({ taskId = null, out = null, now = DEFAULT_
 export async function main(argv = process.argv.slice(2)) {
   const options = flags(argv);
   const mode = options.mode || 'fixture';
-  if (mode !== 'fixture') {
-    process.stderr.write('NOT_IMPLEMENTED: only fixture mode is available\n');
-    return 2;
+  if (mode === 'agent') {
+    if (!options.executable || !options['codex-home'] || options.task || options.now || options.report) {
+      process.stderr.write('AGENT_OPTIONS_REQUIRED: --executable and --codex-home; use a versioned --profile for task selection\n'); return 2;
+    }
+    const report = await runAgentEvaluation({executable:options.executable,codexHome:options['codex-home'],outDir:options.out,
+      ...(options.profile ? {profile:JSON.parse(readFileSync(resolve(options.profile),'utf8'))} : {})});
+    process.stdout.write(`${JSON.stringify(report)}\n`);
+    return report.attempts?.length > 0 && report.attempts.every(attempt=>attempt.status === 'passed') && !report.stopped ? 0 : 1;
   }
+  if (mode !== 'fixture') { process.stderr.write('UNKNOWN_MODE: expected fixture or agent\n'); return 2; }
+  if (options.profile || options.executable || options['codex-home']) { process.stderr.write('FIXTURE_OPTIONS_INVALID\n'); return 2; }
   const selectedOut = options.out || (options.report ? join(ROOT, 'evals', 'results', 'local') : null);
   const report = runFixtureEvaluation({ taskId: options.task || null, out: selectedOut, now: options.now || DEFAULT_NOW });
   const verdicts = report.payload.summary.by_verdict;

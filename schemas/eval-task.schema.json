@@ -94,7 +94,17 @@
       {"minItems":2,"prefixItems":[{"const":"attended-launch"},{"const":"revoke"}]},
       {"minItems":2,"prefixItems":[{"const":"session-profile"},{"const":"set"}]},
       {"minItems":1,"prefixItems":[{"const":"detect-terminal"}]},
-      {"minItems":1,"prefixItems":[{"const":"finish"}]}
+      {"minItems":1,"prefixItems":[{"const":"finish"}]},
+      {"minItems":2,"prefixItems":[{"const":"goal"},{"const":"drive"}]},
+      {"minItems":2,"prefixItems":[{"const":"goal"},{"const":"bridge-descriptor"}]},
+      {"minItems":2,"prefixItems":[{"const":"goal"},{"const":"bridge-record"}]},
+      {"minItems":2,"prefixItems":[{"const":"goal"},{"const":"dispatch"}]},
+      {"minItems":2,"prefixItems":[{"const":"goal"},{"const":"start"}]},
+      {"minItems":2,"prefixItems":[{"const":"goal"},{"const":"record"}]},
+      {"minItems":2,"prefixItems":[{"const":"goal"},{"const":"reconcile"}]},
+      {"minItems":2,"prefixItems":[{"const":"goal"},{"const":"status"}]},
+      {"minItems":2,"prefixItems":[{"const":"goal"},{"const":"obligation"}]},
+      {"minItems":2,"prefixItems":[{"const":"goal"},{"const":"obligation-resolve"}]}
     ]},
     "step":{"type":"object","additionalProperties":false,"required":["cmd","expect"],"properties":{"cmd":{"$ref":"#/$defs/kernelCommand"},"expect":{"$ref":"#/$defs/expect"},"stdin":{"$ref":"#/$defs/stdin"},"setup_files":{"type":"array","items":{"$ref":"#/$defs/setupFile"}}}},
     "acceptance":{"oneOf":[

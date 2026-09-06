@@ -5,6 +5,36 @@ All notable changes to deep-loop are documented in this file.
 > Note: the `[1.1.0]`/`[1.2.0]` entries pre-date this changelog file (a known lag between
 > `plugin.json.version` and the changelog); this release does not retro-fill them.
 
+## [1.23.0] — 2026-09-07
+
+### Added
+
+- Opt-in v0.5 goal contracts with immutable requirement identities, typed obligations,
+  current source/artifact snapshots and independent whole-goal completion proof.
+- Recoverable execution attempts, explicit continuation stages, justified maker retries,
+  and same-conversation workstream selection with scope history and compact epochs.
+- Experimental measured Codex `goal drive`: persistent owner conversations, independent
+  checker service and exact one-turn accounting, including pre-bound terminal settlement.
+- Separate real-agent evaluation profiles, executable behavior oracles, parent-owned
+  candidate snapshots and bounded POSIX process-group/raw JSONL evidence.
+
+### Changed
+
+- Goal-driven defaults use delegated supervision, same-owner continuation and an
+  implementation review point. Human supervision and first-terminal handoff stay explicit
+  alternatives. Existing v0.4 runs and CLI initialization without a goal contract retain
+  their released behavior; old readers reject v0.5 state.
+- Goal-mode Codex profile metadata preserves native `max`/`ultra` effort requests.
+  Actual model/account availability still requires runtime verification.
+
+### Validation boundary
+
+- Release, full preflight and live smoke receipts are pending. Fixture and transport-seam
+  tests do not establish long-task efficacy or statistical model-performance uplift.
+- Native independent reviewers require host evidence. Grok remains attended Darwin only;
+  any reviewer bridge requires its verified installed-cache/read-only transport contract.
+- External publication approval and ordinary terminal mutation restrictions are unchanged.
+
 ## [1.22.1] — 2026-09-03
 
 ### Added

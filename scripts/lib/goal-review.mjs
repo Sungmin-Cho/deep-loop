@@ -1,3 +1,8 @@
+import { homedir } from 'node:os';
+import { probeCheckerBridge, verifyGoalBridgeReceipt, goalBridgeSubject } from './checker-bridge.mjs';
+import { readGoalCheckerReceipt } from './goal-checker.mjs';
+import { realpathSync } from 'node:fs';
+import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
 import { appendAnchored, MUTATION_TURN_FLOOR } from './integrity.mjs';
@@ -126,10 +131,11 @@ function readSnapshot(root, runId, review) {
   return artifact.payload;
 }
 
-export function dispatchGoalReview(root, runId, { transport, fence, now = Date.now() } = {}) {
+export function dispatchGoalReview(root, runId, { transport, fence, now = Date.now(), home = homedir(), env = process.env } = {}) {
   const before = captureReconciledRunSnapshot(root, runId).data; goalFence(before, fence);
   if (goalReviewBoundaryBlocked(before)) throw new Error('GOAL_BOUNDARY_HANDOFF_REQUIRED');
   if (!runtimeCapability(sessionRuntime(before), 'goal_checker_transports').includes(transport)) throw new Error('GOAL_TRANSPORT_UNAVAILABLE');
+  if (transport === 'bridge' && !probeCheckerBridge({ loopData: before, home, env, cwd: root }).ready) throw new Error('GOAL_BRIDGE_PROBE_UNAVAILABLE');
   const active = before.goal_reviews.find(item => item.status === 'pending');
   if (active) {
     if (active.transport !== transport) throw new Error('GOAL_REVIEW_TRANSPORT_FROZEN');
@@ -153,6 +159,7 @@ export function dispatchGoalReview(root, runId, { transport, fence, now = Date.n
       loop.goal_reviews.push(record);
     }, loop => {
       goalFence(loop, fence);
+      if (transport === 'bridge' && !probeCheckerBridge({ loopData: loop, home, env, cwd: root }).ready) throw new Error('GOAL_BRIDGE_PROBE_UNAVAILABLE');
       if (goalReviewBoundaryBlocked(loop)) throw new Error('GOAL_BOUNDARY_HANDOFF_REQUIRED');
       const current = loop.goal_reviews.find(item => item.status === 'pending');
       if (current) {
@@ -188,7 +195,11 @@ export function startGoalReview(root, runId, { id, attemptId, handle, fence, now
   return { ok: true, execution: structuredClone(next) };
 }
 
-export function reconcileGoalReview(root, runId, { id, attemptId, observation, fence, now = Date.now() } = {}) {
+export function reconcileGoalReview(root, runId, options = {}) {
+  const { id, attemptId, observation, fence, now } = options;
+  return reconcileGoalReviewInternal(root, runId, { id, attemptId, observation, fence, now });
+}
+function reconcileGoalReviewInternal(root, runId, { id, attemptId, observation, fence, now = Date.now(), hostReceipt = null } = {}) {
   let next;
   appendAnchored(root, runId, { type: 'goal-review-reconciled', data: { review_id: id, attempt_id: attemptId, observation }, now }, loop => {
     const review = loop.goal_reviews.find(item => item.id === id);
@@ -197,7 +208,10 @@ export function reconcileGoalReview(root, runId, { id, attemptId, observation, f
   }, loop => {
     goalFence(loop, fence);
     const review = pendingReview(loop, id, attemptId);
-    if (!isAttemptObservation(observation) || observation.source !== 'native-task' || review.transport !== 'native') throw new Error('GOAL_OBSERVATION_UNSUPPORTED');
+    if (hostReceipt !== null) {
+      assertHostGoalReceipt(root, runId, loop, review, hostReceipt, fence);
+      if (!isAttemptObservation(observation) || observation.source !== 'supervisor-receipt' || review.transport !== 'codex') throw new Error('GOAL_OBSERVATION_UNSUPPORTED');
+    } else if (!isAttemptObservation(observation) || observation.source !== 'native-task' || review.transport !== 'native') throw new Error('GOAL_OBSERVATION_UNSUPPORTED');
     if (observation.state === 'succeeded' && !SHA256.test(observation.output_sha256 || '')) throw new Error('GOAL_RETURN_DIGEST_REQUIRED');
     const prior = review.execution.observation;
     if (prior?.state === 'succeeded' && (observation.output_sha256 !== prior.output_sha256
@@ -208,7 +222,56 @@ export function reconcileGoalReview(root, runId, { id, attemptId, observation, f
   return { ok: true, execution: structuredClone(next) };
 }
 
+export function measuredGoalReviewContext(root, runId, { id, attemptId, fence } = {}) {
+  const loop = captureReconciledRunSnapshot(root, runId).data; goalFence(loop, fence);
+  const review = pendingReview(loop, id, attemptId);
+  return goalReviewContextForLoop(root, runId, loop, review, fence);
+}
+export function goalReviewContextForLoop(root, runId, loop, review, fence) {
+  const snapshot = readSnapshot(root, runId, review), id = review.id, attemptId = review.execution.attempt_id;
+  return { run_id: runId, owner: fence.owner, generation: fence.generation, review_id: id, attempt_id: attemptId,
+    goal_sha256: review.goal_sha256, snapshot_sha256: review.snapshot_sha256, goal: loop.goal,
+    requirements: structuredClone(loop.goal_contract.requirements), snapshot_path: join(runDir(root, runId), review.snapshot_rel),
+    snapshot_file_sha256: review.snapshot_file_sha256, evidence_refs: snapshotEvidenceRefs(snapshot) };
+}
+function assertHostGoalReceipt(root, runId, loop, review, receipt, fence) {
+  const issued = readGoalCheckerReceipt(receipt), contract = issued.contract;
+  if (issued.root !== realpathSync(root) || contract.run_id !== runId || contract.owner !== fence.owner
+    || contract.generation !== fence.generation || contract.review_id !== review.id
+    || contract.attempt_id !== review.execution.attempt_id || contract.handle !== review.execution.handle
+    || contract.goal_sha256 !== loop.goal_contract.sha256 || contract.snapshot_sha256 !== review.snapshot_sha256
+    || review.transport !== 'codex' || (issued.state === 'succeeded' && issued.settled !== true)) throw new Error('GOAL_HOST_RECEIPT_INVALID');
+  return issued;
+}
+export function ingestMeasuredGoalReview(root, runId, { receipt, fence, now = Date.now() } = {}) {
+  const issued = readGoalCheckerReceipt(receipt), contract = issued.contract;
+  const loop = captureReconciledRunSnapshot(root, runId).data; goalFence(loop, fence);
+  const review = pendingReview(loop, contract.review_id, contract.attempt_id);
+  assertHostGoalReceipt(root, runId, loop, review, receipt, fence);
+  const observation = { source: 'supervisor-receipt', state: issued.state, handle: contract.handle, reference: issued.reference,
+    ...(issued.state === 'succeeded' ? { output_sha256: contentHash(issued.raw) } : {}) };
+  reconcileGoalReviewInternal(root, runId, { id: review.id, attemptId: contract.attempt_id, observation, fence, now, hostReceipt: receipt });
+  if (issued.state !== 'succeeded') return { ok: false, reason: issued.state === 'unknown' ? 'GOAL_CHECKER_TERMINATION_UNCONFIRMED' : 'GOAL_CHECKER_UNAVAILABLE' };
+  try { return recordGoalReview(root, runId, { raw: issued.raw, fence, now }); }
+  catch (error) {
+    if (!/^GOAL_PROOF_(STALE|UNMET)(:|$)/.test(error.message)) throw error;
+    // A settled process cannot review changed source. Retire only this exact observed attempt.
+    reconcileGoalReviewInternal(root, runId, { id: review.id, attemptId: contract.attempt_id,
+      observation: { ...observation, state: 'failed' }, fence, now, hostReceipt: receipt });
+    return { ok: false, reason: error.message };
+  }
+}
+
 export function recordGoalReview(root, runId, { raw, fence, now = Date.now() } = {}) {
+  return recordGoalReviewInternal(root, runId, { raw, fence, now });
+}
+export function recordGoalBridgeReview(root, runId, { id, attemptId, receiptPath, sidecarPath, fence, now = Date.now(), home = homedir(), env = process.env } = {}) {
+  const context = measuredGoalReviewContext(root, runId, { id, attemptId, fence });
+  const options = { receiptPath, attemptId, sidecarPath, cwdFlag: root, goalSubject: goalBridgeSubject(root, context), home, env };
+  const proof = verifyGoalBridgeReceipt(options);
+  return recordGoalReviewInternal(root, runId, { raw: proof.raw, fence, now, bridgeOptions: options });
+}
+function recordGoalReviewInternal(root, runId, { raw, fence, now = Date.now(), bridgeOptions = null } = {}) {
   const result = parseGoalResult(raw);
   const before = captureReconciledRunSnapshot(root, runId).data;
   const resultRel = `goal-reviews/${result.review_id}/result.json`;
@@ -227,9 +290,16 @@ export function recordGoalReview(root, runId, { raw, fence, now = Date.now() } =
     const snapshot = readSnapshot(root, runId, review);
     bindResult(loop, review, result, snapshot);
     if (captureGoalSnapshot(root, loop).sha256 !== snapshot.sha256) throw new Error('GOAL_PROOF_STALE');
-    if (review.execution.phase !== 'running' || review.execution.observation?.state !== 'succeeded') throw new Error('GOAL_RETURN_UNOBSERVED');
-    if (review.execution.observation.output_sha256 !== rawDigest) throw new Error('GOAL_RETURN_RAW_MISMATCH');
-    execution = transitionAttempt(review.execution, 'return', { observation: review.execution.observation, artifacts: [resultRel], now });
+    let observed = review.execution;
+    if (bridgeOptions !== null) {
+      const proof = verifyGoalBridgeReceipt({ ...bridgeOptions, loopData: loop });
+      if (proof.raw !== raw) throw new Error('GOAL_RETURN_RAW_MISMATCH');
+      observed = transitionAttempt(observed, 'reconcile', { observation: { source: 'supervisor-receipt', state: 'succeeded',
+        handle: observed.handle, reference: bridgeOptions.receiptPath, output_sha256: rawDigest }, now });
+    }
+    if (observed.phase !== 'running' || observed.observation?.state !== 'succeeded') throw new Error('GOAL_RETURN_UNOBSERVED');
+    if (observed.observation.output_sha256 !== rawDigest) throw new Error('GOAL_RETURN_RAW_MISMATCH');
+    execution = transitionAttempt(observed, 'return', { observation: observed.observation, artifacts: [resultRel], now });
   }, { floor: MUTATION_TURN_FLOOR, publication: { kind: 'goal-review-result', operationId: `${result.review_id}-${rawDigest}`,
     artifacts: [{ rel: resultRel, bytes }], topology: { review_id: result.review_id, attempt_id: result.attempt_id,
       snapshot_sha256: result.snapshot_sha256, artifact_rel: resultRel, artifact_sha256: digest } } });
