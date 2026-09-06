@@ -1,3 +1,4 @@
+import { inheritGoalScopeState, ownerSession } from './session-scope.mjs';
 import {
   existsSync,
   readFileSync,
@@ -728,6 +729,7 @@ function freezeOperation(candidateRoot, runId, snapshot, classified, iso) {
     lease_generation: newLeaseGeneration,
     runtime: sessionRuntime(loop),
     scope: recoveryScope(loop, recoveryKind),
+    ...inheritGoalScopeState(ownerSession(loop)),
     acquire_command: descriptor.acquireInvocation,
     created_at: iso,
   } : null;
@@ -784,6 +786,7 @@ function tombstoneForRelocation(loop, operation, iso) {
     recovery_project_root_digest: operation.newRootDigest,
     root_recovery_operation_id: operation.operationId,
     scope: structuredClone(operation.capsulePayload.scope),
+    ...inheritGoalScopeState(operation.capsulePayload),
   };
   loop.session_chain.sessions.push(child);
   loop.session_chain.lease = {

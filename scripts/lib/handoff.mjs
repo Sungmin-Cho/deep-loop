@@ -1,3 +1,4 @@
+import { inheritGoalScopeState, ownerSession } from './session-scope.mjs';
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -387,6 +388,7 @@ function emitBoundaryHandoff(root, runId, {
         started_at: null,
         ended_at: null,
         turns: 0,
+        ...inheritGoalScopeState(ownerSession(l)),
         outcome: null,
         superseded_by: null,
         parent_run_id: expect.owner,
@@ -668,7 +670,7 @@ export function emitHandoff(root, runId, {
         ? { kind: 'workstream', workstream_id: null, bound_at_seq: null, terminal_event: null, closed_at: null, superseded_at: null }
         : { kind: 'legacy', workstream_id: null, bound_at_seq: null, terminal_event: null, closed_at: null };
       l.session_chain.sessions.push({ run_id: childRunId, started_at: null, ended_at: null, turns: 0, outcome: null, superseded_by: null,
-        handoff_rel: handoffRel, handoff_md: mdName, handoff_cs: csName, scope });
+        handoff_rel: handoffRel, handoff_md: mdName, handoff_cs: csName, scope, ...inheritGoalScopeState(ownerSession(l)) });
       const cur = l.session_chain.sessions.find(s => s.run_id === expect.owner);
       if (cur) cur.superseded_by = childRunId;
       const lease = l.session_chain.lease;

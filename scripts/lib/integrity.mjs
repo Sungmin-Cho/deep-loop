@@ -64,7 +64,7 @@ import {
 import { leaseCheck } from './lease.mjs';
 import { nextAction } from './next-action.mjs';
 import { compactSupportedOnHost, sessionRuntime, validateSessionRuntime } from './runtime.mjs';
-import { isOpenScope, ownerSession } from './session-scope.mjs';
+import { isOpenScope, ownerSession, goalScopeEpoch } from './session-scope.mjs';
 
 const logPath = (root, runId) => join(runDir(root, runId), 'event-log.jsonl');
 const COMPACT_PRUNE_FILE = /^([0-9a-f]{64})-compact-prune\.json$/;
@@ -2225,6 +2225,7 @@ function expectedRestoreContext(root, runId, loop, hash, recordedEvidence, gener
     artifacts: artifacts.map(rel => restoreArtifact(root, rel)),
     next_action: nextAction(loop, { now: Date.parse(generatedAt), unattended: false }),
     provider_evidence: structuredClone(recordedEvidence),
+    ...(goalScopeEpoch(loop) !== null ? { scope_epoch: goalScopeEpoch(loop) } : {}),
   };
 }
 
@@ -2261,6 +2262,7 @@ function assertRestoreFence(loop, request) {
 }
 
 function assertCheckpointRestoreIdentity(root, loop, request, context, affinity) {
+  if (goalScopeEpoch(loop) !== null && context.scope_epoch !== goalScopeEpoch(loop)) throw new Error('CHECKPOINT_SCOPE_EPOCH_MISMATCH');
   if (loop.autonomy?.continuation_policy !== 'workstream-session'
     || context.run_id !== request.runId
     || context.owner_run_id !== request.fence.owner

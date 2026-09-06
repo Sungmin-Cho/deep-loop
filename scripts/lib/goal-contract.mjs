@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isExecutionRecord } from './attempt-state.mjs';
+import { validateScopeHistory } from './session-scope.mjs';
 
 export const GOAL_LIMITS = Object.freeze({ requirements: 64, text: 4096, goal: 65536, workstreams: 256, reviewRounds: 16 });
 export const GOAL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -131,7 +132,7 @@ export function validateGoalState(loop, errors) {
     if (!Number.isSafeInteger(session?.scope_epoch) || session.scope_epoch < 0) errors.push('v0.5 scope_epoch must be a nonnegative safe integer');
     if (!Number.isSafeInteger(session?.scope_turn_baseline) || session.scope_turn_baseline < 0
       || session.scope_turn_baseline > session.turns) errors.push('v0.5 scope_turn_baseline is invalid');
-    if (!Array.isArray(session?.scope_history) || session.scope_history.length !== 0) errors.push('v0.5 scope_history must be an empty supported history');
+    validateScopeHistory(loop, session, errors);
   }
   validateMappings(loop, errors);
   for (const episode of (Array.isArray(loop.episodes) ? loop.episodes : [])) {

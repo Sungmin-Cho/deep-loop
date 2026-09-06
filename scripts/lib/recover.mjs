@@ -1,3 +1,4 @@
+import { inheritGoalScopeState } from './session-scope.mjs';
 import {
   existsSync,
   lstatSync,
@@ -198,12 +199,14 @@ function baseRecoverySession({
   bindingGeneration,
   rootDigest,
   scope,
+  sourceSession,
 }) {
   return {
     run_id: childRunId,
     started_at: null,
     ended_at: null,
     turns: 0,
+    ...inheritGoalScopeState(sourceSession),
     outcome: null,
     superseded_by: null,
     recovered_from: recoveredFrom,
@@ -474,6 +477,7 @@ export function supersedeAffinity(root, runId, {
     candidate.session_chain.sessions.push(baseRecoverySession({
       childRunId,
       recoveredFrom: current.run_id,
+      sourceSession: current,
       recoveryKind: 'affinity-supersession',
       recoveryRel,
       recoverySha256,
@@ -781,6 +785,7 @@ export function recoverBoundary(root, runId, {
         started_at: null,
         ended_at: iso,
         turns: 0,
+        ...inheritGoalScopeState(parent),
         outcome: 'abandoned_recover',
         superseded_by: replacementSessionId,
         parent_run_id: parent.run_id,
@@ -812,6 +817,7 @@ export function recoverBoundary(root, runId, {
     sessions.push(baseRecoverySession({
       childRunId: replacementSessionId,
       recoveredFrom: stale.run_id,
+      sourceSession: stale,
       recoveryKind: 'boundary-recovery',
       recoveryRel,
       recoverySha256,

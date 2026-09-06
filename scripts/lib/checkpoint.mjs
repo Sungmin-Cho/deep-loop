@@ -19,7 +19,7 @@ import { nextAction } from './next-action.mjs';
 import { canonicalProjectRoot, projectRootDigest } from './project-root.mjs';
 import { compactSupportedOnHost, runtimeCapability, sessionRuntime, skillToken, validateSessionRuntime } from './runtime.mjs';
 import { validate } from './schema.mjs';
-import { isOpenScope, ownerSession } from './session-scope.mjs';
+import { isOpenScope, ownerSession, goalScopeEpoch } from './session-scope.mjs';
 import { runDir, withReconciledMutationLock } from './state.mjs';
 import {
   __testCommitOrReplayCompactRestore,
@@ -132,7 +132,7 @@ function authenticLegacy(loop) {
 
 function assertCurrentSchema(loop) {
   const result = validate(loop);
-  if (loop?.schema_version !== '0.4.0' || !result.ok) {
+  if (!['0.4.0', '0.5.0'].includes(loop?.schema_version) || !result.ok) {
     throw new Error(`CHECKPOINT_STATE_INVALID: ${result.errors.join('; ')}`);
   }
 }
@@ -271,6 +271,7 @@ function deriveContext(root, runId, snapshot, {
     }),
     next_action: nextAction(loop, { now, unattended: false }),
     provider_evidence: providerEvidence,
+    ...(goalScopeEpoch(loop) !== null ? { scope_epoch: goalScopeEpoch(loop) } : {}),
   };
 }
 
@@ -301,6 +302,7 @@ function validateStrictBytes(bytes, {
   let env;
   try { env = JSON.parse(bytes.toString('utf8')); } catch { throw new Error('CHECKPOINT_INVALID'); }
   const context = validateStrictSelf(env, { runId, key });
+  if (goalScopeEpoch(snapshot.data) !== null && context.scope_epoch !== goalScopeEpoch(snapshot.data)) throw new Error('CHECKPOINT_SCOPE_EPOCH_MISMATCH');
   const expected = deriveContext(root, runId, snapshot, {
     now: Date.parse(env.envelope.generated_at),
     providerEvidence: context.provider_evidence,
@@ -908,7 +910,8 @@ function cursorCandidate(loop, entries, runId, tombstones) {
     const metadata = capturedStrictMetadata(entry, runId);
     const env = JSON.parse(metadata.bytes.toString('utf8'));
     const context = validateStrictSelf(env, { runId, key: metadata.key });
-    if (metadata.key !== cursor.checkpoint_key
+    if ((goalScopeEpoch(loop) !== null && context.scope_epoch !== goalScopeEpoch(loop))
+      || metadata.key !== cursor.checkpoint_key
       || env.payload.context_sha256 !== cursor.context_sha256
       || context.loop_hash !== cursor.pre_restore_loop_hash
       || context.owner_run_id !== cursor.owner_run_id

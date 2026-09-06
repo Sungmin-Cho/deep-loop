@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { selectWorkstream } from './lib/scope-selection.mjs';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -351,7 +352,7 @@ export const MUTATING_ROUTE_INVENTORY = Object.freeze([
   'root recovery acquire', 'root rebind', 'root recover',
   'runtime-executable approve', 'launcher-executable approve',
   'checkpoint emit', 'checkpoint observe', 'checkpoint restore', 'lease acquire', 'lease release',
-  'workstream new', 'workstream set', 'workstream terminal',
+  'workstream new', 'workstream select', 'workstream set', 'workstream terminal',
   'episode new', 'episode record', 'episode abandon',
   'execution prepare', 'execution start', 'execution return', 'execution reconcile',
   'goal dispatch', 'goal start', 'goal record', 'goal reconcile', 'goal obligation', 'goal obligation-resolve',
@@ -1266,6 +1267,12 @@ const handlers = {
       if (f.requirements === true || f.requirements === '') { error('USAGE: --requirements requires JSON'); return 2; }
       const requirementIds = f.requirements !== undefined ? JSON.parse(f.requirements) : undefined;
       const r = newWorkstream(root, runId, { title, branch, worktree, dependsOn, requirementIds, fence, now: parseNow(f) }); json(r); return 0;
+    }
+    if (verb === 'select') {
+      for (const name of ['id', 'expected-scope', 'reason']) {
+        if (flagOccurrences(rest, name) !== 1 || typeof f[name] !== 'string' || f[name].length === 0) { error(`USAGE: --${name} requires one value`); return 2; }
+      }
+      json(selectWorkstream(root, runId, { id: f.id, expectedScope: f['expected-scope'], reason: f.reason, fence, now: parseNow(f) })); return 0;
     }
     if (verb === 'set') {
       const id = reqStr(f, 'id'); if (!id) { error('MISSING_ID'); return 2; }

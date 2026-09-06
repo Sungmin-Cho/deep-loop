@@ -60,6 +60,7 @@ export const ROUTE_FLAGS = Object.freeze({
   'lease acquire': route(['runtime', 'expect-generation', 'attempt-id', ...F, ...L]),
   'lease release': route([...F, ...L]),
   'workstream new': route(['title', 'branch', 'worktree', 'depends-on', 'requirements', ...F, ...L]),
+  'workstream select': route(['id', 'expected-scope', 'reason', ...F, ...L]),
   'workstream set': route(['id', 'status', ...F, ...L]),
   'workstream terminal': route(['id', 'status', 'confirm', 'proof', ...F, ...L]),
   'episode new': route(['plugin', 'role', 'kind', 'point', 'workstream', 'artifacts', 'retry-of', ...F, ...L]),
