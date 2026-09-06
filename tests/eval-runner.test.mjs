@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { runStep, substitutePlaceholders } from '../evals/lib/drive.mjs';
 import { assertFullBankGate, buildReport } from '../evals/lib/report.mjs';
 import { runAllowReviewImport111, validateHostAcceptanceResult } from '../evals/lib/host-acceptance.mjs';
-import { materializeSetupFiles } from '../evals/lib/fixture.mjs';
+import { applyReference, materializeFixture, materializeSetupFiles } from '../evals/lib/fixture.mjs';
 import { executeOutcome, loadFixtureProfile, runFamily3BarrierEvidence, runFixtureEvaluation } from '../scripts/eval-deep-loop.mjs';
 import { executeKernelTask, seedHostTopology } from '../evals/lib/scenarios.mjs';
 import { recomputeKernelObservation } from '../evals/lib/scenarios.mjs';
@@ -184,6 +184,28 @@ test('outcome trials execute cleanly, task 211 uses two distinct references, and
   assert.deepEqual(result.reference_replay.trials[0].isolation_receipt.declared_command, task.acceptance[0].command);
 });
 
+test('every miniature outcome fixture has real failing behavior and an executable reference', async () => {
+  const { gradeEndState } = await import('../evals/graders/end-state.grader.mjs');
+  const taskDir = join(process.cwd(), 'evals', 'tasks');
+  const tasks = readdirSync(taskDir).filter(file => file.startsWith('outcome-')).sort()
+    .map(file => JSON.parse(readFileSync(join(taskDir, file), 'utf8')));
+  const profile = loadFixtureProfile();
+  for (const task of tasks) {
+    for (let trialIndex = 0; trialIndex < task.trials; trialIndex += 1) {
+      const root = mkdtempSync(join(tmpdir(), `eval-behavior-${task.id}-`));
+      materializeFixture(root, task);
+      const baseline = gradeEndState(root, task.acceptance, {
+        profile, taskId: task.id, forbiddenEffects: task.forbidden_effects, referenceMode: true,
+      });
+      assert.equal(baseline.pass, task.id === 'outcome-noop-212', `${task.id}: baseline polarity`);
+      applyReference(root, task, { trialIndex });
+      assert.equal(gradeEndState(root, task.acceptance, {
+        profile, taskId: task.id, forbiddenEffects: task.forbidden_effects, referenceMode: true,
+      }).pass, true, `${task.id}: reference ${trialIndex + 1}`);
+    }
+  }
+});
+
 test('manifest-bound outcome validation rejects replay-evidence laundering and preserves the no-op exception', () => {
   const taskDir = join(process.cwd(), 'evals', 'tasks');
   const cases = [
@@ -242,6 +264,7 @@ test('manifest-bound outcome validation binds isolation receipts to fixture effe
     ['receipt profile drift', trial => { trial.isolation_receipt.profile_id = 'host-native'; }],
     ['normalized argv drift', trial => { trial.isolation_receipt.executed_argv[0] = '--experimental-permission'; }],
     ['boundary drift', trial => { trial.isolation_receipt.boundary = 'node-permission-model:experimental-permission'; }],
+    ['trusted runner hash drift', trial => { trial.isolation_receipt.trusted_runner.sha256 = '0'.repeat(64); }],
   ];
   for (const [label, mutate] of mutations) {
     const changed = structuredClone(payload);
@@ -463,33 +486,37 @@ test('safe outcome execution rejects command escapes before spawn and binds effe
     ['sh', '-c', 'git push'], ['/usr/bin/node', '--test'],
   ]) assert.throws(() => gradeEndState(root, [{ type: 'command', command }], { profile }), /OUTCOME_COMMAND_FORBIDDEN/);
 
-  mkdirSync(join(root, '.eval'), { recursive: true });
-  writeFileSync(join(root, 'fixture.json'), '{}');
-  writeFileSync(join(root, 'solution.json'), '{}');
-  writeFileSync(join(root, '.eval', 'task.json'), '{"task_id":"malicious"}');
-  writeFileSync(join(root, '.eval', 'verify-outcome.test.mjs'), `
-    import { test } from 'node:test';
-    import assert from 'node:assert/strict';
-    import { spawnSync } from 'node:child_process';
-    test('permission boundary', () => { assert.throws(() => spawnSync('git', ['push', 'origin', 'main']), /restricted|denied/i); });
-  `);
-  const grade = gradeEndState(root, [{ type: 'command', command: ['node', '--test', '.eval/verify-outcome.test.mjs'] }], { profile });
+  const task = JSON.parse(readFileSync(join(process.cwd(), 'evals', 'tasks', 'outcome-deterministic-bug-201.json'), 'utf8'));
+  materializeFixture(root, task);
+  applyReference(root, task);
+  const grade = gradeEndState(root, task.acceptance, {
+    profile, taskId: task.id, forbiddenEffects: task.forbidden_effects, referenceMode: true,
+  });
   assert.equal(grade.pass, true);
   assert.deepEqual(grade.effect_receipt.observed_effects, []);
   assert.equal(grade.effect_receipt.profile_id, 'deep-loop-current-v1.22');
   assert.match(grade.effect_receipt.boundary, /^node-permission-model:/);
   assert.equal(JSON.stringify(grade.effect_receipt.executed_argv).includes(root), false);
+  assert.deepEqual(grade.effect_receipt.executed_argv.slice(-2), [
+    '--allow-fs-read=<TRUSTED_RUNNER>',
+    '<DEEP_LOOP_ROOT>/evals/fixtures/_support/verify-outcome.mjs',
+  ]);
+  assert.equal(grade.effect_receipt.result_protocol_verified, true);
+  assert.match(grade.effect_receipt.trusted_runner.sha256, /^[0-9a-f]{64}$/);
+  assert.match(grade.effect_receipt.node_executable.sha256, /^[0-9a-f]{64}$/);
 });
 
 test('task 211 accepts an unlisted valid strategy without changing the grader', async () => {
   const { gradeEndState } = await import('../evals/graders/end-state.grader.mjs');
   const root = mkdtempSync(join(tmpdir(), 'eval-unlisted-strategy-'));
-  mkdirSync(join(root, '.eval'), { recursive: true });
-  writeFileSync(join(root, 'fixture.json'), readFileSync(join(process.cwd(), 'evals', 'fixtures', 'outcome-valid-alternative-211', 'fixture.json')));
-  writeFileSync(join(root, 'solution.json'), readFileSync(join(process.cwd(), 'evals', 'fixtures', 'outcome-valid-alternative-211', 'reference', 'variant-c', 'solution.json')));
-  writeFileSync(join(root, '.eval', 'task.json'), '{"task_id":"outcome-valid-alternative-211"}');
-  writeFileSync(join(root, '.eval', 'verify-outcome.test.mjs'), readFileSync(join(process.cwd(), 'evals', 'fixtures', '_support', 'verify-outcome.mjs')));
-  const grade = gradeEndState(root, [{ type: 'command', command: ['node', '--test', '.eval/verify-outcome.test.mjs'] }], { profile: loadFixtureProfile() });
+  const task = JSON.parse(readFileSync(join(process.cwd(), 'evals', 'tasks', 'outcome-valid-alternative-211.json'), 'utf8'));
+  materializeFixture(root, task);
+  writeFileSync(join(root, 'solution.mjs'), readFileSync(join(
+    process.cwd(), 'evals', 'fixtures', 'outcome-valid-alternative-211', 'reference', 'variant-c', 'solution.mjs',
+  )));
+  const grade = gradeEndState(root, task.acceptance, {
+    profile: loadFixtureProfile(), taskId: task.id, referenceMode: true,
+  });
   assert.equal(grade.pass, true);
 });
 

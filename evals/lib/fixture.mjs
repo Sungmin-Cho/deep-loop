@@ -196,12 +196,10 @@ export function materializeFixture(root, task, { repoRoot = REPO_ROOT } = {}) {
 }
 
 export function materializeOutcomeSupport(root, task, { repoRoot = REPO_ROOT } = {}) {
-  const support = containedPath(realpathSync(repoRoot), 'evals/fixtures/_support/verify-outcome.mjs', 'FIXTURE_PATH_ESCAPE');
   const evalDir = join(root, '.eval');
   mkdirSync(evalDir, { recursive: true });
-  cpSync(support, join(evalDir, 'verify-outcome.test.mjs'));
   writeFileSync(join(evalDir, 'task.json'), `${JSON.stringify({ task_id: task.id })}\n`, { flag: 'wx' });
-  return ['.eval/task.json', '.eval/verify-outcome.test.mjs'];
+  return ['.eval/task.json'];
 }
 
 export function applyReference(root, task, { repoRoot = REPO_ROOT, trialIndex = 0 } = {}) {

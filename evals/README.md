@@ -6,19 +6,41 @@ Run the deterministic fixture driver with:
 npm run eval:fixture -- --out ./evals/results/local --now 2026-08-10T00:00:00Z
 ```
 
-The fixture profile replays reference solutions offline. `agent` and `live-model`
-rows are visible as skipped until a later agent driver is supplied; task IDs and
-the acceptance contract remain identical between drivers. Task 111 is a fixed
+The fixture profile replays executable reference implementations offline. These
+rows remain `skipped` because reference replay is not agent execution and is excluded
+from the efficacy denominator; task IDs and the acceptance contract remain identical
+between drivers. Task 111 is a fixed
 allowlist host executor and is separately accounted as `host_acceptance_verified=1`
 only after real dispatch, claim, and bounded review-import evidence are validated.
 
-Outcome commands are a closed Node-test vocabulary and execute the fixed fixture
-contract module under Node's permission model with read-only access to the isolated
-fixture root. The resulting isolation receipt, selected profile ID, and effect boundary
-are the source of fixture effect evidence; arbitrary executables, absolute paths,
-shell/interpreter escapes, child processes, and file writes are denied. Network denial is
-covered on Node 24+; a task that declares `network-write` fails closed on Node 20–23
-instead of emitting an unsupported isolation claim.
+`evals/lib/outcome-cases.mjs` owns held-out inputs and expected outputs outside the
+candidate project. Its shell-free subprocess imports the candidate's documented ESM
+export under Node's permission model, returns observed values to the parent, and lets
+the parent compare them structurally. Object property order is irrelevant; array order
+and JSON value types remain significant. Non-JSON return values fail closed.
+
+The trusted runner emits an HMAC-authenticated start and terminal sequence. Its private
+per-process key is consumed from stdin before candidate import and never appears in the
+candidate environment or arguments, so candidate stdout and early exit cannot create
+completion proof. A candidate-written `solution.json`, local verifier, success message,
+or TAP output has no grading authority. Receipts name the actual normalized trusted
+runner argv and bind both its SHA256 and the Node executable identity.
+
+The resulting isolation receipt, selected profile ID, and effect boundary are the
+source of fixture effect evidence. Node permissions deny child processes and file
+writes; pre-import guards deny the standard fetch, HTTP, HTTP/2, socket, TLS, datagram,
+and callback/promise DNS APIs. This is a cooperative candidate-process boundary rather
+than a malicious-code VM sandbox. Network coverage is reported on Node 24+; a task that
+declares `network-write` fails closed on Node 20–23 instead of emitting an unsupported
+isolation claim.
+
+The public evaluator seam is `describeOutcomeCase(taskId)` plus
+`executeOutcomeCases(root, taskId, options)`. `gradeEndState` requires the trusted
+`taskId`; it never discovers identity from candidate-owned files. Decision-focused
+tasks 213–216 return `OUTCOME_DECISION_EVIDENCE_UNAVAILABLE` during ordinary grading.
+Only `referenceMode: true` runs their deterministic reference behavior, and that mode
+does not claim host, kernel, or agent decision evidence. A later agent driver must add
+a bounded typed observation carrier before those tasks can enter an efficacy denominator.
 
 ## Comparison format
 

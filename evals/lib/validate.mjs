@@ -12,7 +12,8 @@ export const STEP_VOCAB = Object.freeze([
   'root recovery acquire','root rebind','root recover','runtime-executable approve','launcher-executable approve',
   'checkpoint emit','checkpoint observe','checkpoint restore','lease acquire','lease release',
   'workstream new','workstream set','workstream terminal','episode new','episode record','episode abandon',
-  'review configure','review dispatch','review record','review import','handoff emit','respawn','state patch','pause','recover','recovery acquire',
+  'execution prepare','execution start','execution return','execution reconcile',
+  'review configure','review dispatch','review claim','review record','review import','handoff emit','respawn','state patch','pause','recover','recovery acquire',
   'budget record','budget extend','comprehension ack','breaker reset','insights emit',
   'spawn-style offer-desktop','spawn-style confirm-desktop','spawn-style decline-desktop','spawn-style reset-desktop',
   'attended-launch approve','attended-launch revoke','session-profile set','detect-terminal','finish',
@@ -196,10 +197,15 @@ function validateEffectResult(value) {
 
 function validateIsolationReceipt(value) {
   if (value === null) return true;
-  return exactKeys(value, [
+  const baseKeys = [
     'schema_version','boundary','covered_effects','profile_id','allowed_effects','declared_command',
     'executed_argv','exit','timed_out','observed_effects','passed',
-  ]) && value.schema_version === 1 && /^node-permission-model:/.test(value.boundary)
+  ];
+  const attested = exactKeys(value, [
+    ...baseKeys, 'trusted_runner', 'node_executable', 'result_protocol_verified',
+  ]);
+  const legacy = exactKeys(value, baseKeys);
+  const common = (attested || legacy) && value.schema_version === 1 && /^node-permission-model:/.test(value.boundary)
     && nonEmptyString(value.profile_id)
     && Array.isArray(value.covered_effects) && value.covered_effects.length >= 2
     && value.covered_effects.every(effect => ['child-process','file-write','network-write'].includes(effect))
@@ -211,8 +217,20 @@ function validateIsolationReceipt(value) {
     && value.executed_argv.every(token => typeof token === 'string')
     && Number.isInteger(value.exit) && typeof value.timed_out === 'boolean'
     && Array.isArray(value.observed_effects) && value.observed_effects.every(effect => EFFECT_VOCAB.includes(effect))
-    && new Set(value.observed_effects).size === value.observed_effects.length
-    && value.passed === (value.exit === 0 && value.timed_out === false);
+    && new Set(value.observed_effects).size === value.observed_effects.length;
+  if (!common) return false;
+  if (legacy) return value.passed === (value.exit === 0 && value.timed_out === false);
+  return typeof value.result_protocol_verified === 'boolean' && typeof value.passed === 'boolean'
+    && (!value.passed || (value.exit === 0 && value.timed_out === false && value.result_protocol_verified))
+    && exactKeys(value.trusted_runner, ['path','size','sha256','protocol'])
+    && value.trusted_runner.path === '<DEEP_LOOP_ROOT>/evals/fixtures/_support/verify-outcome.mjs'
+    && nonNegativeInt(value.trusted_runner.size) && value.trusted_runner.size > 0
+    && /^[0-9a-f]{64}$/.test(value.trusted_runner.sha256)
+    && value.trusted_runner.protocol === 'authenticated-start-terminal-v1'
+    && exactKeys(value.node_executable, ['path','size','sha256'])
+    && value.node_executable.path === '<NODE_EXECUTABLE>'
+    && nonNegativeInt(value.node_executable.size) && value.node_executable.size > 0
+    && /^[0-9a-f]{64}$/.test(value.node_executable.sha256);
 }
 
 function validateCountMap(value, { allowEmpty = false } = {}) {
@@ -332,7 +350,10 @@ function fixtureIsolationMatchesTask(trial, task, result, command) {
   const permissionFlag = nodeMajor >= 23 ? '--permission' : '--experimental-permission';
   const coveredEffects = nodeMajor >= 24
     ? ['child-process','file-write','network-write'] : ['child-process','file-write'];
-  const entry = command?.[2] || '.eval/verify-outcome.test.mjs';
+  const runnerPath = '<DEEP_LOOP_ROOT>/evals/fixtures/_support/verify-outcome.mjs';
+  const runnerSha256 = createHash('sha256').update(readFileSync(join(
+    process.cwd(), 'evals', 'fixtures', '_support', 'verify-outcome.mjs',
+  ))).digest('hex');
   const forbiddenObserved = receipt.observed_effects.some(effect => task.forbidden_effects.includes(effect));
   return receipt.passed === true && receipt.exit === 0 && receipt.timed_out === false
     && effects.source === 'fixture-isolation-receipt' && effects.passed === true
@@ -342,10 +363,15 @@ function fixtureIsolationMatchesTask(trial, task, result, command) {
     && sameJson(receipt.allowed_effects, ['read-only'])
     && sameJson(receipt.covered_effects, coveredEffects)
     && (!task.forbidden_effects.includes('network-write') || receipt.covered_effects.includes('network-write'))
-    && receipt.boundary === `node-permission-model:${permissionFlag.slice(2)}`
+    && receipt.boundary === `node-permission-model:${permissionFlag.slice(2)}+network-api-guard-v1`
     && sameJson(receipt.declared_command, command)
+    && receipt.result_protocol_verified === true
+    && receipt.trusted_runner.path === runnerPath
+    && receipt.trusted_runner.sha256 === runnerSha256
+    && receipt.trusted_runner.protocol === 'authenticated-start-terminal-v1'
+    && receipt.node_executable.path === '<NODE_EXECUTABLE>'
     && sameJson(receipt.executed_argv, [
-      permissionFlag, '--allow-fs-read=<FIXTURE_ROOT>', entry,
+      permissionFlag, '--allow-fs-read=<FIXTURE_ROOT>', '--allow-fs-read=<TRUSTED_RUNNER>', runnerPath,
     ]);
 }
 

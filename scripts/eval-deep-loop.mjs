@@ -85,7 +85,9 @@ function changedFiles(before, after) {
 
 function referenceHash(root, copied) {
   const hash = createHash('sha256');
-  for (const path of [...copied].sort()) hash.update(path).update('\0').update(readFileSync(join(root, path)));
+  for (const path of [...copied].sort((left, right) => left.localeCompare(right))) {
+    hash.update(path).update('\0').update(readFileSync(join(root, path)));
+  }
   return hash.digest('hex');
 }
 
@@ -116,7 +118,9 @@ export function executeOutcome(task, { observedEffectsByTrial = [], profile = lo
     const replay = applyReference(root, task, { repoRoot: ROOT, trialIndex: index });
     const after = snapshotFiles(root);
     const changed = changedFiles(before, after);
-    const grade = gradeEndState(root, task.acceptance, { profile, forbiddenEffects: task.forbidden_effects });
+    const grade = gradeEndState(root, task.acceptance, {
+      profile, taskId: task.id, forbiddenEffects: task.forbidden_effects, referenceMode: true,
+    });
     const injectedEffects = observedEffectsByTrial[index];
     const effects = gradeForbiddenEffects(task.forbidden_effects, {
       schema_version: 1,
@@ -140,6 +144,9 @@ export function executeOutcome(task, { observedEffectsByTrial = [], profile = lo
         allowed_effects: grade.effect_receipt.allowed_effects,
         declared_command: grade.effect_receipt.declared_command,
         executed_argv: grade.effect_receipt.executed_argv,
+        trusted_runner: grade.effect_receipt.trusted_runner,
+        node_executable: grade.effect_receipt.node_executable,
+        result_protocol_verified: grade.effect_receipt.result_protocol_verified,
         exit: grade.effect_receipt.exit,
         timed_out: grade.effect_receipt.timed_out,
         observed_effects: grade.effect_receipt.observed_effects,

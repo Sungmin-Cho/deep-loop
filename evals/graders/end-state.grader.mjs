@@ -1,10 +1,8 @@
-import { spawnSync } from 'node:child_process';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { assertLexicalRelativePath } from '../lib/lexical-path.mjs';
-import { evalChildEnv } from '../lib/child-env.mjs';
+import { executeOutcomeCases } from '../lib/outcome-cases.mjs';
 
-const MAX = 64 * 1024;
 const SAFE_COMMANDS = new Set([
   JSON.stringify(['node', '--test']),
   JSON.stringify(['node', '--test', '.eval/verify-outcome.test.mjs']),
@@ -23,38 +21,47 @@ function permissionFlag(major) {
   return major >= 23 ? '--permission' : '--experimental-permission';
 }
 
-function safeNodeTest(root, command, profile, { nodeMajor, forbiddenEffects }) {
+function safeNodeTest(root, command, profile, {
+  nodeMajor, forbiddenEffects, taskId, referenceMode,
+}) {
   if (!SAFE_COMMANDS.has(JSON.stringify(command))) throw new Error('OUTCOME_COMMAND_FORBIDDEN');
   assertFixtureProfile(profile);
   if (forbiddenEffects.includes('network-write') && nodeMajor < 24) {
     throw new Error('OUTCOME_NETWORK_BOUNDARY_UNAVAILABLE');
   }
+  if (typeof taskId !== 'string') throw new Error('OUTCOME_TASK_ID_REQUIRED');
   const base = realpathSync(root);
   const entry = command[2] || '.eval/verify-outcome.test.mjs';
-  const target = containedFile(base, entry);
-  const executedArgv = [permissionFlag(nodeMajor), `--allow-fs-read=${base}`, target];
-  const result = spawnSync(process.execPath, executedArgv, {
-    cwd: base, env: evalChildEnv(),
-    encoding: 'utf8', timeout: 30_000, maxBuffer: MAX,
+  const result = executeOutcomeCases(base, taskId, {
+    nodeMajor, referenceMode,
   });
-  const timedOut = result.error?.code === 'ETIMEDOUT';
-  const exit = result.status ?? 1;
+  const exit = result.process?.exit ?? 1;
+  const timedOut = result.process?.timed_out ?? false;
+  const check = {
+    type: 'command', pass: result.pass, exit,
+    unavailable: result.unavailable === true, reason: result.reason,
+    behavior_checks: result.checks,
+  };
+  if (result.unavailable === true) return { check, receipt: null };
   return {
-    check: { type: 'command', pass: exit === 0 && !timedOut, exit },
+    check,
     receipt: {
       schema_version: 1,
-      boundary: `node-permission-model:${permissionFlag(nodeMajor).slice(2)}`,
+      boundary: `node-permission-model:${permissionFlag(nodeMajor).slice(2)}+network-api-guard-v1`,
       covered_effects: nodeMajor >= 24
         ? ['child-process','file-write','network-write'] : ['child-process','file-write'],
       profile_id: profile.id,
       allowed_effects: [...profile.allowed_effects],
       declared_command: [...command],
-      executed_argv: executedArgv.map(token => token === target ? entry
-        : token === `--allow-fs-read=${base}` ? '--allow-fs-read=<FIXTURE_ROOT>' : token),
+      executed_argv: result.process?.executed_argv
+        ?? [permissionFlag(nodeMajor), '--allow-fs-read=<FIXTURE_ROOT>', entry],
+      trusted_runner: result.process.trusted_runner,
+      node_executable: result.process.node_executable,
+      result_protocol_verified: result.process.result_protocol_verified,
       exit,
       timed_out: timedOut,
       observed_effects: [],
-      passed: exit === 0 && !timedOut,
+      passed: result.pass,
     },
   };
 }
@@ -88,14 +95,18 @@ function gradeOne(root, acceptance, profile, boundary) {
 }
 
 export function gradeEndState(root, acceptance = [], {
-  profile, nodeMajor = Number(process.versions.node.split('.')[0]), forbiddenEffects = [],
+  profile, taskId, nodeMajor = Number(process.versions.node.split('.')[0]), forbiddenEffects = [],
+  referenceMode = false,
 } = {}) {
-  const graded = acceptance.map(item => gradeOne(root, item, profile, { nodeMajor, forbiddenEffects }));
+  const graded = acceptance.map(item => gradeOne(root, item, profile, {
+    nodeMajor, forbiddenEffects, taskId, referenceMode,
+  }));
   const checks = graded.map(item => item.check);
   const receipts = graded.map(item => item.receipt).filter(Boolean);
-  if (receipts.length !== 1) throw new Error('OUTCOME_EXECUTION_RECEIPT_REQUIRED');
+  const unavailable = checks.length > 0 && checks.every(check => check.unavailable === true);
+  if (receipts.length !== (unavailable ? 0 : 1)) throw new Error('OUTCOME_EXECUTION_RECEIPT_REQUIRED');
   return {
     pass: checks.length > 0 && checks.every(check => check.pass), checked: checks.length, checks,
-    effect_receipt: receipts[0],
+    effect_receipt: receipts[0] ?? null,
   };
 }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { validateProfile, validateTask, STEP_VOCAB } from '../../evals/lib/validate.mjs';
+import { OUTCOME_CASE_IDS, describeOutcomeCase } from '../../evals/lib/outcome-cases.mjs';
 
 test('task bank has the exact 42-row two-layer contract', () => {
   const dir = join(process.cwd(), 'evals', 'tasks');
@@ -20,6 +21,26 @@ test('task bank has the exact 42-row two-layer contract', () => {
   }
   const alternative = tasks.find(task => task.id === 'outcome-valid-alternative-211');
   assert.equal(alternative.trials, 2);
+});
+
+test('every outcome task is backed by a parent-owned executable case contract', () => {
+  const taskDir = join(process.cwd(), 'evals', 'tasks');
+  const tasks = readdirSync(taskDir).filter(file => file.startsWith('outcome-'))
+    .map(file => JSON.parse(readFileSync(join(taskDir, file), 'utf8')));
+  assert.deepEqual([...OUTCOME_CASE_IDS].sort(), tasks.map(task => task.id).sort());
+  for (const task of tasks) {
+    const definition = describeOutcomeCase(task.id);
+    assert.ok(definition.module.endsWith('.mjs'), task.id);
+    assert.ok(definition.case_count >= 2, task.id);
+    const fixtureFiles = readdirSync(join(process.cwd(), task.fixture));
+    assert.equal(fixtureFiles.includes('solution.json'), false, task.id);
+    assert.equal(fixtureFiles.includes('fixture.json'), false, task.id);
+  }
+  assert.deepEqual(tasks.filter(task => describeOutcomeCase(task.id).decision_focused)
+    .map(task => task.id).sort(), [
+    'outcome-should-not-replan-216', 'outcome-should-not-review-214',
+    'outcome-should-replan-215', 'outcome-should-review-213',
+  ]);
 });
 
 test('STEP_VOCAB mutating surface stays synchronized with the production inventory', () => {
