@@ -126,11 +126,7 @@ export function validateGoalState(loop, errors) {
     || review.max_review_rounds > GOAL_LIMITS.reviewRounds) errors.push('v0.5 max_review_rounds must be 1..16');
   if (!Array.isArray(review?.points) || review.points.length < 1 || review.points.length > 16
     || new Set(review.points).size !== review.points.length || review.points.some(point => typeof point !== 'string' || !GOAL_ID.test(point))) errors.push('v0.5 review points are invalid');
-  // Their dedicated mutation/validation owners are introduced with goal review.
-  // Until then, nonempty unsupported ledgers must fail closed.
-  for (const field of ['goal_obligations', 'goal_reviews']) {
-    if (!Array.isArray(loop[field]) || loop[field].length !== 0) errors.push(`${field} must be an empty supported ledger`);
-  }
+  validateGoalLedgers(loop, errors);
   for (const session of (Array.isArray(loop.session_chain?.sessions) ? loop.session_chain.sessions : [])) {
     if (!Number.isSafeInteger(session?.scope_epoch) || session.scope_epoch < 0) errors.push('v0.5 scope_epoch must be a nonnegative safe integer');
     if (!Number.isSafeInteger(session?.scope_turn_baseline) || session.scope_turn_baseline < 0
@@ -148,3 +144,66 @@ export function validateGoalState(loop, errors) {
     if (episode.role === 'checker' && episode.review_claim && episode.execution?.attempt_id !== episode.attempt_id) errors.push('checker execution and claim identities disagree');
   }
 }
+
+function validateGoalLedgers(loop, errors) {
+  const hash = value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+  const reqIds = new Set(goalRequirementIds(loop));
+  const wsIds = new Set((Array.isArray(loop.workstreams) ? loop.workstreams : []).map(ws => ws?.id));
+  const subset = (values, allowed, min, max) => Array.isArray(values) && values.length >= min && values.length <= max
+    && new Set(values).size === values.length && values.every(value => allowed.has(value));
+  const boundary = value => exactGoalObject(value, ['seq', 'checksum']) && Number.isSafeInteger(value.seq)
+    && value.seq > 0 && hash(value.checksum);
+  const obligations = loop.goal_obligations;
+  if (!Array.isArray(obligations) || obligations.length > 256) errors.push('goal_obligations must be a bounded array');
+  else {
+    const seen = new Set();
+    for (const item of obligations) {
+      if (!exactGoalObject(item, ['id', 'requirement_ids', 'workstream_ids', 'status', 'reason', 'resolution'])
+        || typeof item.id !== 'string' || !GOAL_ID.test(item.id) || seen.has(item.id)
+        || !subset(item.requirement_ids, reqIds, 1, 64) || !subset(item.workstream_ids, wsIds, 0, 256)
+        || !boundedGoalText(item.reason) || !['open', 'mapped', 'resolved'].includes(item.status)) {
+        errors.push('invalid goal obligation'); continue;
+      }
+      seen.add(item.id);
+      if (item.status !== 'resolved') {
+        if (item.resolution !== null || (item.status === 'mapped') !== (item.workstream_ids.length > 0)) errors.push('invalid open goal obligation mapping');
+      } else if (!exactGoalObject(item.resolution, ['kind', 'reason', 'authorization_event'])
+        || !['completed-work', 'human-authorized'].includes(item.resolution.kind)
+        || !boundedGoalText(item.resolution.reason) || !boundary(item.resolution.authorization_event)
+        || (item.resolution.kind === 'completed-work' && item.workstream_ids.length === 0)) errors.push('invalid goal obligation resolution');
+    }
+  }
+  const reviews = loop.goal_reviews;
+  if (!Array.isArray(reviews) || reviews.length > 64) { errors.push('goal_reviews must be a bounded array'); return; }
+  const seen = new Set(), attempts = new Set();
+  for (const item of reviews) {
+    if (!exactGoalObject(item, ['id', 'transport', 'goal_sha256', 'snapshot_sha256', 'snapshot_rel', 'snapshot_file_sha256',
+      'status', 'execution', 'created_at', 'result_rel', 'result_sha256', 'result_raw_sha256', 'verdict', 'failed_requirement_ids'])
+      || typeof item.id !== 'string' || !GOAL_ID.test(item.id) || seen.has(item.id)
+      || !['native', 'codex', 'bridge'].includes(item.transport) || item.goal_sha256 !== loop.goal_contract?.sha256
+      || !hash(item.snapshot_sha256) || !hash(item.snapshot_file_sha256)
+      || item.snapshot_rel !== `goal-reviews/${item.id}/snapshot.json`
+      || !['pending', 'approved', 'rejected', 'unavailable'].includes(item.status)
+      || !isExecutionRecord(item.execution) || item.execution.mode !== 'external'
+      || item.execution.stage !== 'primary' || !sameStrings(item.execution.required_stages, ['primary'])
+      || attempts.has(item.execution.attempt_id) || typeof item.created_at !== 'string'
+      || !Number.isFinite(Date.parse(item.created_at)) || new Date(item.created_at).toISOString() !== item.created_at
+      || !subset(item.failed_requirement_ids, reqIds, 0, 64)) {
+      errors.push('invalid goal review'); continue;
+    }
+    seen.add(item.id); attempts.add(item.execution.attempt_id);
+    if (item.status === 'approved' || item.status === 'rejected') {
+      if (item.execution.phase !== 'returned' || item.result_rel !== `goal-reviews/${item.id}/result.json`
+        || !hash(item.result_sha256) || !hash(item.result_raw_sha256)
+        || item.result_raw_sha256 !== item.execution.observation?.output_sha256
+        || (item.status === 'approved' && (!['APPROVE', 'CONCERN'].includes(item.verdict) || item.failed_requirement_ids.length !== 0))
+        || (item.status === 'rejected' && (item.verdict !== 'REQUEST_CHANGES' || item.failed_requirement_ids.length === 0))) errors.push('invalid terminal goal review');
+    } else if (item.result_rel !== null || item.result_sha256 !== null || item.result_raw_sha256 !== null || item.verdict !== null
+      || item.failed_requirement_ids.length !== 0 || (item.status === 'unavailable'
+        && (item.execution.phase !== 'blocked' || item.execution.observation?.state !== 'failed'))
+      || (item.status === 'pending' && item.execution.phase === 'returned')) errors.push('invalid pending goal review');
+  }
+  if (reviews.filter(item => item?.status === 'pending').length > 1) errors.push('multiple active goal reviewers');
+}
+
+function sameStrings(left, right) { return JSON.stringify(left) === JSON.stringify(right); }

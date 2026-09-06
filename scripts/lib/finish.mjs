@@ -4,6 +4,8 @@ import { runDir } from './state.mjs';
 import { isProofCapableChecker, makerReviewed, unsatisfiedReviewPoints, epOrder, rejectionResolved } from './review.mjs';
 import { MUTATION_TURN_FLOOR } from './budget.mjs';
 import { containedRealFile } from './fs-safe.mjs';
+import { isGoalDriven } from './goal-contract.mjs';
+import { goalProofState } from './goal-review.mjs';
 
 // A rejected checker is settled only when it is RESOLVED by the SINGLE unified predicate rejectionResolved
 // (review.mjs) — the SAME order-aware predicate next-action.mjs uses for routing. (Replaces the old local
@@ -70,7 +72,7 @@ export function workstreamClosureProofState(loop, workstreamId) {
   };
 }
 
-export function finishProofState(loop) {
+export function ordinaryFinishProofState(loop) {
   const eps = loop.episodes || [];
   const hasWork = eps.length > 0;                                  // Codex r1 critical-1: 빈 run 의 공허-통과 차단
   const closureIds = [...new Set(eps.map(episode => episode.workstream_id))];
@@ -104,6 +106,13 @@ export function finishProofState(loop) {
   return { hasWork, settled, noActiveWs, allWsTerminal: wsAll, allMakersReviewed, reviewedProof, missing };
 }
 
+export function finishProofState(loop, { goalProof } = {}) {
+  const ordinary = ordinaryFinishProofState(loop);
+  if (!isGoalDriven(loop)) return ordinary;
+  if (!goalProof?.ok) ordinary.missing.push(...(goalProof?.missing || ['goal-proof-unchecked']));
+  return ordinary;
+}
+
 export function finishRun(root, runId, { status, reportRel, proof = {}, confirm, fence, now = Date.now() } = {}) {
   // Codex r3 sf-3: fence 는 lib 레벨에서 **필수** (CLI 우회 호출도 fence 강제). newEpisode/recordEpisode 와 동일 규약.
   if (!fence || typeof fence.owner !== 'string' || !Number.isInteger(fence.generation)) throw new Error('FENCE_REQUIRED: finishRun');
@@ -135,7 +144,9 @@ export function finishRun(root, runId, { status, reportRel, proof = {}, confirm,
       // impl-R1 Fix 2: containedRealFile(realpathSync deref)로 교체 — 기존 resolve+startsWith+statSync 는 symlink 를
       // follow 해서 runDir-상대 symlink 가 프로젝트 밖을 가리켜도 통과했다(#2 review report 와 동일 결함 클래스).
       // containedRealFile 은 `--report .` / 디렉터리(isFile 아님) / 부재 / '..'·절대경로도 모두 null 로 거부한다.
-      const ps = finishProofState(loop);
+      const goalProof = isGoalDriven(loop) ? goalProofState(root, loop) : null;
+      if (goalProof && !goalProof.ok) throw new Error(`${goalProof.code}: ${goalProof.missing.join(',')}`);
+      const ps = finishProofState(loop, { goalProof });
       const real = reportRel ? containedRealFile(runDir(root, runId), reportRel) : null;
       if (!real) ps.missing.push('final-report-missing');
       if (ps.missing.length) throw new Error(`FINISH_PROOF_UNMET: ${ps.missing.join(',')}`);

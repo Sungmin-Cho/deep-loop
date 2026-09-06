@@ -20,9 +20,9 @@ export function makeGoalFixture(options = {}) {
   const now = options.now ?? GOAL_NOW;
   const env = { ...process.env, NO_COLOR: '1', DEEP_LOOP_HEADLESS: '' };
   delete env.FORCE_COLOR;
-  const invoke = (argv, input) => {
+  const invoke = (argv, input, extraEnv = {}) => {
     const processResult = spawnSync(process.execPath, [CLI, ...argv, '--project-root', root, '--now', now], {
-      cwd: root, env, input, encoding: 'utf8', timeout: 30_000, maxBuffer: 2 * 1024 * 1024,
+      cwd: root, env: { ...env, ...extraEnv }, input, encoding: 'utf8', timeout: 30_000, maxBuffer: 2 * 1024 * 1024,
     });
     let json = null;
     try { json = JSON.parse(processResult.stdout); } catch { /* Non-JSON errors are preserved below. */ }
@@ -40,11 +40,11 @@ export function makeGoalFixture(options = {}) {
   }
   const runId = initial.json.run_id;
   const fence = { owner: runId, generation: 1, intent: 'business' };
-  const cli = (argv, { input, fence: commandFence = fence } = {}) => invoke([
+  const cli = (argv, { input, fence: commandFence = fence, env: extraEnv } = {}) => invoke([
     ...argv, '--run-id', runId,
     ...(['state', 'next-action', 'validate', 'goal'].includes(argv[0])
       && (argv[0] !== 'goal' || argv[1] === 'status') ? [] : ['--owner', commandFence.owner, '--generation', String(commandFence.generation)]),
-  ], input);
+  ], input, extraEnv);
   const state = () => {
     const result = cli(['state', 'get']);
     assert.equal(result.exit, 0, result.stderr);

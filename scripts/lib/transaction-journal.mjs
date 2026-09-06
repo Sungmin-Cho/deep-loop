@@ -157,6 +157,50 @@ function parseStageJson(stage, label) {
   }
 }
 
+function validateGoalPublication(manifest, stages) {
+  if (!['goal-review-dispatch', 'goal-review-result'].includes(manifest.kind)) return;
+  const topology = manifest.topology;
+  if (!exactKeySet(topology, ['review_id', 'attempt_id', 'snapshot_sha256', 'artifact_rel', 'artifact_sha256'])
+    || typeof topology.review_id !== 'string' || !/^goal-[0-9a-f-]{36}$/.test(topology.review_id)
+    || !UUID.test(topology.attempt_id || '') || !SHA256.test(topology.snapshot_sha256 || '')
+    || !SHA256.test(topology.artifact_sha256 || '') || manifest.targets.length !== 1 || manifest.eventLines.length !== 2) {
+    throw transactionError('goal publication topology');
+  }
+  const target = manifest.targets[0];
+  const artifactStage = stages[target.stage_index];
+  const event = parseStageJson(stages[manifest.eventLines[0].stage_index], 'goal event JSON');
+  const candidate = parseStageJson(stages.find(stage => stage.role === 'candidate-loop'), 'goal candidate JSON');
+  const artifact = parseStageJson(artifactStage, 'goal artifact JSON');
+  const review = candidate.goal_reviews?.find(item => item.id === topology.review_id);
+  const dispatch = manifest.kind === 'goal-review-dispatch';
+  const expectedRel = `goal-reviews/${topology.review_id}/${dispatch ? 'snapshot' : 'result'}.json`;
+  const expectedKind = dispatch ? 'goal-snapshot' : 'goal-review';
+  if (candidate.schema_version !== '0.5.0' || !review || review.execution?.attempt_id !== topology.attempt_id
+    || review.snapshot_sha256 !== topology.snapshot_sha256 || review.goal_sha256 !== candidate.goal_contract?.sha256
+    || target.rel !== expectedRel || topology.artifact_rel !== expectedRel
+    || target.candidate_sha256 !== topology.artifact_sha256 || artifactStage?.sha256 !== topology.artifact_sha256
+    || !unwrap(artifact, { producer: 'deep-loop', artifact_kind: expectedKind })
+    || artifact.envelope.run_id !== candidate.run_id || event.data?.review_id !== review.id
+    || event.data?.attempt_id !== topology.attempt_id || event.data?.snapshot_sha256 !== topology.snapshot_sha256) {
+    throw transactionError('goal publication binding');
+  }
+  if (dispatch) {
+    if (event.type !== 'goal-review-dispatched' || review.status !== 'pending' || review.execution.phase !== 'prepared'
+      || review.snapshot_rel !== expectedRel || review.snapshot_file_sha256 !== topology.artifact_sha256
+      || artifact.payload?.sha256 !== review.snapshot_sha256 || artifact.payload?.goal_sha256 !== review.goal_sha256) throw transactionError('goal snapshot publication');
+  } else {
+    let result;
+    try { result = JSON.parse(artifact.payload.raw_result); } catch { throw transactionError('goal result JSON'); }
+    if (event.type !== 'goal-review-recorded' || !['approved', 'rejected'].includes(review.status)
+      || review.execution.phase !== 'returned' || review.result_rel !== expectedRel
+      || review.result_sha256 !== topology.artifact_sha256 || review.result_raw_sha256 !== contentHash(artifact.payload.raw_result)
+      || result.review_id !== review.id || result.attempt_id !== topology.attempt_id
+      || result.goal_sha256 !== review.goal_sha256 || result.snapshot_sha256 !== review.snapshot_sha256
+      || result.verdict !== review.verdict || event.data.verdict !== result.verdict
+      || event.data.result_sha256 !== review.result_sha256) throw transactionError('goal result publication');
+  }
+}
+
 function validateRecoveryPublication(manifest, stages) {
   if (manifest.kind === 'project-root-relocation') {
     const topologyKeys = [
@@ -506,6 +550,7 @@ function validateAndMaterialize(manifest, inputStages) {
     validatePredecessor(target.predecessor);
   }
   validateRecoveryPublication(manifest, stages);
+  validateGoalPublication(manifest, stages);
   return stages;
 }
 

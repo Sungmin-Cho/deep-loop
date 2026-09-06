@@ -9,10 +9,13 @@ const stages = value => Array.isArray(value) && (JSON.stringify(value) === '["pr
   || JSON.stringify(value) === '["primary","continuation"]');
 
 export function isAttemptObservation(value) {
-  return exact(value, ['source', 'state', 'handle', 'reference'])
+  const names = ['source', 'state', 'handle', 'reference'];
+  if (value && Object.hasOwn(value, 'output_sha256')) names.push('output_sha256');
+  return exact(value, names)
     && ['native-task', 'supervisor-receipt'].includes(value.source)
     && ['running', 'succeeded', 'failed', 'absent', 'unknown'].includes(value.state)
-    && (value.handle === null || text(value.handle, 512)) && text(value.reference, 2048);
+    && (value.handle === null || text(value.handle, 512)) && text(value.reference, 2048)
+    && (!Object.hasOwn(value, 'output_sha256') || (typeof value.output_sha256 === 'string' && /^[0-9a-f]{64}$/.test(value.output_sha256)));
 }
 
 export function isExecutionRecord(value) {

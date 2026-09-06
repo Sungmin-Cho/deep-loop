@@ -36,6 +36,8 @@ import { newWorkstream, setWorkstreamStatus, recordWorkstreamTerminal } from './
 import { newEpisode, recordEpisode, abandonEpisode } from './lib/episode.mjs';
 import { prepareExecution, startExecution, returnExecution, reconcileExecution } from './lib/execution.mjs';
 import { isGoalDriven } from './lib/goal-contract.mjs';
+import { dispatchGoalReview, startGoalReview, recordGoalReview, reconcileGoalReview, goalProofState,
+  upsertGoalObligation, resolveGoalObligation, GOAL_RESULT_MAX_BYTES } from './lib/goal-review.mjs';
 import { projectObservationForCli } from './lib/route-observation.mjs';
 import {
   configureReviewFlags,
@@ -352,6 +354,7 @@ export const MUTATING_ROUTE_INVENTORY = Object.freeze([
   'workstream new', 'workstream set', 'workstream terminal',
   'episode new', 'episode record', 'episode abandon',
   'execution prepare', 'execution start', 'execution return', 'execution reconcile',
+  'goal dispatch', 'goal start', 'goal record', 'goal reconcile', 'goal obligation', 'goal obligation-resolve',
   'review configure', 'review dispatch', 'review claim', 'review record', 'review import',
   'handoff emit', 'respawn', 'state patch', 'pause', 'recover', 'recovery acquire',
   'budget record', 'budget extend', 'comprehension ack', 'breaker reset',
@@ -1304,6 +1307,38 @@ const handlers = {
       }
     }
     error(`unknown workstream verb: ${verb}`); return 2;
+  },
+  goal: async (a) => {
+    const [verb, ...rest] = a; const f = parseFlags(rest);
+    const root = rootOf(f);
+    if (verb === 'status') {
+      const runId = exactReadRunId(f); if (!runId) return exactReadFailureCode(f);
+      const captured = verifiedExactSnapshot(root, runId); if (!captured.ok) return reportVerifiedExactFailure(captured);
+      json(goalProofState(root, captured.snapshot.data)); return 0;
+    }
+    const required = { dispatch: ['transport'], start: ['id', 'attempt', 'handle'], record: [], reconcile: ['id', 'attempt', 'observation'], obligation: ['value'], 'obligation-resolve': ['id'] };
+    if (!required[verb]) { error('USAGE: unknown goal verb'); return 2; }
+    for (const name of required[verb]) if (!reqStr(f, name)) { error(`USAGE: --${name} requires a value`); return 2; }
+    for (const name of Object.keys(f)) {
+      if (flagOccurrences(rest, name) !== 1 || (!['stdin', 'confirm'].includes(name) && (f[name] === true || f[name] === ''))) {
+        error(`USAGE: --${name} requires one value`); return 2;
+      }
+    }
+    if (verb === 'record' && f.stdin !== true) { error('USAGE: goal record requires --stdin'); return 2; }
+    const runId = runIdOf(root, f); requireLease(root, runId, f);
+    const common = { fence: { owner: f.owner, generation: intArg(f, 'generation'), intent: 'business' }, now: parseNow(f) };
+    try {
+      let result;
+      if (verb === 'dispatch') result = dispatchGoalReview(root, runId, { ...common, transport: f.transport });
+      if (verb === 'start') result = startGoalReview(root, runId, { ...common, id: f.id, attemptId: f.attempt, handle: f.handle });
+      if (verb === 'record') result = recordGoalReview(root, runId, { ...common, raw: await readBoundedText(process.stdin, { maxBytes: GOAL_RESULT_MAX_BYTES }) });
+      if (verb === 'reconcile') result = reconcileGoalReview(root, runId, { ...common, id: f.id, attemptId: f.attempt, observation: JSON.parse(f.observation) });
+      if (verb === 'obligation') result = upsertGoalObligation(root, runId, { ...common, value: JSON.parse(f.value) });
+      if (verb === 'obligation-resolve') result = resolveGoalObligation(root, runId, { ...common, id: f.id,
+        ...(f.workstreams !== undefined ? { workstreamIds: JSON.parse(f.workstreams) } : {}),
+        actor: f.actor ?? 'agent', confirm: f.confirm === true || f.confirm === 'true', reason: f.reason });
+      json(result); return 0;
+    } catch (cause) { const failure = kernelFailure(cause); error(failure.message); return failure.code; }
   },
   execution: async (a) => {
     const [verb, ...rest] = a;

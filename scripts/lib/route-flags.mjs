@@ -72,6 +72,13 @@ export const ROUTE_FLAGS = Object.freeze({
   'review configure': route(['profile', 'source-checker', 'confirm', ...F, ...L]),
   'review dispatch': route(['point', 'workstream', 'independent-subagent', 'routing', ...F, ...L]),
   'review claim': route(['episode', ...F, ...L]),
+  'goal dispatch': route(['transport', ...F, ...L]),
+  'goal start': route(['id', 'attempt', 'handle', ...F, ...L]),
+  'goal record': route(['stdin', ...F, ...L]),
+  'goal reconcile': route(['id', 'attempt', 'observation', ...F, ...L]),
+  'goal status': route(['json', ...L], { unread: Object.freeze(['json']) }),
+  'goal obligation': route(['value', ...F, ...L]),
+  'goal obligation-resolve': route(['id', 'workstreams', 'actor', 'confirm', 'reason', ...F, ...L]),
   'review record': route(['episode', 'verdict', 'report', 'findings', ...R, ...F, ...L], {
     rejected: R,
   }),
