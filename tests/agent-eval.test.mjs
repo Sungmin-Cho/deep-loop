@@ -42,7 +42,7 @@ test('current and minimal invoke the production goal kernel and fail closed on u
   assert.match(seenEntry.stdin,/"kernel_path"/);
   assert.equal(calls,1);assert.equal(r.attempts[0].kernel_status,'paused');assert.equal(r.attempts[0].status,'unavailable');
   const state=JSON.parse(readFileSync(join(r.attempts[0].paths.candidate,'.deep-loop','runs',r.attempts[0].paths.run_id,'loop.json')));
-  assert.equal(state.review.mode,'independent-same-model');
+  assert.equal(state.review.mode,'same-model');
   assert.equal(state.schema_version,'0.5.0');assert.equal(state.goal_contract.requirements[0].id,'REQ-OUTCOME');
  }
 });

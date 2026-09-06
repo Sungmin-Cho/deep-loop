@@ -35,3 +35,18 @@ test('current owner consumes the actual shipped specialization and bounded actio
   assert.match(prompt,/one bounded/i);
  }finally{f.cleanup();}
 });
+
+test('pending maker action states the executable primary stage rather than requiring an enum guess',()=>{
+ const f=makeGoalFixture({runtime:'codex',model:'gpt-6-astra',effort:'high'});
+ try {
+  const ws=f.workstream('stage');
+  const made=f.cli(['episode','new','--plugin','standalone','--role','maker','--kind','implementation','--point','implementation','--workstream',ws.id,'--artifacts',JSON.stringify([`${ws.worktree}/solution.mjs`])]);
+  assert.equal(made.exit,0,made.stderr);
+  const selection=f.cli(['next-action','--json']).json.action;
+  assert.equal(f.select(ws.id,selection.expected_scope).exit,0);
+  const action=f.cli(['next-action','--json']).json.action;
+  assert.equal(action.type,'dispatch_maker');assert.equal(action.stage,'primary');
+  const bad=f.cli(['execution','prepare','--episode',made.json.id,'--mode','inline','--stage','dispatch','--task','Implement']);
+  assert.equal(bad.exit,1);assert.match(bad.stderr,/primary.*continuation/);
+ }finally{f.cleanup();}
+});

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import {
   mkdirSync,
   mkdtempSync,
@@ -14,7 +15,6 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { driveGoalRun } from '../scripts/lib/goal-host.mjs';
 import { emitHandoff } from '../scripts/lib/handoff.mjs';
-import { acquireLease } from '../scripts/lib/lease.mjs';
 import { approveRuntimeExecutable } from '../scripts/lib/runtime-executable.mjs';
 import { writeProcessUsageReceipt } from '../scripts/lib/preflight-receipt-journal.mjs';
 import { makeGoalFixture } from './helpers/goal-fixture.mjs';
@@ -58,6 +58,12 @@ function measured(providerThreadId = null, extra = {}) {
     },
     ...extra,
   };
+}
+
+function acquisitionArgv(prompt) {
+  const line = prompt.split('\n').find(value => value.startsWith('GOAL_ACQUIRE_ARGV_JSON='));
+  assert.ok(line, 'handoff child must receive the acquisition-only argv');
+  return JSON.parse(line.slice('GOAL_ACQUIRE_ARGV_JSON='.length));
 }
 
 test('goal host reaches emitted handoff and adopts only the acquired child provider binding', async t => {
@@ -175,13 +181,26 @@ test('goal host reaches emitted handoff and adopts only the acquired child provi
     if (options.usageReceipt?.processKind === 'maker') {
       const lease = fixture.state().session_chain.lease;
       acquiredChild = lease.handoff_child_run_id;
-      const acquired = acquireLease(fixture.root, fixture.runId, {
-        owner: acquiredChild,
-        expectGeneration: lease.generation,
-        runtime: 'codex',
-        now: Date.parse('2026-09-06T00:00:02.000Z'),
+      const argv = acquisitionArgv(entry.stdin);
+      const acquisition = spawnSync(argv[0], argv.slice(1), {
+        cwd: fixture.root,
+        encoding: 'utf8',
+        timeout: 30_000,
+        maxBuffer: 1024 * 1024,
+        shell: false,
       });
+      assert.equal(acquisition.status, 0, acquisition.stdout + acquisition.stderr);
+      const acquired = JSON.parse(acquisition.stdout);
       assert.equal(acquired.ok, true, JSON.stringify(acquired));
+      assert.equal(acquired.proceed, true);
+      assert.equal(acquired.consumed.takeover_kind, 'boundary-handoff');
+      assert.equal(acquired.consumed.child_run_id, acquiredChild);
+      assert.equal(acquired.consumed.from_generation, lease.generation);
+      assert.equal(acquired.consumed.to_generation, lease.generation + 1);
+      assert.equal(
+        fixture.state().session_chain.lease.acquisition_receipt.attempt_id,
+        `goal_acquire_${acquiredChild}`,
+      );
       const result = measured(CHILD_THREAD);
       return {
         ...result,

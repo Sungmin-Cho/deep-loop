@@ -22,6 +22,7 @@ import { drivePendingGoalReview } from './goal-checker.mjs';
 import { finishRun } from './finish.mjs';
 import { ownerSession } from './session-scope.mjs';
 import { recordWorkstreamTerminal } from './workspace.mjs';
+import { dispatchReview } from './review.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -56,7 +57,7 @@ export function buildGoalOwnerContext({loop,action,deepLoopRoot=ROOT,hostBudget=
       result_rel:loop.goal_reviews.at(-1).result_rel,verdict:loop.goal_reviews.at(-1).verdict} : null});
 }
 
-export function buildGoalOwnerPrompt({loop,action,deepLoopRoot=ROOT,profile='current',task=null,hostBudget=null}) {
+function buildGoalOwnerPacket({loop,action,deepLoopRoot=ROOT,profile='current',task=null,hostBudget=null,loadedPolicySha=null}) {
   if(!['current','minimal'].includes(profile))throw new Error('GOAL_OWNER_PROFILE_INVALID');
   const frame=buildGoalOwnerContext({loop,action,deepLoopRoot,hostBudget});
   let policy='Goal owner minimal policy v1: fulfill the original outcomes using your judgment and the supplied action. Mutate state only through kernel CLI. Perform one bounded logical action or maker stage and yield. Independent reviewers and proof-gated closure/finish belong to the host. Never fabricate evidence or human authority.';
@@ -69,15 +70,20 @@ export function buildGoalOwnerPrompt({loop,action,deepLoopRoot=ROOT,profile='cur
     if(bytes.length>32768)throw new Error('GOAL_OWNER_POLICY_INVALID');
     policy=new TextDecoder('utf-8',{fatal:true}).decode(bytes);
   }
-  return [`Official ${profile} host-owner policy from ${policySource}; SHA256 ${digest(policy)}.`,policy,
+  const policySha=digest(policy);
+  const policyBody=loadedPolicySha===policySha ? 'The previously supplied owner policy still applies. Reload only its named source if native context restoration has lost the details.' : policy;
+  const prompt=[`Official ${profile} host-owner policy from ${policySource}; SHA256 ${policySha}.`,policyBody,
     `Host context snapshot (context, not mutation authority): ${JSON.stringify(frame)}`,
     task ? `Task context: ${task}` : '',
     'Use the supplied facts and action. Do not rediscover unchanged fields or load legacy/entry workflows. Refresh after the action boundary or stale/fence evidence.',
-    'Complete one bounded logical action or current maker stage; batch predictable typed CLI steps in one tool call with actual-result bindings, then yield. Do not start a second maker or retry round.',
-    'For dispatch_checker, dispatch the configured independent checker and yield; never claim or execute it as the owner. Yield for whole-goal review. At finish populate the supplied M3 report template with the factual report, write it to report_path, then yield before finish.',
+    'Complete one bounded maker stage, including its necessary planning/setup/selection/registration; batch predictable typed CLI steps in one tool call with actual-result bindings, then yield. Do not start a second maker or retry round.',
+    'For dispatch_checker yield: the host registers and runs the already-configured independent checker. Never claim or execute it as the owner. Yield for whole-goal review. At finish populate the supplied M3 report template with the factual report, write it to report_path, then yield before finish.',
     'External push, PR, merge, publish, network and delete actions are outside this isolated execution scope. Report genuinely missing authority or requirements without inventing them.',
   ].filter(Boolean).join('\n');
+  return {prompt,policySha};
 }
+
+export function buildGoalOwnerPrompt(options) { return buildGoalOwnerPacket(options).prompt; }
 
 // Establish the ordinary executable/isolation contract, then measure an actual
 // persistent two-turn read-only nonce exchange. No --last or candidate session ID
@@ -119,7 +125,7 @@ export function preflightGoalOwner({root,runId,loop,expect,env,deepLoopRoot,time
 
 export async function driveGoalRun({root,runId,expect=null,timeoutMs,maxTurns,tokenLimit,
   env=process.env,deepLoopRoot=ROOT,profile='current',task=null,now=Date.now,runProcess=runStreamingProcessSync,
-  preflight=preflightGoalOwner,goalService=drivePendingGoalReview,onInvocation=()=>{},wallNow=Date.now,...serviceOptions}={}) {
+  preflight=preflightGoalOwner,goalService=drivePendingGoalReview,onInvocation=()=>{},wallNow=Date.now,resolveCheckerSkill=resolveTrustedCheckerSkill,...serviceOptions}={}) {
   const invocations=[]; const started=wallNow();
   const sampleNow=typeof now==='function'?now:()=>now;
   const initial=fresh(root,runId); const expected=expect || fenceOf(initial);
@@ -137,8 +143,8 @@ export async function driveGoalRun({root,runId,expect=null,timeoutMs,maxTurns,to
   const observedProcess=kind=>(entry,options)=>{const available=remaining();if(available<=0)return {ok:false,reason:'goal-host-deadline'};const result=runProcess(entry,{...options,timeoutMs:Math.min(options.timeoutMs,available),processGroup:'required',captureRawJsonl:true});emit({kind,entry,result});return result;};
   const remaining=()=>timeoutMs-(wallNow()-started);
   const tokensUsed=()=>invocations.reduce((n,x)=>n+(x.result?.usage?.tokens || 0),0);
-  return withHeadlessHostService({root,runId,timeoutMs,...serviceOptions},async service=>{
-    let thread=null,ownerFence=expected,turns=0; const heldOwners=new Set();
+  return withHeadlessHostService({root,runId,timeoutMs,...serviceOptions,resolveCheckerSkill},async service=>{
+    let thread=null,ownerFence=expected,turns=0; const heldOwners=new Set(),loadedPolicies=new Map();
     const fail=reason=>{
       try {const loop=fresh(root,runId);if(loop.status==='running')pauseRun(root,runId,{reason,expect:ownerFence,now:sampleNow()});} catch { /* preserve newer fence/terminal authority */ }
       return {ok:false,reason,invocations,providerThreadId:thread};
@@ -190,7 +196,9 @@ export async function driveGoalRun({root,runId,expect=null,timeoutMs,maxTurns,to
       const descriptor=nextAction(loop,{now:sampleNow(),unattended:true}); const action=descriptor.action;
       if(action.type==='await_human'||descriptor.gate?.allowed===false)return fail(action.reason || 'goal-host-gate-blocked');
       if(action.type==='close_workstream') {
-        recordWorkstreamTerminal(root,runId,action.workstream_id,{status:'ready',proof:{},fence:ownerFence,now:sampleNow()});continue;
+        try {recordWorkstreamTerminal(root,runId,action.workstream_id,{status:'ready',proof:{},fence:ownerFence,now:sampleNow()});}
+        catch(error){return fail(error.message);}
+        continue;
       }
       if(action.type==='finish') {
         try {finishRun(root,runId,{status:'completed',reportRel:'final-report.md',fence:ownerFence,now:sampleNow()});continue;}
@@ -198,14 +206,27 @@ export async function driveGoalRun({root,runId,expect=null,timeoutMs,maxTurns,to
       }
       if(tokensUsed()>=tokenLimit)return fail('goal-host-token-limit');
       if(remaining()<=0)return fail('goal-host-deadline');
+      if(action.type==='dispatch_checker') {
+        try {
+          if(!['deep-review-loop','deep-review','deep-review:deep-review-loop'].includes(loop.review.reviewer))return fail('configured-checker-transport-unavailable');
+          const checkerSkill=resolveCheckerSkill({codexHome:ready.codexHome.canonical_path});
+          if(!checkerSkill?.skill?.canonical_path)throw new Error('checker-capability-unavailable');
+          const registered=dispatchReview(root,runId,{point:action.point,workstreamId:action.workstream_id,detected:{'deep-review':true},fence:ownerFence});
+          const bound=fresh(root,runId).episodes.find(episode=>episode.id===registered.checkerEpisodeId);
+          if(!bound || bound.role!=='checker' || bound.target_maker!==action.episode_id || bound.status!=='pending')throw new Error('checker-registration-binding-mismatch');
+        }catch(error){return fail(error.message);}
+        continue;
+      }
       if(['dispatch_goal_checker','reconcile_goal_review'].includes(action.type)) {
-        const result=await goalService({root,runId,expect:ownerFence,executable:ready.executable.canonical_path,
+        let result;
+        try { result=await goalService({root,runId,expect:ownerFence,executable:ready.executable.canonical_path,
           codexHome:ready.codexHome.canonical_path,env,model:loop.autonomy.session_model,effort:loop.autonomy.session_effort,
-          timeoutMs:remaining(),runProcess:observedProcess('goal-checker'),settleUsage:result=>{ recordCost(root,runId,{turns:result.usage.num_turns,tokens:result.usage.tokens,fence:{...ownerFence,intent:'accounting'}}); return {ok:true}; },now:sampleNow()});
+          timeoutMs:remaining(),runProcess:observedProcess('goal-checker'),settleUsage:result=>{ recordCost(root,runId,{turns:result.usage.num_turns,tokens:result.usage.tokens,fence:{...ownerFence,intent:'accounting'}}); return {ok:true}; },now:sampleNow()}); } catch(error){return fail(error.message);}
         if(!result?.ok)return fail(result?.reason || 'goal-checker-unavailable');continue;
       }
       if(turns>=maxTurns)return fail('owner-turn-limit');
-      const prompt=buildGoalOwnerPrompt({loop,action,deepLoopRoot,profile,task,hostBudget:{remaining_tokens:Math.max(0,tokenLimit-tokensUsed()),remaining_time_ms:Math.max(0,remaining()),remaining_owner_turns:maxTurns-turns}});
+      const packet=buildGoalOwnerPacket({loop,action,deepLoopRoot,profile,task,loadedPolicySha:loadedPolicies.get(thread),hostBudget:{remaining_tokens:Math.max(0,tokenLimit-tokensUsed()),remaining_time_ms:Math.max(0,remaining()),remaining_owner_turns:maxTurns-turns}});
+      const prompt=packet.prompt;
       const entry=buildCodexGoalOwnerEntry({executable:ready.executable.canonical_path,projectRoot:root,prompt,
         model:loop.autonomy.session_model,effort:loop.autonomy.session_effort,providerThreadId:thread});
       Object.assign(entry,{env:buildMinimalCodexEnv({sourceEnv:env,codexHome:ready.codexHome.canonical_path,runId,projectRoot:root,...ownerFence}),
@@ -233,7 +254,7 @@ export async function driveGoalRun({root,runId,expect=null,timeoutMs,maxTurns,to
       emit({kind:'owner',entry,result,accounting});
       if(!result?.ok||!measured(result)||!accounting?.ok)return fail(result?.reason || 'goal-owner-evidence-unavailable');
       if(!UUID.test(result.providerThreadId || '')||(thread!==null&&thread!==result.providerThreadId))return fail('goal-owner-thread-mismatch');
-      thread=result.providerThreadId;
+      thread=result.providerThreadId;loadedPolicies.set(thread,packet.policySha);
     }
   });
 }

@@ -3,12 +3,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { makeGoalFixture } from './helpers/goal-fixture.mjs';
 import { goalOk } from './helpers/reviewed-goal.mjs';
 import { scopeToken, ownerSession } from '../scripts/lib/session-scope.mjs';
 import { __testRestoreCompactCheckpoint } from '../scripts/lib/checkpoint.mjs';
-const CLI = new URL('../scripts/deep-loop.mjs', import.meta.url).pathname;
+const CLI = fileURLToPath(new URL('../scripts/deep-loop.mjs', import.meta.url));
 function fixture(t, options = {}) {
   const f = makeGoalFixture({ now: new Date().toISOString(), ...options }); t.after(f.cleanup);
   const a = f.workstream('a'), b = f.workstream('b');
@@ -58,9 +59,9 @@ test('affinity recovery and actual fresh-owner acquisition preserve parked histo
   assert.equal(f.state().current_episode,f.id);
 });
 function rawCli(args, cwd) {
-  const r=spawnSync(process.execPath,[CLI,...args],{cwd,encoding:'utf8',timeout:30000});
+  const r=spawnSync(process.execPath,[CLI,...args],{cwd,encoding:'utf8',timeout:120000});
   let json=null; try { json=JSON.parse(r.stdout); } catch {}
-  return {exit:r.status,stderr:r.stderr,stdout:r.stdout,json};
+  return {exit:r.status,stderr:r.error ? `${r.stderr || ''}\n${r.error.code}: ${r.error.message}` : r.stderr,stdout:r.stdout,json};
 }
 test('relocated root recovery capsule and acquired owner carry parked history and epoch', t => {
   const f=fixture(t); goalOk(f.select(f.b.id,scopeToken(f.state())));

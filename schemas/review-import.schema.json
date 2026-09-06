@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "reviewer_id", "checker_episode_id", "target_maker", "attempt_id", "verdict", "report_body", "artifacts"],
   "properties": {
-    "schema_version": { "const": "1.0" },
+    "schema_version": { "type": "string", "const": "1.0" },
     "reviewer_id": { "type": "string", "minLength": 1 },
     "checker_episode_id": { "type": "string", "minLength": 1 },
     "target_maker": { "type": "string", "minLength": 1 },

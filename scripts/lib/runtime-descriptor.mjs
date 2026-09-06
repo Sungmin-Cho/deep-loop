@@ -361,6 +361,38 @@ function codexInteractivePsArgs(root, prompt, model, effort) {
   ].join(' ');
 }
 
+function buildGoalAcquirePrompt({ root, runId, childRunId, kernelPath }) {
+  const script = [
+    "const { spawnSync } = require('node:child_process');",
+    `const nodeExecutable = ${JSON.stringify(process.execPath)};`,
+    `const kernelPath = ${JSON.stringify(kernelPath)};`,
+    `const projectRoot = ${JSON.stringify(root)};`,
+    `const runId = ${JSON.stringify(runId)};`,
+    `const childRunId = ${JSON.stringify(childRunId)};`,
+    "const fail = (reason) => { process.stdout.write(`${JSON.stringify({ ok: false, reason })}\\n`); process.exit(1); };",
+    "const runKernel = (args) => {",
+    "  const result = spawnSync(nodeExecutable, [kernelPath, ...args, '--project-root', projectRoot, '--run-id', runId], { encoding: 'utf8', timeout: 15000, maxBuffer: 1048576, shell: false });",
+    "  if (result.error || result.signal || result.status !== 0) fail(`goal-acquire-kernel-${result.error?.code || result.signal || result.status || 'failed'}`);",
+    "  try { return JSON.parse(result.stdout); } catch { fail('goal-acquire-kernel-output-invalid'); }",
+    "};",
+    "const lease = runKernel(['state', 'get', '--field', 'session_chain.lease']);",
+    "if (!lease || typeof lease !== 'object' || Array.isArray(lease) || lease.state !== 'releasing' || lease.handoff_phase !== 'spawned' || lease.handoff_child_run_id !== childRunId || !Number.isSafeInteger(lease.generation) || lease.generation < 1) fail('goal-acquire-lease-mismatch');",
+    "const attemptId = 'goal_acquire_' + childRunId;",
+    "const acquired = runKernel(['lease', 'acquire', '--owner', childRunId, '--expect-generation', String(lease.generation), '--runtime', 'codex', '--attempt-id', attemptId]);",
+    "const consumed = acquired?.consumed;",
+    "if (acquired?.ok !== true || acquired.reason !== 'acquired' || acquired.proceed !== true || acquired.replayed !== false || acquired.generation !== lease.generation + 1 || consumed?.takeover_kind !== 'boundary-handoff' || consumed.child_run_id !== childRunId || consumed.superseded_owner_run_id !== lease.owner_run_id || consumed.from_generation !== lease.generation || consumed.to_generation !== lease.generation + 1 || JSON.stringify(consumed.boundary_event) !== JSON.stringify(lease.handoff_boundary_event) || consumed.project_root_digest !== lease.handoff_project_root_digest || consumed.project_binding_generation !== lease.handoff_project_binding_generation) fail('goal-acquire-result-mismatch');",
+    "process.stdout.write(`${JSON.stringify(acquired)}\\n`);",
+  ].join('\n');
+  const argv = [process.execPath, '-e', script];
+  return [
+    'This is an acquisition-only turn for one already-reserved deep-loop goal owner.',
+    'Use exactly one native terminal tool call to execute the typed argv below. Do not alter, wrap, or split it.',
+    `GOAL_ACQUIRE_ARGV_JSON=${JSON.stringify(argv)}`,
+    'Do not read files, inspect the repository, edit source, initialize Git, invoke another command, or perform business work.',
+    'Return only the script stdout, then stop. The host will verify the lease and provide the official owner frame on an exact-thread resume.',
+  ].join('\n');
+}
+
 function buildCodexEntries({
   root, parentRunId, childRunId, handoffRel,
   launcher, launcherBin, launcherSocket, launcherSession, exists = existsSync,
@@ -400,8 +432,14 @@ function buildCodexEntries({
   const visibleExecutable = codexVisibleExecutablePath(platform, runtimeExecutableIdentity);
   if (effectiveExecutable != null) {
     if (!targetAbsolutePath(deepLoopRoot, platform)) throw new Error('INVALID_DEEP_LOOP_ROOT: explicit absolute deep-loop root required');
-    const skillPath = pathFor(platform, deepLoopRoot, 'skills', 'deep-loop-resume', 'SKILL.md');
-    const prompt = `Read ${JSON.stringify(handoffPath)} first. Then read ${JSON.stringify(skillPath)} and execute that workflow inline for project root ${JSON.stringify(root)} and run id ${JSON.stringify(parentRunId)}.`;
+    const prompt = goalDriven
+      ? buildGoalAcquirePrompt({
+          root,
+          runId: parentRunId,
+          childRunId,
+          kernelPath: pathFor(platform, deepLoopRoot, 'scripts', 'deep-loop.mjs'),
+        })
+      : `Read ${JSON.stringify(handoffPath)} first. Then read ${JSON.stringify(pathFor(platform, deepLoopRoot, 'skills', 'deep-loop-resume', 'SKILL.md'))} and execute that workflow inline for project root ${JSON.stringify(root)} and run id ${JSON.stringify(parentRunId)}.`;
     const buildHeadlessEntry = goalDriven ? buildCodexGoalOwnerEntry : buildCodexExecEntry;
     entries.headless = {
       ...buildHeadlessEntry({ executable: effectiveExecutable, projectRoot: root, prompt, model, effort }),

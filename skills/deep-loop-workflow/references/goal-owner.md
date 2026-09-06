@@ -4,13 +4,13 @@ Apply this specialization only when the trusted `goal drive` host supplies a ver
 
 ## Use the supplied frame
 
-Retain the supplied absolute Node/kernel paths, project root, run/owner/generation, event-log head, scope epoch, `routing.protocol`, review configuration, workstreams, current action and immutable goal contract. These are validated context, not guesses requiring another discovery pass. The host embeds this exact shipped policy; no extra file-read call is needed. Do not reload unchanged continue/entry/legacy instructions, protocol files or state fields.
+Retain the supplied absolute Node/kernel paths, project root, run/owner/generation, event-log head, scope epoch, `routing.protocol`, review configuration, workstreams, current action and immutable goal contract. These are validated context, not guesses requiring another discovery pass. The host embeds this exact shipped policy on the first business turn for each provider thread. Later turns supply its digest and fresh context; reload only if native context restoration lost the details. Do not reload unchanged continue/entry/legacy instructions, protocol files or state fields.
 
 Use the supplied action and remaining host budget first. Token accounting includes cached input and updates when a measured process returns. After completing an action, obtain `next-action --json`; retain its action and verify its identity against the host frame. A changed owner/generation yields to the host; reading identity does not transfer ownership. Refresh after external waits, a stale token/fence response, or changed context. Never retry a failed mutation blindly. If a genuinely required binding is missing, obtain one fresh state snapshot and retain the needed information. The kernel remains authoritative for lease, scope, budget, breaker, prerequisites, review and completion proof.
 
 ## Execute useful work
 
-Choose decomposition, implementation strategy, tests and necessary discoveries from the original outcomes. Reuse existing pending work. You may batch independent reads and run several sequential action steps in one tool call; preserve dependencies and check every result. Perform one bounded logical action or one maker stage, then yield. Batch its predictable steps; do not start another maker or review round in the same owner invocation.
+Choose decomposition, implementation strategy, tests and necessary discoveries from the original outcomes. Reuse existing pending work. You may batch independent reads and run several sequential action steps in one tool call; preserve dependencies and check every result. Perform one bounded maker stage, including its necessary planning, workspace selection and episode preparation. Batch these predictable steps in one owner turn; do not start another maker or review round in the same owner invocation.
 
 Use shell-free argv. This example validates argument types, bounds output, and stops the sequence on command or JSON failure. `NODE`, `CLI`, `root`, `runId`, `owner` and `generation` come from the host frame; check them against fresh `next-action` identity.
 
@@ -46,6 +46,7 @@ const maker = kernel(['episode', 'new', '--plugin', protocol,
   '--workstream', ws.id, '--artifacts', JSON.stringify(expectedArtifacts)]);
 const next = kernel(['next-action', '--json'], false);
 // Verify identity; prepare only when next.action requests this maker/stage.
+const stage = next.action.stage ?? 'primary'; // first stage; continuation only when requested
 const prepared = kernel(['execution', 'prepare', '--episode', maker.id,
   '--mode', 'inline', '--stage', stage, '--task', task]);
 // Perform prepared.invocation and verify its actual outputs before return.
@@ -63,7 +64,7 @@ For selection, use `workstream select --id TARGET --expected-scope TOKEN --reaso
 
 ## Yield at service boundaries
 
-- `dispatch_checker`: `review dispatch --point POINT --workstream WS` under the configured reviewer, then yield. Do not claim, run or impersonate the independent reviewer.
+- `dispatch_checker`: yield; the host registers the already-configured checker through the same kernel dispatch checks. Do not claim, run or impersonate the independent reviewer.
 - Goal review or unresolved external producer: yield the exact action/attempt to the host.
 - `close_workstream`: yield; the host commits the kernel-derived closure after its proof checks.
 - `handoff`: emit only the supplied current boundary with `handoff emit --headless --reason workstream-terminal --boundary-event SEQ:CHECKSUM`, then yield for canonical host service.

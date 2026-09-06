@@ -24,6 +24,9 @@ test('goal host starts persistent owner then resumes exact provider thread and s
     const result=await driveGoalRun(options(f,{runProcess:entry=>{entries.push(entry);return measured();}}));
     assert.equal(entries.length,2);
     assert.ok(!entries[0].argv.includes('--ephemeral'));
+    assert.match(entries[0].stdin,/# Host-driven v0.5 owner/);
+    assert.doesNotMatch(entries[1].stdin,/# Host-driven v0.5 owner/);
+    assert.match(entries[1].stdin,/goal-owner\.md/);
     assert.ok(entries[1].argv.includes('resume'));
     assert.ok(entries[1].argv.includes(THREAD));
     assert.ok(!entries[1].argv.includes('--last'));
@@ -130,4 +133,22 @@ test('the owner may pause for genuinely missing input without being forced into 
   assert.equal(calls,1);assert.equal(result.status,'paused');assert.equal(result.reason,'need-input: clarify required behavior');
   assert.equal(result.invocations[0].accounting.ok,true);
  }finally{f.cleanup();}
+});
+
+test('host registers the configured checker with exact maker binding without an owner bookkeeping turn',async()=>{
+ const f=makeGoalFixture({runtime:'codex',model:'gpt-6-astra',effort:'high',review:{points:['implementation'],reviewer:'deep-review-loop',mode:'same-model',flags:[],converge:true,max_review_rounds:5,require_human_ack:false}});let calls=0;
+ try {
+  const ws=f.workstream('registration'),maker=createScenarioMaker(f,ws);produceScenarioMaker(f,maker);
+  const result=await driveGoalRun(options(f,{resolveCheckerSkill:()=>({skill:{canonical_path:'/trusted/fixture/SKILL.md'}}),runProcess:()=>{calls++;return measured();}}));
+  assert.equal(calls,0);assert.equal(result.ok,false);
+  const checkers=f.state().episodes.filter(x=>x.role==='checker');
+  assert.equal(checkers.length,1);assert.equal(checkers[0].target_maker,maker.id);
+  assert.equal(checkers[0].status,'pending');assert.equal(checkers[0].requires_independent_session,true);
+ }finally{f.cleanup();}
+});
+
+test('a goal-service precondition exception becomes a structured pause',async(t)=>{
+ const f=reviewedGoalWork(t,{runtime:'codex',model:'gpt-6-astra',effort:'high'});
+ const result=await driveGoalRun(options(f,{goalService:()=>{throw new Error('goal-transport-unavailable');}}));
+ assert.equal(result.ok,false);assert.equal(result.reason,'goal-transport-unavailable');assert.equal(f.state().status,'paused');
 });

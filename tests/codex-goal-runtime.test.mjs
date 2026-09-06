@@ -4,11 +4,18 @@ import {
   buildCodexExecEntry,
   buildCodexGoalOwnerEntry,
 } from '../scripts/lib/codex-runtime.mjs';
+import { buildRuntimeResumeDescriptor } from '../scripts/lib/runtime-descriptor.mjs';
 
 const BIN = '/opt/codex/bin/codex';
 const ROOT = '/tmp/goal owner/repo';
 const PROMPT = 'Continue the exact bounded owner turn.';
 const THREAD_ID = '019d1234-5678-7abc-8def-0123456789ab';
+
+function acquisitionArgv(prompt) {
+  const line = prompt.split('\n').find(value => value.startsWith('GOAL_ACQUIRE_ARGV_JSON='));
+  assert.ok(line, 'goal handoff prompt must expose one typed acquisition argv');
+  return JSON.parse(line.slice('GOAL_ACQUIRE_ARGV_JSON='.length));
+}
 
 test('goal owner initial entry is persistent and opts into explicit strict isolation', () => {
   const entry = buildCodexGoalOwnerEntry({
@@ -69,6 +76,40 @@ test('goal owner resume places parent options before resume and binds one exact 
     assert.equal(entry.argv.includes('--last'), false);
     assert.equal(entry.argv.includes('--ephemeral'), false);
   }
+});
+
+test('goal-mode handoff child runs only the typed fresh-lease acquisition script', () => {
+  const descriptor = buildRuntimeResumeDescriptor({
+    runtime: 'codex',
+    root: ROOT,
+    parentRunId: 'PARENT',
+    childRunId: 'CHILD',
+    handoffRel: 'handoffs/child.md',
+    platform: 'darwin',
+    model: 'gpt-5.6-sol',
+    effort: 'ultra',
+    codexExecutable: BIN,
+    deepLoopRoot: '/opt/deep-loop',
+    goalDriven: true,
+  });
+  const prompt = descriptor.entries.headless.stdin;
+  const argv = acquisitionArgv(prompt);
+
+  assert.equal(prompt.includes('deep-loop-resume/SKILL.md'), false);
+  assert.equal(prompt.includes('deep-loop-continue'), false);
+  assert.match(prompt, /Do not .*perform business work/);
+  assert.deepEqual(argv.slice(0, 2), [process.execPath, '-e']);
+  assert.equal(argv.length, 3);
+  const script = argv[2];
+  for (const literal of [ROOT, 'PARENT', 'CHILD', '/opt/deep-loop/scripts/deep-loop.mjs']) {
+    assert.ok(script.includes(JSON.stringify(literal)), literal);
+  }
+  for (const token of [
+    'session_chain.lease', "lease.state !== 'releasing'", "lease.handoff_phase !== 'spawned'",
+    "'--expect-generation'", "'goal_acquire_' + childRunId", "consumed?.takeover_kind !== 'boundary-handoff'",
+    'shell: false', 'process.stdout.write',
+  ]) assert.ok(script.includes(token), token);
+  assert.equal(script.includes('DEEP_LOOP_GENERATION'), false);
 });
 
 test('goal owner rejects missing or non-UUID resume bindings without selecting a latest thread', () => {

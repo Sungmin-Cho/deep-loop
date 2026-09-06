@@ -63,7 +63,7 @@ export function goalNextAction(loop, { gate, debt, blockingMakers, goalProof } =
     if (pending.expected_artifacts.length === 0) return result({ type: 'await_human', episode_id: pending.id, reason: 'orphan-maker-no-artifacts' }, '/deep-loop-status');
     if (debt.blocked && pending.kind !== 'fix') return result({ type: 'await_human', episode_id: pending.id,
       reason: 'comprehension-debt', blocking_episode_ids: blockingMakers }, '/deep-loop-status');
-    return result({ type: 'dispatch_maker', episode_id: pending.id, point: pending.point, workstream_id: pending.workstream_id });
+    return result({ type: 'dispatch_maker', stage: 'primary', episode_id: pending.id, point: pending.point, workstream_id: pending.workstream_id });
   }
   const rejected = scoped.find(episode => episode.role === 'checker' && episode.status === 'rejected' && !rejectionResolved(loop, episode));
   if (rejected) return result({ type: 'fix_episode', episode_id: rejected.id, target_maker: rejected.target_maker,

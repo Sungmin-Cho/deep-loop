@@ -31,7 +31,7 @@ function cli(argv,root,input) {
 export function initializeAgentGoal(root,task,{model,effort,executable,approveExecutable=true}={}) {
  const {runId}=initRun(root,{runtime:'codex',goal:task.prompt,protocol:'standalone',model,effort,supervision:'delegated',boundaryMode:'continue',
   goalContract:{version:1,requirements:[{id:'REQ-OUTCOME',statement:task.prompt,acceptance:'The integrated project root passes independent held-out behavior tests for the requested function.'}],non_goals:['External network, publication and unrelated project changes.']},
-  review:{points:['implementation'],reviewer:'deep-review-loop',mode:'independent-same-model',flags:[],converge:true,max_review_rounds:5,require_human_ack:false}});
+  review:{points:['implementation'],reviewer:'deep-review-loop',mode:'same-model',flags:[],converge:true,max_review_rounds:5,require_human_ack:false}});
  if(approveExecutable) {
   const diagnosed=cli(['runtime-executable','diagnose','--runtime','codex','--path',executable],root);
   cli(['runtime-executable','approve','--runtime','codex','--path',executable,'--canonical-path',diagnosed.identity.canonical_path,

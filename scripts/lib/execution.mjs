@@ -47,7 +47,7 @@ function invocation(loop, episode, execution) {
 }
 
 export function prepareExecution(root, runId, { episodeId, mode, stage = 'primary', task, routing, fence, now = Date.now() } = {}) {
-  if (!boundedGoalText(task) || !['inline', 'external'].includes(mode) || !['primary', 'continuation'].includes(stage)) throw new Error('EXECUTION_INPUT_INVALID');
+  if (!boundedGoalText(task) || !['inline', 'external'].includes(mode) || !['primary', 'continuation'].includes(stage)) throw new Error('EXECUTION_INPUT_INVALID: mode must be inline or external; stage must be primary or continuation; task must be nonempty bounded text');
   if (routing !== undefined) assertRoutingRecord(routing);
   let prepared, existing, output;
   const eventData = { episode_id: episodeId, mode, stage };
