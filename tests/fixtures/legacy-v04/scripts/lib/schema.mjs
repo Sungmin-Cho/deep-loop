@@ -4,7 +4,6 @@ import { dirname, isAbsolute, join, posix, win32 } from 'node:path';
 import { normalizePortableRelativePath } from './fs-safe.mjs';
 import { SESSION_RUNTIMES } from './runtime.mjs';
 import { isRoutingRecord } from './router-adapter.mjs';
-import { validateGoalState } from './goal-contract.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const LAUNCHER_KINDS = Object.freeze(['wt', 'powershell', 'tmux']);
@@ -537,8 +536,8 @@ export function validate(loopJson, schema = loadSchema()) {
   }
   // schema_version 정확 일치 (legacy는 readHashVerifiedState가 in-memory 마이그레이션 — validate에 구버전이
   // 도달하면 마이그레이션 누락 경로이므로 실패가 옳다)
-  if (loopJson.schema_version !== undefined && !(schema.supported_versions || ['0.4.0']).includes(loopJson.schema_version)) {
-    errors.push(`schema_version must be 0.4.0 or 0.5.0, got ${loopJson.schema_version}`);
+  if (loopJson.schema_version !== undefined && loopJson.schema_version !== '0.4.0') {
+    errors.push(`schema_version must be 0.4.0, got ${loopJson.schema_version}`);
   }
   // 배열 타입
   for (const arr of ['workstreams', 'episodes', 'active_workstreams', 'discovered_items']) {
@@ -648,6 +647,5 @@ export function validate(loopJson, schema = loadSchema()) {
       }
     }
   }
-  validateGoalState(loopJson, errors);
   return { ok: errors.length === 0, errors };
 }

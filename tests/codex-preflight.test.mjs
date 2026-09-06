@@ -215,6 +215,23 @@ function cacheKeyInput(projectRoot, prompt) {
   };
 }
 
+test('schema upgrades invalidate preflight cache and a legacy run can re-probe without rewriting state', () => {
+  const h = harness();
+  const before = readFileSync(h.statePath);
+  const old = h.call({ durableSchemaContract: 'loop-run.schema.json:released-v04' });
+  assert.equal(old.ok, true, JSON.stringify(old));
+  assert.equal(h.runner.calls.length, 2);
+  const upgraded = h.call({ durableSchemaContract: 'loop-run.schema.json:v04-and-v05' });
+  assert.equal(upgraded.ok, true, JSON.stringify(upgraded));
+  assert.equal(upgraded.cache_hit, false);
+  assert.notEqual(upgraded.cache_key, old.cache_key);
+  assert.equal(h.runner.calls.length, 4, 'both actual smoke paths run again for the new schema contract');
+  const hit = h.call({ durableSchemaContract: 'loop-run.schema.json:v04-and-v05' });
+  assert.equal(hit.cache_hit, true);
+  assert.equal(h.runner.calls.length, 4);
+  assert.deepEqual(readFileSync(h.statePath), before, 'preflight does not migrate or erase the existing state');
+});
+
 test('codexPreflightCacheKey is pure and normalizes only probe root and prompt churn', () => {
   const first = codexPreflightCacheKey(cacheKeyInput('/tmp/probe-a', 'write nonce-a'));
   const second = codexPreflightCacheKey(cacheKeyInput('/tmp/probe-b', 'write nonce-b'));

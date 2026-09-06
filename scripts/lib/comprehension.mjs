@@ -4,6 +4,7 @@ import { isHeadlessInvocation } from './respawn.mjs';
 import { leaseCheck } from './lease.mjs';
 import { sessionRuntime } from './runtime.mjs';
 import { assertScopeAllows } from './session-scope.mjs';
+import { isGoalDriven } from './goal-contract.mjs';
 
 function assertEpisodeScope(loop, episode, { allowCrossWorkstream = false } = {}) {
   if (loop.autonomy?.continuation_policy === 'workstream-session' && episode?.workstream_id) {
@@ -18,13 +19,14 @@ export function computeDebt(loop) {
   // blocking cause the blocked episode itself, and the pre-emptive ack that clears it burns the review credit for
   // a diff that does not exist yet. The durable counters (episodes_total / episodes_human_reviewed) stay as the
   // audit record and are deliberately NOT read here: they include pending makers, so they mean something else.
-  // Only the HUMAN flag releases the gate — a machine APPROVE sets agent_reviewed (review.mjs:569-571) and must
-  // never lower comprehension debt.
+  // Only the HUMAN flag lowers this metric. Delegated goal runs make the metric
+  // advisory; a machine APPROVE never becomes human comprehension credit.
   const episodes = Array.isArray(loop.episodes) ? loop.episodes : [];
   const settled = episodes.filter(e => e?.role === 'maker' && e.status === 'done');
   const reviewed = settled.filter(e => e.human_reviewed === true).length;
   const debt_ratio = settled.length === 0 ? 0 : 1 - reviewed / settled.length;
-  return { debt_ratio, blocked: settled.length > 0 && debt_ratio >= (c.debt_threshold ?? 0.5) };
+  const delegated = isGoalDriven(loop) && loop.orchestration.supervision === 'delegated';
+  return { debt_ratio, blocked: !delegated && settled.length > 0 && debt_ratio >= (c.debt_threshold ?? 0.5) };
 }
 
 // Acknowledge that an episode's diff has been reviewed. tamper-evident + 절차 금지 + headless fail-closed (design #1):

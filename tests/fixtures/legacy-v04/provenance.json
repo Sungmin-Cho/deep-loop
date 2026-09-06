@@ -1,0 +1,30 @@
+{
+  "repository": "Sungmin-Cho/deep-loop",
+  "commit": "8763b48b14635ab40251d74de88448e43f722ec5",
+  "files": [
+    {
+      "source": "schemas/loop-run.schema.json",
+      "sha256": "4ef376d9537f032675ddc3f17b94737329b64bcb04b39afd22a3300d5dc61bb3"
+    },
+    {
+      "source": "scripts/lib/schema.mjs",
+      "sha256": "bb0640416072ec4b73989d7ac287941132d669fadc202bd1452582b773bedad1"
+    },
+    {
+      "source": "scripts/lib/fs-safe.mjs",
+      "sha256": "fb5035235ad49fbf4e4a4eab9405a2cbafceea7894d12bb07906ef2e0cd6ae9f"
+    },
+    {
+      "source": "scripts/lib/path-portable.mjs",
+      "sha256": "7b36a7cc78834eab2002c802078388a6284897043d862d45d2ac8b0e8a27750b"
+    },
+    {
+      "source": "scripts/lib/runtime.mjs",
+      "sha256": "a18ca2eefa50ea753ec740b314cbda9e5eaab24854773eb3c4437dc0d01fbbc0"
+    },
+    {
+      "source": "scripts/lib/router-adapter.mjs",
+      "sha256": "d90dd49713c56c1d96c0e83bc7cb71327ee6523df57a7e6b29179a3788033000"
+    }
+  ]
+}

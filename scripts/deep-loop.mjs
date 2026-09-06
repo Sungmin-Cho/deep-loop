@@ -750,8 +750,11 @@ const handlers = {
     if (f.continuation === true) { error('USAGE: --continuation <workstream-session>'); return 2; }
     const model = profile.value.model ?? null;
     const effort = profile.value.effort ?? null;
+    for (const name of ['goal-contract', 'supervision', 'boundary-mode']) {
+      if (f[name] === true || f[name] === '') { error(`USAGE: --${name} requires a value`); return 2; }
+    }
     try {
-      const { runId } = initRun(root, { runtime, goal: f.goal, protocol: f.protocol, recipe: f.recipe, detected: detectPlugins(root), review: f.review ? JSON.parse(f.review) : undefined, model, effort, continuation: f.continuation ?? null, now: new Date(parseNow(f)) });
+      const { runId } = initRun(root, { runtime, goal: f.goal, protocol: f.protocol, recipe: f.recipe, detected: detectPlugins(root), review: f.review ? JSON.parse(f.review) : undefined, model, effort, continuation: f.continuation ?? null, now: new Date(parseNow(f)), goalContract: f['goal-contract'] !== undefined ? JSON.parse(f['goal-contract']) : undefined, supervision: f.supervision, boundaryMode: f['boundary-mode'] });
       json({ run_id: runId }); return 0;
     } catch (e) {
       error(String(e?.message || e)); return 1;   // INVALID_RUNTIME / INVALID_MODEL / INVALID_EFFORT → exit 1 (fail-closed)
@@ -1253,7 +1256,9 @@ const handlers = {
         if (!Array.isArray(parsed) || parsed.some(d => typeof d !== 'string' || d.length === 0)) { error('INVALID_DEPENDS_ON'); return 1; }
         dependsOn = parsed;
       }
-      const r = newWorkstream(root, runId, { title, branch, worktree, dependsOn, fence, now: parseNow(f) }); json(r); return 0;
+      if (f.requirements === true || f.requirements === '') { error('USAGE: --requirements requires JSON'); return 2; }
+      const requirementIds = f.requirements !== undefined ? JSON.parse(f.requirements) : undefined;
+      const r = newWorkstream(root, runId, { title, branch, worktree, dependsOn, requirementIds, fence, now: parseNow(f) }); json(r); return 0;
     }
     if (verb === 'set') {
       const id = reqStr(f, 'id'); if (!id) { error('MISSING_ID'); return 2; }

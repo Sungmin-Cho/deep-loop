@@ -8,12 +8,13 @@ import { MUTATION_TURN_FLOOR } from './budget.mjs';
 import { normalizePortableRelativePath, pathWithin } from './fs-safe.mjs';
 import { assertScopeAllows, closeScope } from './session-scope.mjs';
 import { workstreamClosureProofState } from './finish.mjs';
+import { assertGoalWorkstreamInput } from './goal-contract.mjs';
 
 const NON_TERMINAL = ['planned', 'in_progress', 'in_review', 'parked'];
 const TERMINAL = ['ready', 'merged', 'abandoned'];
 
 export function newWorkstream(root, runId, {
-  title, branch, worktree, baseCommit = null, dependsOn = [], fence, now = Date.now(),
+  title, branch, worktree, baseCommit = null, dependsOn = [], requirementIds, fence, now = Date.now(),
 } = {}) {
   if (!fence || typeof fence.owner !== 'string' || !Number.isInteger(fence.generation)) throw new Error('FENCE_REQUIRED: newWorkstream');
   if (typeof title !== 'string' || title.length === 0 ||
@@ -79,8 +80,12 @@ export function newWorkstream(root, runId, {
       id, title, status: 'planned', branch, worktree: _storedWorktree, base_commit: baseCommit,
       dirty_on_handoff: false, pr: { intended: true, state: 'none', url: null },
       episodes: [], review_points_done: [], depends_on: dependsOn,
+      ...(requirementIds !== undefined ? { requirement_ids: [...requirementIds] } : {}),
     });
-  }, fence ? (loop) => { const r = leaseCheck(loop, fence); if (!r.ok) throw new Error('LEASE_FENCED: ' + r.reason); } : undefined, { floor: MUTATION_TURN_FLOOR });
+  }, (loop) => {
+    const r = leaseCheck(loop, fence); if (!r.ok) throw new Error('LEASE_FENCED: ' + r.reason);
+    assertGoalWorkstreamInput(loop, requirementIds, dependsOn);
+  }, { floor: MUTATION_TURN_FLOOR });
   return { id };
 }
 

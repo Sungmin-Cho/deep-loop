@@ -43,7 +43,7 @@ export const ROUTE_FLAGS = Object.freeze({
   ]),
   'init-run': route([
     'runtime', 'session-profile', 'model', 'effort', 'continuation',
-    'goal', 'protocol', 'recipe', 'review', ...L,
+    'goal', 'goal-contract', 'supervision', 'boundary-mode', 'protocol', 'recipe', 'review', ...L,
   ]),
   'next-action': route(['unattended', 'json', ...L], { unread: Object.freeze(['json']) }),
   'resume-command': route([...L]),
@@ -59,7 +59,7 @@ export const ROUTE_FLAGS = Object.freeze({
   'lease check': route([...F, ...L]),
   'lease acquire': route(['runtime', 'expect-generation', 'attempt-id', ...F, ...L]),
   'lease release': route([...F, ...L]),
-  'workstream new': route(['title', 'branch', 'worktree', 'depends-on', ...F, ...L]),
+  'workstream new': route(['title', 'branch', 'worktree', 'depends-on', 'requirements', ...F, ...L]),
   'workstream set': route(['id', 'status', ...F, ...L]),
   'workstream terminal': route(['id', 'status', 'confirm', 'proof', ...F, ...L]),
   'episode new': route(['plugin', 'role', 'kind', 'point', 'workstream', 'artifacts', ...F, ...L]),
