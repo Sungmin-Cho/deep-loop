@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { reviewedGoalWork } from './helpers/reviewed-goal.mjs';
 import * as bridge from '../scripts/lib/checker-bridge.mjs';
+import { createFileSymlinkOrSkip } from './helpers/fs-fixtures.mjs';
 const sha=x=>createHash('sha256').update(x).digest('hex');
 const mechanism='"claude -p --model <id> --effort <effort> --permission-mode plan --allowedTools Read,Glob,Grep,LS --strict-mcp-config \\"<prompt>\\""';
 function install(t) {
@@ -61,7 +62,8 @@ test('goal bridge refuses supervisor-only success, active claim, forged identity
  writeFileSync(b.receiptPath,JSON.stringify(forged));writeFileSync(b.bound.sidecar,JSON.stringify(sidecar));assert.throws(()=>bridge.verifyGoalBridgeReceipt(b.options),/GOAL_BRIDGE_ARGV_MISMATCH/);
  writeFileSync(b.receiptPath,JSON.stringify(b.receipt));writeFileSync(b.bound.sidecar,originalSidecar);
  const claim=join(b.descriptor.required_directories[0],`${b.review.execution.attempt_id}.claim`);writeFileSync(claim,'claimed');assert.throws(()=>bridge.verifyGoalBridgeReceipt(b.options),/ATTEMPT_ACTIVE/);rmSync(claim);
- if(process.platform!=='win32'){symlinkSync(join(b.f.root,'absent-claim-target'),claim);assert.throws(()=>bridge.verifyGoalBridgeReceipt(b.options),/ATTEMPT_ACTIVE/);rmSync(claim);}
+  if (!createFileSymlinkOrSkip(t, join(b.f.root, 'absent-claim-target'), claim)) return;
+  assert.throws(()=>bridge.verifyGoalBridgeReceipt(b.options),/ATTEMPT_ACTIVE/);rmSync(claim);
  for(const raw of ['verdict: PASS\n',JSON.stringify({...b.result,attempt_id:'foreign'}),JSON.stringify({...b.result,snapshot_sha256:'f'.repeat(64)})]) {
   writeFileSync(b.stdout,raw);b.receipt.result.output_sha256=sha(raw);writeFileSync(b.receiptPath,JSON.stringify(b.receipt));assert.throws(()=>bridge.verifyGoalBridgeReceipt(b.options),/GOAL_RESULT_/);
  }

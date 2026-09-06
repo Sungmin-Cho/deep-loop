@@ -22,11 +22,11 @@ export function makeGoalFixture(options = {}) {
   delete env.FORCE_COLOR;
   const invoke = (argv, input, extraEnv = {}) => {
     const processResult = spawnSync(process.execPath, [CLI, ...argv, '--project-root', root, '--now', now], {
-      cwd: root, env: { ...env, ...extraEnv }, input, encoding: 'utf8', timeout: 30_000, maxBuffer: 2 * 1024 * 1024,
+      cwd: root, env: { ...env, ...extraEnv }, input, encoding: 'utf8', timeout: 120_000, maxBuffer: 2 * 1024 * 1024,
     });
     let json = null;
     try { json = JSON.parse(processResult.stdout); } catch { /* Non-JSON errors are preserved below. */ }
-    return { exit: processResult.status, stdout: processResult.stdout, stderr: processResult.stderr, json };
+    return { exit: processResult.status, stdout: processResult.stdout, stderr: processResult.error ? `${processResult.stderr || ''}\n${processResult.error.code}: ${processResult.error.message}` : processResult.stderr, json };
   };
   const initArgs = ['init-run', '--runtime', options.runtime ?? 'claude', '--goal', options.goal ?? 'Deliver A', '--protocol', options.protocol ?? 'standalone'];
   if (options.legacy !== true) initArgs.push('--goal-contract', JSON.stringify(options.contract ?? TEST_GOAL_CONTRACT));

@@ -1,11 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, lstatSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { captureReconciledRunSnapshot, pauseRun, runDir } from './state.mjs';
 import { isGoalDriven } from './goal-contract.mjs';
 import { sessionRuntime, runtimeCapability } from './runtime.mjs';
 import { readLines } from './integrity.mjs';
+import { wrap } from './envelope.mjs';
 import { headlessSpawn } from './spawn-driver.mjs';
 import { leaseCheck } from './lease.mjs';
 import { nextAction } from './next-action.mjs';
@@ -19,6 +20,8 @@ import { ensureCodexPreflight } from './codex-preflight.mjs';
 import { issueGoalOwnerTurn, bindGoalOwnerResult } from './goal-owner-receipt.mjs';
 import { drivePendingGoalReview } from './goal-checker.mjs';
 import { finishRun } from './finish.mjs';
+import { ownerSession } from './session-scope.mjs';
+import { recordWorkstreamTerminal } from './workspace.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -29,22 +32,50 @@ const fenceOf = loop => ({owner:loop.session_chain.lease.owner_run_id,generation
 const measured = result => result?.termination?.confirmed === true
   && result?.process_group?.quiescence_confirmed === true && isMeasuredOneTurnUsage(result.usage);
 
-export function buildGoalOwnerPrompt({loop, action, deepLoopRoot=ROOT, profile='current', task=null}) {
-  if (!['current','minimal'].includes(profile)) throw new Error('GOAL_OWNER_PROFILE_INVALID');
-  const guidance = profile === 'current'
-    ? `Read and follow ${join(deepLoopRoot,'skills/deep-loop-continue/SKILL.md')} and its goal-execution.md reference. These are the pinned shipped execution guidance.`
-    : 'Goal owner minimal policy v1: use next-action to see remaining work; exercise your judgment to fulfill the exact goal. All loop-state changes use the kernel CLI. Keep actual artifacts and independent review proof. Continue until the real goal is satisfied.';
-  return [guidance, `Kernel executable: ${process.execPath} ${join(deepLoopRoot,'scripts/deep-loop.mjs')}`,
-    `Run identity: ${JSON.stringify({root:loop.project.root,run_id:loop.run_id,...fenceOf(loop)})}`,
-    `Goal: ${loop.goal}`, `Goal contract: ${JSON.stringify(loop.goal_contract)}`, task ? `Task context: ${task}` : '',
-    `Current action: ${JSON.stringify(action)}`,
-    'You are the persistent owner. Perform useful maker/control work in this conversation, using your own judgment about implementation. Do not fabricate reviewer results or human acknowledgements.',
-    'At dispatch_checker: create the pending checker with review dispatch (the configured deep-review-loop), then yield to the host. Do not claim or run the independent checker yourself.',
-    'At dispatch_goal_checker or reconcile_goal_review: yield to the host for independent goal assessment.',
-    'At finish: write the real final-report.md under this run directory, then yield before invoking finish; the host settles usage and performs proof-gated completion.',
-    'At handoff: use the exact canonical handoff guidance to emit the boundary, then yield; do not spawn a successor yourself.',
-    'External push, PR, merge, publish, network and delete actions are outside this isolated execution scope. A genuine ambiguity should be explained without inventing requirements.',
-    'Finish this owner turn only after useful progress or reaching a host-service boundary. The host resumes this exact conversation after service.',
+export function buildGoalOwnerContext({loop,action,deepLoopRoot=ROOT,hostBudget=null}) {
+  if(!isGoalDriven(loop) || !action || typeof action.type !== 'string')throw new Error('GOAL_OWNER_CONTEXT_INVALID');
+  if(hostBudget !== null && (!hostBudget || !['remaining_tokens','remaining_time_ms','remaining_owner_turns'].every(key=>Number.isSafeInteger(hostBudget[key]) && hostBudget[key]>=0)))throw new Error('GOAL_OWNER_CONTEXT_BUDGET_INVALID');
+  const owner=ownerSession(loop);
+  return structuredClone({context_kind:'goal-owner-v1',state_version:loop.schema_version,
+    node_path:process.execPath,kernel_path:join(deepLoopRoot,'scripts/deep-loop.mjs'),
+    root:loop.project.root,run_id:loop.run_id,...fenceOf(loop),
+    report_path:join(runDir(loop.project.root,loop.run_id),'final-report.md'),
+    report_template:wrap({producer:'deep-loop',artifact_kind:'final-report',schema:{name:'final-report',version:'1.0'},
+      run_id:loop.run_id,parent_run_id:loop.session_chain.parent_run_id,payload:{markdown:''},now:loop.updated_at}),
+    event_log_head:loop.event_log_head,scope_epoch:owner.scope_epoch,current_scope:owner.scope,
+    routing:{protocol:loop.routing.protocol},review:loop.review,host_budget:hostBudget,
+    session_profile:{model:loop.autonomy.session_model,effort:loop.autonomy.session_effort},
+    workstreams:loop.workstreams.map(({id,title,worktree,branch,status,requirement_ids,depends_on,review_points_done})=>
+      ({id,title,worktree,branch,status,requirement_ids,depends_on,review_points_done})),
+    current_action:action,
+    episodes:loop.episodes.filter(episode=>episode.id===action.episode_id || episode.id===action.target_maker)
+      .map(({id,role,plugin,kind,point,workstream_id,status,expected_artifacts,execution,routing,proof,target_maker,retry_of})=>
+        ({id,role,plugin,kind,point,workstream_id,status,expected_artifacts,execution,routing,proof,target_maker,retry_of})),
+    goal:loop.goal,goal_contract:loop.goal_contract,
+    goal_review:loop.goal_reviews.at(-1) ? {id:loop.goal_reviews.at(-1).id,status:loop.goal_reviews.at(-1).status,
+      result_rel:loop.goal_reviews.at(-1).result_rel,verdict:loop.goal_reviews.at(-1).verdict} : null});
+}
+
+export function buildGoalOwnerPrompt({loop,action,deepLoopRoot=ROOT,profile='current',task=null,hostBudget=null}) {
+  if(!['current','minimal'].includes(profile))throw new Error('GOAL_OWNER_PROFILE_INVALID');
+  const frame=buildGoalOwnerContext({loop,action,deepLoopRoot,hostBudget});
+  let policy='Goal owner minimal policy v1: fulfill the original outcomes using your judgment and the supplied action. Mutate state only through kernel CLI. Perform one bounded logical action or maker stage and yield. Independent reviewers and proof-gated closure/finish belong to the host. Never fabricate evidence or human authority.';
+  let policySource='minimal-policy-v1';
+  if(profile==='current') {
+    policySource=join(deepLoopRoot,'skills/deep-loop-workflow/references/goal-owner.md');
+    const stat=lstatSync(policySource);
+    if(!stat.isFile() || stat.isSymbolicLink() || stat.size>32768)throw new Error('GOAL_OWNER_POLICY_INVALID');
+    const bytes=readFileSync(policySource);
+    if(bytes.length>32768)throw new Error('GOAL_OWNER_POLICY_INVALID');
+    policy=new TextDecoder('utf-8',{fatal:true}).decode(bytes);
+  }
+  return [`Official ${profile} host-owner policy from ${policySource}; SHA256 ${digest(policy)}.`,policy,
+    `Host context snapshot (context, not mutation authority): ${JSON.stringify(frame)}`,
+    task ? `Task context: ${task}` : '',
+    'Use the supplied facts and action. Do not rediscover unchanged fields or load legacy/entry workflows. Refresh after the action boundary or stale/fence evidence.',
+    'Complete one bounded logical action or current maker stage; batch predictable typed CLI steps in one tool call with actual-result bindings, then yield. Do not start a second maker or retry round.',
+    'For dispatch_checker, dispatch the configured independent checker and yield; never claim or execute it as the owner. Yield for whole-goal review. At finish populate the supplied M3 report template with the factual report, write it to report_path, then yield before finish.',
+    'External push, PR, merge, publish, network and delete actions are outside this isolated execution scope. Report genuinely missing authority or requirements without inventing them.',
   ].filter(Boolean).join('\n');
 }
 
@@ -134,6 +165,7 @@ export async function driveGoalRun({root,runId,expect=null,timeoutMs,maxTurns,to
       if(evidenceFailure)return fail(`goal-evidence-write-failed:${evidenceFailure}`);
       let loop=fresh(root,runId);
       if(['completed','stopped'].includes(loop.status))return {ok:loop.status==='completed',status:loop.status,invocations,providerThreadId:thread};
+      if(loop.status==='paused')return {ok:false,status:'paused',reason:loop.pause_reason || 'run-paused',invocations,providerThreadId:thread};
       if(wallNow()-started>=timeoutMs)return fail('goal-host-deadline');
       if(tokensUsed()>tokenLimit)return fail('goal-host-token-limit');
       const emittedHandoff=loop.session_chain.lease.handoff_phase==='emitted';
@@ -157,6 +189,9 @@ export async function driveGoalRun({root,runId,expect=null,timeoutMs,maxTurns,to
       }
       const descriptor=nextAction(loop,{now:sampleNow(),unattended:true}); const action=descriptor.action;
       if(action.type==='await_human'||descriptor.gate?.allowed===false)return fail(action.reason || 'goal-host-gate-blocked');
+      if(action.type==='close_workstream') {
+        recordWorkstreamTerminal(root,runId,action.workstream_id,{status:'ready',proof:{},fence:ownerFence,now:sampleNow()});continue;
+      }
       if(action.type==='finish') {
         try {finishRun(root,runId,{status:'completed',reportRel:'final-report.md',fence:ownerFence,now:sampleNow()});continue;}
         catch(error){if(!String(error.message).toLowerCase().includes('report'))return fail(error.message);}
@@ -170,13 +205,13 @@ export async function driveGoalRun({root,runId,expect=null,timeoutMs,maxTurns,to
         if(!result?.ok)return fail(result?.reason || 'goal-checker-unavailable');continue;
       }
       if(turns>=maxTurns)return fail('owner-turn-limit');
-      const prompt=buildGoalOwnerPrompt({loop,action,deepLoopRoot,profile,task});
+      const prompt=buildGoalOwnerPrompt({loop,action,deepLoopRoot,profile,task,hostBudget:{remaining_tokens:Math.max(0,tokenLimit-tokensUsed()),remaining_time_ms:Math.max(0,remaining()),remaining_owner_turns:maxTurns-turns}});
       const entry=buildCodexGoalOwnerEntry({executable:ready.executable.canonical_path,projectRoot:root,prompt,
         model:loop.autonomy.session_model,effort:loop.autonomy.session_effort,providerThreadId:thread});
       Object.assign(entry,{env:buildMinimalCodexEnv({sourceEnv:env,codexHome:ready.codexHome.canonical_path,runId,projectRoot:root,...ownerFence}),
         cwd:root,usageOutputKind:'codex-jsonl',captureFinalMessage:true});
       const processProfile={model:loop.autonomy.session_model,effort:loop.autonomy.session_effort,
-        executable:ready.executable.canonical_path,isolation:profile,argv_sha256:digest(JSON.stringify(entry.argv))};
+        executable:ready.executable.canonical_path,isolation:profile,argv_sha256:digest(JSON.stringify(entry.argv)),prompt_sha256:digest(prompt)};
       let binding,result,accounting;
       try {
         const ownerKey=`${ownerFence.owner}:${ownerFence.generation}`;

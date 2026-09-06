@@ -32,6 +32,8 @@ deep-loop는 독립 실행 가능한(standalone/독립) Claude Code / Codex / Gr
 node "<absolute-deep-loop-root>/scripts/deep-loop.mjs" goal drive --project-root "<canonical_project_root>" --run-id <run_id> --owner <owner_run_id> --generation <generation> --timeout-ms 600000 --token-limit 500000 --profile current
 ```
 
+현재 host 프로필은 배포된 v0.5 소유자 정책과 최신 작업·문맥·남은 측정 예산을 함께 전달합니다. 예측 가능한 CLI 작업을 묶되 독립 리뷰와 증명 검사는 유지합니다.
+
 시간·토큰·턴 한도를 생략하면 현재 run의 예산을 따릅니다. smoke 프로필은 과제별 10분·측정 토큰 50만 개를 명시하며, minimal 실험 프로필은 continue 경계만 지원합니다.
 
 이 새 경로에는 POSIX process-group 감독과 종료 확인이 필요합니다. native Windows는 실험적 경로에서 지원하지 않으며, 아래 기존 호환 경로와 구분합니다. 사용량 누락, 알 수 없는 프로세스·provider binding, 확인되지 않은 teardown은 드라이버를 멈춥니다. 영속 Codex rollout은 인증된 `CODEX_HOME` 아래에 기록될 수 있습니다. host binding 상실은 증거 부재이며 다른 대화를 시작할 권한이 아닙니다. 일반 terminal CLI 쓰기는 계속 금지됩니다. 실행 전에 발급한 host receipt는 정확히 해당 소유자 턴의 마지막 비용 정산만 허용합니다.

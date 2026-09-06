@@ -32,6 +32,8 @@ For an explicitly authorized, isolated Codex run, `goal drive` runs and resumes 
 node "<absolute-deep-loop-root>/scripts/deep-loop.mjs" goal drive --project-root "<canonical_project_root>" --run-id <run_id> --owner <owner_run_id> --generation <generation> --timeout-ms 600000 --token-limit 500000 --profile current
 ```
 
+The current host profile embeds the shipped v0.5 owner policy and a fresh action/context frame, including the remaining measured budget. It batches predictable CLI work without removing independent review or proof checks.
+
 Omitted time, token and turn limits inherit the current run budget; the smoke profile explicitly uses 10 minutes and 500,000 measured tokens per trial. The minimal experimental profile supports continue boundaries only.
 
 This new driver requires POSIX process-group supervision and confirmed termination. Native Windows is unavailable for this experimental path; the existing compatibility paths below remain separate. Missing usage, an unknown process/provider binding, or unconfirmed teardown stops the driver. Persistent Codex rollouts may be written under its authenticated `CODEX_HOME`. A lost host binding is unavailable evidence, not permission to start a different conversation. Normal terminal CLI writes remain forbidden; a pre-spawn host receipt can authorize only the exact measured owner turn's final cost settlement.

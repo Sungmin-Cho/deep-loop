@@ -145,4 +145,4 @@ Superpowers returns its primary plan, then invokes the declared continuation
 with that actual plan path. A final returned stage and declared output artifacts
 are required before maker done. The normal/fix path is the same.
 
-See [goal-execution.md](goal-execution.md) for current host call sequences.
+See [goal execution](goal-execution.md) at `DEEP_LOOP_ROOT/skills/deep-loop-workflow/references/goal-execution.md` for current host call sequences.

@@ -31,7 +31,7 @@ function cli(argv,root,input) {
 export function initializeAgentGoal(root,task,{model,effort,executable,approveExecutable=true}={}) {
  const {runId}=initRun(root,{runtime:'codex',goal:task.prompt,protocol:'standalone',model,effort,supervision:'delegated',boundaryMode:'continue',
   goalContract:{version:1,requirements:[{id:'REQ-OUTCOME',statement:task.prompt,acceptance:'The integrated project root passes independent held-out behavior tests for the requested function.'}],non_goals:['External network, publication and unrelated project changes.']},
-  review:{points:['implementation'],reviewer:'deep-review-loop',mode:'cross-model',flags:[],converge:true,max_review_rounds:5,require_human_ack:false}});
+  review:{points:['implementation'],reviewer:'deep-review-loop',mode:'independent-same-model',flags:[],converge:true,max_review_rounds:5,require_human_ack:false}});
  if(approveExecutable) {
   const diagnosed=cli(['runtime-executable','diagnose','--runtime','codex','--path',executable],root);
   cli(['runtime-executable','approve','--runtime','codex','--path',executable,'--canonical-path',diagnosed.identity.canonical_path,
@@ -132,7 +132,7 @@ export async function runAgentEvaluation({profile=DEFAULT,outDir,executable,code
    const rel=relative(candidate,sessionDir);if(!rel.startsWith('..')&&!isAbsolute(rel))throw new Error('AGENT_RECEIPTS_INSIDE_CANDIDATE');
    const evidence=join(sessionDir,`${taskId}-${variant}`);mkdirSync(evidence,{mode:0o700});
    materializeFixture(candidate,task);gitInit(candidate);
-   const taskContext=`${task.prompt}\nDeliver the final working function in the integrated project root ${candidate}. The behavioral oracle will evaluate that root. Any correct implementation strategy is valid. Do not access reference solutions, hidden tests, evaluator code or unrelated directories. External network and publication are outside this task.`;
+   const taskContext=`${task.prompt}\nTrial budget: ${profile.timeout_ms / 1000} seconds and ${profile.token_limit} measured tokens, including cached input.\nDeliver the final working function in the integrated project root ${candidate}. The behavioral oracle will evaluate that root. Any correct implementation strategy is valid. Do not access reference solutions, hidden tests, evaluator code or unrelated directories. External network and publication are outside this task.`;
    json(join(evidence,'task.json'),{id:task.id,prompt:task.prompt,prompt_sha256:agentDigest(task.prompt),task_sha256:agentDigest(JSON.stringify(task))});
    const started=clock();const invocations=[];let hostResult,kernelStatus=null,runId=null,outcome=null,rawAvailable=true;
    const capture=event=>{

@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, rmSync, chmodSync, symlinkSync, readFileSync, copyFileSync, appendFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, rmSync, chmodSync, readFileSync, copyFileSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { captureGoalSnapshot, snapshotEvidenceRefs } from '../scripts/lib/goal-snapshot.mjs';
+import { createDirectoryJunction, createFileSymlink } from './helpers/fs-fixtures.mjs';
 
 function fixture(t) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'goal-snapshot-')));
@@ -48,7 +49,7 @@ test('missing, unreadable and special artifact/source identity fail closed', { s
 });
 test('rejects escape, symlink ancestor and special declared artifacts without reading FIFO', { skip: process.platform === 'win32' }, t => {
   const f = fixture(t); f.loop.episodes[0].artifacts = ['../outside']; assert.throws(f.snap, /GOAL_SNAPSHOT_UNAVAILABLE/);
-  f.loop.episodes[0].artifacts = ['.worktrees/a/link/passwd']; symlinkSync('/etc', join(f.root, '.worktrees/a/link')); assert.throws(f.snap, /GOAL_SNAPSHOT_UNAVAILABLE/);
+  f.loop.episodes[0].artifacts = ['.worktrees/a/link/passwd']; createDirectoryJunction('/etc', join(f.root, '.worktrees/a/link')); assert.throws(f.snap, /GOAL_SNAPSHOT_UNAVAILABLE/);
 });
 test('bounded file count and bytes return unavailable rather than incomplete manifests', t => {
   const f = fixture(t); assert.throws(() => f.snap({ limits: { files: 1 } }), /GOAL_SNAPSHOT_UNAVAILABLE/);
@@ -139,36 +140,36 @@ test('unresolvable detached HEAD and corrupted symbolic branch are not unborn pr
 });
 test('contained regular-file symlink captures target bytes and retargeting identity', { skip: process.platform === 'win32' }, t => {
   const f = fixture(t); f.put('.worktrees/a/equal.txt', 'workstream');
-  symlinkSync('app.txt', join(f.root, '.worktrees/a/link.txt'));
+  createFileSymlink('app.txt', join(f.root, '.worktrees/a/link.txt'));
   f.loop.episodes[0].artifacts.push('.worktrees/a/link.txt');
   const first = f.snap(), link = first.artifacts.find(item => item.path.endsWith('/link.txt'));
   assert.equal(link.symlink.target, 'app.txt'); assert.equal(link.symlink.resolved_path, '.worktrees/a/app.txt');
   assert.equal(link.sha256, createHash('sha256').update('workstream').digest('hex'));
   assert.equal(f.snap().sha256, first.sha256);
-  rmSync(join(f.root, '.worktrees/a/link.txt')); symlinkSync('equal.txt', join(f.root, '.worktrees/a/link.txt'));
+  rmSync(join(f.root, '.worktrees/a/link.txt')); createFileSymlink('equal.txt', join(f.root, '.worktrees/a/link.txt'));
   assert.notEqual(f.snap().sha256, first.sha256);
   const retargeted = f.snap(); f.put('.worktrees/a/equal.txt', 'different'); assert.notEqual(f.snap().sha256, retargeted.sha256);
 });
 test('contained Git-tracked file symlink is evidence, but cross-workstream and directory links fail closed', { skip: process.platform === 'win32' }, t => {
-  const f = gitFixture(t); symlinkSync('app.txt', join(f.root, 'link.txt')); git(f.root, 'add', 'link.txt');
+  const f = gitFixture(t); createFileSymlink('app.txt', join(f.root, 'link.txt')); git(f.root, 'add', 'link.txt');
   const snapshot = f.snap(); assert.equal(snapshot.sources[0].files.find(item => item.path === 'link.txt').symlink.target, 'app.txt');
-  symlinkSync('../../app.txt', join(f.root, '.worktrees/a/escape.txt')); assert.throws(f.snap, /GOAL_SNAPSHOT_UNAVAILABLE/);
+  createFileSymlink('../../app.txt', join(f.root, '.worktrees/a/escape.txt')); assert.throws(f.snap, /GOAL_SNAPSHOT_UNAVAILABLE/);
   rmSync(join(f.root, '.worktrees/a/escape.txt')); mkdirSync(join(f.root, '.worktrees/a/subdir'));
-  symlinkSync('subdir', join(f.root, '.worktrees/a/directory-link')); assert.throws(f.snap, /GOAL_SNAPSHOT_UNAVAILABLE/);
+  createDirectoryJunction('subdir', join(f.root, '.worktrees/a/directory-link')); assert.throws(f.snap, /GOAL_SNAPSHOT_UNAVAILABLE/);
 });
 test('symlinked worktree roots remain unavailable even when contained', { skip: process.platform === 'win32' }, t => {
-  const f = fixture(t); symlinkSync('a', join(f.root, '.worktrees/alias')); f.loop.workstreams[0].worktree = '.worktrees/alias';
+  const f = fixture(t); createDirectoryJunction('a', join(f.root, '.worktrees/alias')); f.loop.workstreams[0].worktree = '.worktrees/alias';
   assert.throws(f.snap, /GOAL_SNAPSHOT_UNAVAILABLE/);
 });
 test('a tracked dangling file link is unavailable, not a deleted tracked source', { skip: process.platform === 'win32' }, t => {
-  const f = gitFixture(t); symlinkSync('missing.txt', join(f.root, 'dangling.txt')); git(f.root, 'add', 'dangling.txt');
+  const f = gitFixture(t); createFileSymlink('missing.txt', join(f.root, 'dangling.txt')); git(f.root, 'add', 'dangling.txt');
   assert.throws(f.snap, /GOAL_SNAPSHOT_UNAVAILABLE/);
 });
 test('contained leaf-link chains preserve intermediate spelling and reject cycles', { skip: process.platform === 'win32' }, t => {
-  const f = fixture(t); symlinkSync('app.txt', join(f.root, '.worktrees/a/inner.txt'));
-  symlinkSync('inner.txt', join(f.root, '.worktrees/a/outer.txt'));
+  const f = fixture(t); createFileSymlink('app.txt', join(f.root, '.worktrees/a/inner.txt'));
+  createFileSymlink('inner.txt', join(f.root, '.worktrees/a/outer.txt'));
   const first = f.snap(), record = first.sources[1].files.find(item => item.path.endsWith('/outer.txt'));
   assert.equal(record.symlink.chain.length, 2); assert.equal(record.symlink.resolved_path, '.worktrees/a/app.txt');
-  rmSync(join(f.root, '.worktrees/a/inner.txt')); symlinkSync('outer.txt', join(f.root, '.worktrees/a/inner.txt'));
+  rmSync(join(f.root, '.worktrees/a/inner.txt')); createFileSymlink('outer.txt', join(f.root, '.worktrees/a/inner.txt'));
   assert.throws(f.snap, /GOAL_SNAPSHOT_UNAVAILABLE/);
 });

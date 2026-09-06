@@ -70,6 +70,7 @@ const FIELDS = [
   'supported_platforms', 'measured_headless', 'session_effort_allowed',
   'compact_supported', 'compact_measured_cli_versions', 'handoff_continuity_note', 'observation_runtime',
   'independent_checker_bridge',
+  'persistent_goal_owner', 'goal_checker_transports', 'goal_effort_passthrough',
 ];
 
 function walkScripts(dir = join(ROOT, 'scripts'), out = []) {
@@ -349,6 +350,11 @@ test('T-caps: grok row is complete and new fields have scripts/ consumers', () =
   assert.equal(row.handoff_continuity_note, 'grok-attended');
   assert.equal(row.observation_runtime, 'grok');
   assert.equal(row.independent_checker_bridge, 'model-router-separate-process');
+  assert.equal(row.persistent_goal_owner, false);
+  assert.deepEqual(row.goal_checker_transports, ['bridge']);
+  assert.deepEqual(row.goal_effort_passthrough, []);
+  assert.ok(Object.isFrozen(row.goal_checker_transports));
+  assert.ok(Object.isFrozen(row.goal_effort_passthrough));
   assert.equal(runtimeCapability('claude', 'independent_checker_bridge'), null);
   assert.equal(runtimeCapability('codex', 'independent_checker_bridge'), null);
   assert.equal(runtimeCapability('claude', 'session_effort_allowed'), 'kernel-set');
@@ -357,7 +363,7 @@ test('T-caps: grok row is complete and new fields have scripts/ consumers', () =
   assert.equal(runtimeCapability('grok', 'handoff_continuity_note'), 'grok-attended');
 
   const sources = walkScripts().map(file => readFileSync(file, 'utf8')).join('\n');
-  for (const field of ['supported_platforms', 'measured_headless', 'session_effort_allowed', 'compact_supported', 'compact_measured_cli_versions', 'handoff_continuity_note', 'observation_runtime', 'independent_checker_bridge']) {
+  for (const field of ['supported_platforms', 'measured_headless', 'session_effort_allowed', 'compact_supported', 'compact_measured_cli_versions', 'handoff_continuity_note', 'observation_runtime', 'independent_checker_bridge', 'persistent_goal_owner', 'goal_checker_transports', 'goal_effort_passthrough']) {
     assert.match(sources, new RegExp(`runtimeCapability\\([^\\n]*'${field}'`), `consumer for ${field}`);
   }
 });

@@ -157,7 +157,9 @@ unrelated owner mid-workstream.
 
 ## Measured host and bridge execution
 
-`goal drive` is the bounded Codex owner controller. It preserves the exact provider
+`goal drive` is the bounded Codex owner controller. Its verified v0.5 host frame
+embeds [DEEP_LOOP_ROOT/skills/deep-loop-workflow/references/goal-owner.md](goal-owner.md)
+as the current owner policy; it does not repeat generic entry or legacy discovery. It preserves the exact provider
 conversation while the owner identity remains unchanged; it yields for independent
 review and measured cost settlement. A lost provider binding is unavailable: do not
 substitute `--last` or start an unrelated conversation. The minimal experimental

@@ -1,11 +1,12 @@
 import {test} from 'node:test';
 import {spawnSync} from 'node:child_process';
 import assert from 'node:assert/strict';
-import {readFileSync,writeFileSync,mkdtempSync,rmSync,symlinkSync,statSync,chmodSync,mkdirSync} from 'node:fs';
+import {readFileSync,writeFileSync,mkdtempSync,rmSync,statSync,chmodSync,mkdirSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {runAgentEvaluation,copyStableAgentCandidate} from '../evals/drivers/codex-agent.mjs';
 import {validateAgentProfile,sameAgentSourceProvenance} from '../evals/lib/agent-report.mjs';
+import {createFileSymlink} from './helpers/fs-fixtures.mjs';
 const profile=JSON.parse(readFileSync(new URL('../evals/profiles/agent/goal-agent.json',import.meta.url)));
 const result={ok:true,usage:{num_turns:1,input_tokens:90,output_tokens:10,tokens:100},providerThreadId:'12345678-1234-4234-8234-123456789abc',finalMessage:Buffer.from('Done'),rawJsonl:'{"type":"turn.completed"}\n',termination:{confirmed:true},process_group:{mode:'required',quiescence_confirmed:true,group_id:1234}};
 const base=t=>{const p=mkdtempSync(join(tmpdir(),'agent-eval-test-'));t.after(()=>rmSync(p,{recursive:true,force:true}));return p;};
@@ -34,12 +35,14 @@ test('unsupported process groups refuse before candidate or model spawn',async t
 });
 test('current and minimal invoke the production goal kernel and fail closed on unmeasured owner output',async t=>{
  for(const variant of ['current','minimal']) {
-  const out=base(t);let calls=0;
+  const out=base(t);let calls=0;let seenEntry;
   const r=await runAgentEvaluation({profile:{...profile,profiles:[variant],tasks:[profile.tasks[0]]},outDir:out,executable:process.execPath,codexHome:out,approveExecutable:false,
-   preflight:()=>({ok:true,executable:{canonical_path:process.execPath},codexHome:{canonical_path:out}}),runProcess:entry=>{calls++;assert.match(entry.stdin,/Kernel executable/);return {...result,usage:null};}});
+   preflight:()=>({ok:true,executable:{canonical_path:process.execPath},codexHome:{canonical_path:out}}),runProcess:entry=>{calls++;seenEntry=entry;return {...result,usage:null};}});
   t.after(()=>rmSync(r.attempts[0].paths.candidate,{recursive:true,force:true}));
+  assert.match(seenEntry.stdin,/"kernel_path"/);
   assert.equal(calls,1);assert.equal(r.attempts[0].kernel_status,'paused');assert.equal(r.attempts[0].status,'unavailable');
   const state=JSON.parse(readFileSync(join(r.attempts[0].paths.candidate,'.deep-loop','runs',r.attempts[0].paths.run_id,'loop.json')));
+  assert.equal(state.review.mode,'independent-same-model');
   assert.equal(state.schema_version,'0.5.0');assert.equal(state.goal_contract.requirements[0].id,'REQ-OUTCOME');
  }
 });
@@ -51,7 +54,7 @@ test('wrong task ID rejects before any model call',async t=>{
 test('stable copy preserves executable bits, records source mode and rejects escaping symlinks',t=>{
  const dir=base(t),source=join(dir,'source'),copy=join(dir,'copy');mkdirSync(source);writeFileSync(join(source,'run.mjs'),'export const x=1');chmodSync(join(source,'run.mjs'),0o755);
  const snapshot=copyStableAgentCandidate(source,copy);assert.equal(snapshot.files[0].mode,0o755);assert.equal(statSync(join(copy,'run.mjs')).mode&0o777,0o555);
- writeFileSync(join(dir,'private'),'not oracle input');symlinkSync('../private',join(source,'escape'));
+ writeFileSync(join(dir,'private'),'not oracle input');createFileSymlink('../private',join(source,'escape'));
  assert.throws(()=>copyStableAgentCandidate(source,join(dir,'unsafe-copy')),/AGENT_SNAPSHOT_SPECIAL_FILE/);
 });
 test('truncated raw traces cannot become a passing live receipt',async t=>{

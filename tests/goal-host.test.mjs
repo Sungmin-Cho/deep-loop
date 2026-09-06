@@ -2,7 +2,7 @@ import test from 'node:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { reviewedGoalWork } from './helpers/reviewed-goal.mjs';
-import { approveScenarioGoal } from './helpers/goal-scenario.mjs';
+import { approveScenarioGoal, createScenarioMaker, produceScenarioMaker, reviewScenarioMaker } from './helpers/goal-scenario.mjs';
 import assert from 'node:assert/strict';
 import { makeGoalFixture } from './helpers/goal-fixture.mjs';
 import { driveGoalRun } from '../scripts/lib/goal-host.mjs';
@@ -15,7 +15,7 @@ function measured(extra={}) { return {ok:true,exitCode:0,usage,providerThreadId:
   process_group:{mode:'required',group_id:12345,termination_scope:'owned-posix-process-group',quiescence_confirmed:true},
   termination:{confirmed:true},...extra}; }
 function options(f, extra={}) { return {root:f.root,runId:f.runId,expect:{owner:f.runId,generation:1},maxTurns:2,
-  timeoutMs:5000,now:"2026-09-06T00:00:00Z",preflight:()=>({ok:true,executable:{canonical_path:'/usr/bin/codex',platform:process.platform},
+  timeoutMs:5000,wallNow:()=>0,now:"2026-09-06T00:00:00Z",preflight:()=>({ok:true,executable:{canonical_path:'/usr/bin/codex',platform:process.platform},
     codexHome:{canonical_path:'/tmp/codex-test'},measured_usage:[]}),...extra}; }
 
 test('goal host starts persistent owner then resumes exact provider thread and settles each call',async()=>{
@@ -110,5 +110,24 @@ test('production controller defaults inherit the configured run horizon',async()
   const opts=options(f);delete opts.timeoutMs;delete opts.maxTurns;
   const result=await driveGoalRun({...opts,preflight:params=>{offered=params.timeoutMs;return options(f).preflight();},runProcess:()=>measured({ok:false,reason:'test-stop'})});
   assert.ok(offered>23*60*60*1000);assert.equal(result.reason,'test-stop');
+ }finally{f.cleanup();}
+});
+
+test('host closes a proof-complete workstream without an extra owner call',async()=>{
+ const f=makeGoalFixture({runtime:'codex',model:'gpt-6-astra',effort:'high'});let calls=0,goalCalls=0;
+ try {
+  const ws=f.workstream('closure');const maker=createScenarioMaker(f,ws);
+  produceScenarioMaker(f,maker);reviewScenarioMaker(f,maker.id);
+  const result=await driveGoalRun({...options(f),goalService:()=>{goalCalls++;assert.equal(f.state().workstreams[0].status,'ready');return {ok:false,reason:'test-goal-boundary'};},runProcess:()=>{calls++;return measured();}});
+  assert.equal(result.reason,'test-goal-boundary');assert.equal(calls,0);assert.equal(goalCalls,1);
+ }finally{f.cleanup();}
+});
+
+test('the owner may pause for genuinely missing input without being forced into another turn',async()=>{
+ const f=makeGoalFixture({runtime:'codex',model:'gpt-6-astra',effort:'high'});let calls=0;
+ try {
+  const result=await driveGoalRun(options(f,{runProcess:()=>{calls++;const paused=f.cli(['pause','--reason','need-input: clarify required behavior']);assert.equal(paused.exit,0,paused.stderr);return measured();}}));
+  assert.equal(calls,1);assert.equal(result.status,'paused');assert.equal(result.reason,'need-input: clarify required behavior');
+  assert.equal(result.invocations[0].accounting.ok,true);
  }finally{f.cleanup();}
 });
