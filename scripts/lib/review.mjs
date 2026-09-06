@@ -18,6 +18,9 @@ import { validate } from './schema.mjs';
 import { assertScopeAllows } from './session-scope.mjs';
 import { epOrder, isProofCapableChecker } from './episode-predicates.mjs';
 import { observeTerminalEpisode } from './route-observation.mjs';
+import { isGoalDriven } from './goal-contract.mjs';
+import { createExecutionRecord } from './attempt-state.mjs';
+import { reviewFailureLimit } from './breaker.mjs';
 import {
   deriveReviewArtifactContract,
   parseReviewImport,
@@ -177,21 +180,24 @@ export function claimIndependentReview(root, runId, options = {}) {
   for (const key of ['attemptId', 'attempt_id', 'reviewer_id', 'target_maker', 'runtime', 'project_root', 'artifacts', 'evidence', 'contract']) {
     if (Object.hasOwn(options, key)) throw new Error(`REVIEW_METADATA_FORBIDDEN: claim derives ${key}`);
   }
-  const { episodeId, fence, attemptIdFactory = randomUUID } = options;
+  const { episodeId, fence, attemptIdFactory = randomUUID, now = Date.now() } = options;
   validFence(fence, 'claimIndependentReview');
   if (typeof episodeId !== 'string' || episodeId.length === 0) throw new Error('REVIEW_CLAIM_INPUT_INVALID: episodeId');
   if (typeof attemptIdFactory !== 'function') throw new Error('REVIEW_CLAIM_INPUT_INVALID: attemptIdFactory');
   const attemptId = attemptIdFactory();
   if (!REVIEW_ATTEMPT_ID.test(attemptId || '')) throw new Error('REVIEW_CLAIM_ATTEMPT_INVALID');
   const eventData = { episode_id: episodeId, attempt_id: attemptId };
+  const goalMode = isGoalDriven(captureReconciledRunSnapshot(root, runId).data);
   let context;
+  let execution;
   let alreadyClaimed = false;
   try {
-    appendAnchored(root, runId, { type: 'independent-review-claimed', data: eventData }, (loop) => {
+    appendAnchored(root, runId, { type: 'independent-review-claimed', data: eventData, now }, (loop) => {
       const checker = loop.episodes.find(episode => episode.id === episodeId);
       checker.status = 'in_progress';
       checker.attempt_id = attemptId;
       checker.review_claim = context.claim;
+      if (execution) checker.execution = execution;
     }, (loop) => {
       checkIndependentReviewFence(loop, fence);
       const checker = loop.episodes.find(episode => episode.id === episodeId);
@@ -202,6 +208,8 @@ export function claimIndependentReview(root, runId, options = {}) {
       if (loop.status !== 'running') throw new Error('REVIEW_CLAIM_RUN_NOT_RUNNING');
       if (checker?.status !== 'pending') throw new Error('REVIEW_CLAIM_NOT_PENDING');
       context = claimedContext(root, loop, episodeId, attemptId, fence);
+      if (isGoalDriven(loop)) execution = createExecutionRecord({ attemptId, mode: 'external', stage: 'primary',
+        task: `Independently review ${context.claim.target_maker} at ${context.claim.point}`, now });
       Object.assign(eventData, {
         reviewer_id: context.claim.reviewer_id,
         target_maker: context.claim.target_maker,
@@ -209,7 +217,7 @@ export function claimIndependentReview(root, runId, options = {}) {
         point: context.claim.point,
         artifacts: context.claim.artifacts,
       });
-    });
+    }, { floor: goalMode ? MUTATION_TURN_FLOOR : 0 });
   } catch (error) {
     if (error?.alreadyClaimed === true || alreadyClaimed) return { ok: false, reason: 'already-claimed' };
     throw error;
@@ -272,9 +280,6 @@ function reportBoundToWorktree(root, realReport, worktreeRel) {
   try { wt = realpathSync(resolve(root, worktreeRel)); } catch { return false; }
   return realReport === wt || realReport.startsWith(wt + sep);
 }
-
-// 연속 REQUEST_CHANGES 임계 (breaker.mjs THRESHOLD 미러 — fail-stop latch).
-const BREAKER_THRESHOLD = 3;
 
 // UNIFIED rejected-checker resolution predicate — the SINGLE source of truth for
 // "is this rejected checker RESOLVED (superseded)?", shared by next-action.mjs (routing)
@@ -564,6 +569,9 @@ function checkedContext(loop, episodeId, { reviewSource } = {}) {
   if (reviewSource === 'recorded-path' && checker.review_claim) {
     throw new Error('REVIEW_CLAIM_REQUIRES_IMPORT: a host claim can be completed only by review import');
   }
+  if (isGoalDriven(loop) && (reviewSource !== 'imported-stdin' || !checker.review_claim
+    || checker.execution?.phase !== 'returned' || checker.execution.attempt_id !== checker.attempt_id
+    || checker.execution.observation?.state !== 'succeeded')) throw new Error('REVIEW_EXECUTION_RETURN_REQUIRED');
   if (!checker.target_maker) throw new Error('REVIEW_UNBOUND_CHECKER: cannot record a verdict on a checker bound to no maker: ' + episodeId);
   const maker = context.maker;
   if (!maker || maker.role !== 'maker') throw new Error('REVIEW_TARGET_MAKER_INVALID: ' + checker.target_maker);
@@ -645,7 +653,7 @@ function commitReviewOutcome(root, runId, {
       const breaker = loop.circuit_breaker;
       if (verdict === 'REQUEST_CHANGES') {
         breaker.consecutive_request_changes = (breaker.consecutive_request_changes || 0) + 1;
-        if (breaker.consecutive_request_changes >= BREAKER_THRESHOLD && !breaker.tripped) {
+        if (breaker.consecutive_request_changes >= reviewFailureLimit(loop) && !breaker.tripped) {
           breaker.tripped = true;
           breaker.trip_reason = 'consecutive-request-changes';
           loop.status = 'paused';

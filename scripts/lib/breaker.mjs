@@ -1,13 +1,20 @@
 import { writeState, withReconciledMutationLock } from './state.mjs';
 import { leaseCheck } from './lease.mjs';
 import { recoveryReservationKind } from './budget.mjs';
+import { isGoalDriven, GOAL_LIMITS } from './goal-contract.mjs';
 
 const THRESHOLD = 3;
+export function reviewFailureLimit(loop) {
+  if (!isGoalDriven(loop)) return THRESHOLD;
+  const limit = loop.review?.max_review_rounds;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > GOAL_LIMITS.reviewRounds) throw new Error('GOAL_POLICY_INVALID: max_review_rounds');
+  return limit;
+}
 
 export function checkBreaker(loop) {
   const cb = loop.circuit_breaker || {};
   if (cb.tripped) return { tripped: true, reason: cb.trip_reason || 'tripped' };
-  if ((cb.consecutive_request_changes || 0) >= THRESHOLD) return { tripped: true, reason: 'consecutive-request-changes' };
+  if ((cb.consecutive_request_changes || 0) >= reviewFailureLimit(loop)) return { tripped: true, reason: 'consecutive-request-changes' };
   return { tripped: false, reason: null };
 }
 
@@ -61,7 +68,7 @@ export function recordReviewVerdict(root, runId, verdict, fence) {
     const cb = data.circuit_breaker || { consecutive_request_changes: 0 };
     if (verdict === 'REQUEST_CHANGES') {
       cb.consecutive_request_changes = (cb.consecutive_request_changes || 0) + 1;
-      if (cb.consecutive_request_changes >= THRESHOLD && !cb.tripped) {
+      if (cb.consecutive_request_changes >= reviewFailureLimit(data) && !cb.tripped) {
         cb.tripped = true;
         cb.trip_reason = 'consecutive-request-changes';
         data.status = 'paused';

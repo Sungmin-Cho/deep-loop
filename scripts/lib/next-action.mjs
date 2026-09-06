@@ -4,6 +4,8 @@ import { computeDebt } from './comprehension.mjs';
 import { makerReviewed, unsatisfiedReviewPoints, rejectionResolved } from './review.mjs';
 import { finishProofState } from './finish.mjs';
 import { classifyCompactHostForLoop, readableSessionRuntime } from './runtime.mjs';
+import { executionAction } from './execution.mjs';
+import { isGoalDriven } from './goal-contract.mjs';
 
 function currentSessionTurns(loop) {
   const s = (loop.session_chain?.sessions || []).find(x => x.run_id === loop.session_chain?.lease?.owner_run_id);
@@ -237,6 +239,10 @@ export function nextAction(loop, { now = Date.now(), unattended = false } = {}) 
 
   const routingLoop = workstreamSession ? scopedRoutingView(loop, currentSession) : loop;
   const route = () => {
+    if (isGoalDriven(loop)) {
+      const existing = (routingLoop.episodes || []).map(episode => executionAction(loop, episode)).find(Boolean);
+      if (existing) return A(gate, existing, '/deep-loop-continue');
+    }
     const ep = (routingLoop.episodes || []).find(e => e.id === routingLoop.current_episode);
     if (!ep) {
       if (!routingLoop.episodes || routingLoop.episodes.length === 0) {

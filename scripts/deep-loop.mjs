@@ -34,10 +34,13 @@ import { resolveRunContext } from './lib/run-context.mjs';
 import { leaseCheck, acquireLease, releaseLease, sameBoundaryEvent } from './lib/lease.mjs';
 import { newWorkstream, setWorkstreamStatus, recordWorkstreamTerminal } from './lib/workspace.mjs';
 import { newEpisode, recordEpisode, abandonEpisode } from './lib/episode.mjs';
+import { prepareExecution, startExecution, returnExecution, reconcileExecution } from './lib/execution.mjs';
+import { isGoalDriven } from './lib/goal-contract.mjs';
 import { projectObservationForCli } from './lib/route-observation.mjs';
 import {
   configureReviewFlags,
   dispatchReview,
+  claimIndependentReview,
   importReviewOutcome,
   recordReviewOutcome,
 } from './lib/review.mjs';
@@ -348,7 +351,8 @@ export const MUTATING_ROUTE_INVENTORY = Object.freeze([
   'checkpoint emit', 'checkpoint observe', 'checkpoint restore', 'lease acquire', 'lease release',
   'workstream new', 'workstream set', 'workstream terminal',
   'episode new', 'episode record', 'episode abandon',
-  'review configure', 'review dispatch', 'review record', 'review import',
+  'execution prepare', 'execution start', 'execution return', 'execution reconcile',
+  'review configure', 'review dispatch', 'review claim', 'review record', 'review import',
   'handoff emit', 'respawn', 'state patch', 'pause', 'recover', 'recovery acquire',
   'budget record', 'budget extend', 'comprehension ack', 'breaker reset',
   'insights emit', 'spawn-style offer-desktop', 'spawn-style confirm-desktop',
@@ -1301,6 +1305,29 @@ const handlers = {
     }
     error(`unknown workstream verb: ${verb}`); return 2;
   },
+  execution: async (a) => {
+    const [verb, ...rest] = a;
+    const f = parseFlags(rest); const root = rootOf(f); const runId = runIdOf(root, f);
+    const required = { prepare: ['episode', 'mode', 'stage', 'task'], start: ['episode', 'attempt', 'handle'], return: ['episode', 'attempt', 'artifacts'], reconcile: ['episode', 'attempt', 'observation'] };
+    if (!required[verb]) { error('USAGE: execution prepare|start|return|reconcile'); return 2; }
+    for (const name of Object.keys(f)) {
+      if (f[name] === true || f[name] === '' || flagOccurrences(rest, name) !== 1) { error(`USAGE: --${name} requires one value`); return 2; }
+    }
+    for (const name of required[verb]) if (!reqStr(f, name)) { error(`USAGE: --${name} requires a value`); return 2; }
+    requireLease(root, runId, f);
+    const fence = { owner: f.owner, generation: intArg(f, 'generation'), intent: 'business' };
+    const common = { episodeId: f.episode, attemptId: f.attempt, fence, now: parseNow(f) };
+    try {
+      let result;
+      if (verb === 'prepare') result = prepareExecution(root, runId, { ...common, mode: f.mode, stage: f.stage, task: f.task, ...(f.routing !== undefined ? { routing: JSON.parse(f.routing) } : {}) });
+      if (verb === 'start') result = startExecution(root, runId, { ...common, handle: f.handle });
+      if (verb === 'return') result = returnExecution(root, runId, { ...common, artifacts: JSON.parse(f.artifacts), ...(f.observation !== undefined ? { observation: JSON.parse(f.observation) } : {}) });
+      if (verb === 'reconcile') result = reconcileExecution(root, runId, { ...common, observation: JSON.parse(f.observation) });
+      json(result); return 0;
+    } catch (cause) {
+      const failure = kernelFailure(cause); error(failure.message); return failure.code;
+    }
+  },
   episode: async (a) => {
     const [verb, ...rest] = a; const f = parseFlags(rest); const root = rootOf(f); const runId = runIdOf(root, f);
     requireLease(root, runId, f);
@@ -1310,7 +1337,8 @@ const handlers = {
       const role = reqStr(f, 'role'); if (!role) { error('MISSING_ROLE'); return 2; }
       const kind = reqStr(f, 'kind'); if (!kind) { error('MISSING_KIND'); return 2; }
       const point = reqStr(f, 'point'); if (!point) { error('MISSING_POINT'); return 2; }
-      const r = newEpisode(root, runId, { plugin, role, kind, point, workstream: f.workstream, expectedArtifacts: f.artifacts ? JSON.parse(f.artifacts) : [], fence, now: parseNow(f) }); json({ id: r.id, request_rel: r.requestRel, request_path: r.requestPath }); return 0;
+      if (f['retry-of'] === true || f['retry-of'] === '') { error('USAGE: --retry-of requires an episode ID'); return 2; }
+      const r = newEpisode(root, runId, { plugin, role, kind, point, workstream: f.workstream, expectedArtifacts: f.artifacts ? JSON.parse(f.artifacts) : [], retryOf: f['retry-of'], fence, now: parseNow(f) }); json({ id: r.id, request_rel: r.requestRel, request_path: r.requestPath }); return 0;
     }
     if (verb === 'record') {
       const id = reqStr(f, 'id'); if (!id) { error('MISSING_ID'); return 2; }
@@ -1403,6 +1431,12 @@ const handlers = {
         const failure = kernelFailure(e, { extra: [['CONFIRM_REQUIRED', 2]] });
         error(failure.message); return failure.code;
       }
+    }
+    if (verb === 'claim') {
+      const episodeId = reqStr(f, 'episode');
+      if (!episodeId) { error('USAGE: --episode is required'); return 2; }
+      if (!isGoalDriven(captureReconciledRunSnapshot(root, runId).data)) throw new Error('GOAL_CONTRACT_REQUIRED: public review claim requires v0.5');
+      json(claimIndependentReview(root, runId, { episodeId, fence, now: parseNow(f) })); return 0;
     }
     if (verb === 'dispatch') {
       const point = reqStr(f, 'point'); if (!point) { error('MISSING_POINT'); return 2; }

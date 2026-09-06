@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isExecutionRecord } from './attempt-state.mjs';
 
 export const GOAL_LIMITS = Object.freeze({ requirements: 64, text: 4096, goal: 65536, workstreams: 256, reviewRounds: 16 });
 export const GOAL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -137,4 +138,13 @@ export function validateGoalState(loop, errors) {
     if (!Array.isArray(session?.scope_history) || session.scope_history.length !== 0) errors.push('v0.5 scope_history must be an empty supported history');
   }
   validateMappings(loop, errors);
+  for (const episode of (Array.isArray(loop.episodes) ? loop.episodes : [])) {
+    if (episode.execution !== undefined && !isExecutionRecord(episode.execution)) errors.push('invalid episode execution record');
+    if (episode.execution_history !== undefined && (!Array.isArray(episode.execution_history)
+      || episode.execution_history.length > 64 || episode.execution_history.some(item => !isExecutionRecord(item)))) errors.push('invalid episode execution history');
+    if (episode.retry_of !== undefined && (typeof episode.retry_of !== 'string' || !loop.episodes.some(item => item.id === episode.retry_of && item.role === 'maker'))) errors.push('invalid episode retry source');
+    if (episode.role === 'maker' && episode.status === 'done' && (episode.execution?.phase !== 'returned'
+      || episode.execution.stage !== episode.execution.required_stages?.at(-1))) errors.push('v0.5 maker done requires returned final execution');
+    if (episode.role === 'checker' && episode.review_claim && episode.execution?.attempt_id !== episode.attempt_id) errors.push('checker execution and claim identities disagree');
+  }
 }

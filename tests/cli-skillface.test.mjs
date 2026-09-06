@@ -25,6 +25,7 @@ import { dispatchReview } from '../scripts/lib/review.mjs';
 const CLI = join(process.cwd(), 'scripts', 'deep-loop.mjs');
 const MUTATING = new Set([
   'state patch', 'budget record', 'budget extend', 'episode new', 'episode record', 'episode abandon',
+  'execution prepare', 'execution start', 'execution return', 'execution reconcile', 'review claim',
   'review configure', 'review dispatch', 'review record', 'review import', 'workstream new', 'workstream set',
   'workstream terminal', 'checkpoint emit', 'checkpoint observe', 'checkpoint restore',
   'lease acquire', 'lease release', 'comprehension ack',
@@ -107,7 +108,8 @@ test('all mutating routes reject missing, value-less, empty, and duplicate run-i
     ['lease', 'acquire'], ['lease', 'release'],
     ['workstream', 'new'], ['workstream', 'set'], ['workstream', 'terminal'],
     ['episode', 'new'], ['episode', 'record'], ['episode', 'abandon'],
-    ['review', 'configure'], ['review', 'dispatch'], ['review', 'record'], ['review', 'import'],
+    ['execution', 'prepare'], ['execution', 'start'], ['execution', 'return'], ['execution', 'reconcile'],
+    ['review', 'configure'], ['review', 'dispatch'], ['review', 'claim'], ['review', 'record'], ['review', 'import'],
     ['handoff', 'emit'], ['respawn'], ['state', 'patch'], ['pause'], ['recover'],
     ['recovery', 'acquire'], ['budget', 'record'], ['budget', 'extend'],
     ['comprehension', 'ack'], ['breaker', 'reset'], ['insights', 'emit'],

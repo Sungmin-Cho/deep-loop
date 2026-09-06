@@ -28,7 +28,7 @@ export function makeGoalFixture(options = {}) {
     try { json = JSON.parse(processResult.stdout); } catch { /* Non-JSON errors are preserved below. */ }
     return { exit: processResult.status, stdout: processResult.stdout, stderr: processResult.stderr, json };
   };
-  const initArgs = ['init-run', '--runtime', options.runtime ?? 'claude', '--goal', options.goal ?? 'Deliver A', '--protocol', 'standalone'];
+  const initArgs = ['init-run', '--runtime', options.runtime ?? 'claude', '--goal', options.goal ?? 'Deliver A', '--protocol', options.protocol ?? 'standalone'];
   if (options.legacy !== true) initArgs.push('--goal-contract', JSON.stringify(options.contract ?? TEST_GOAL_CONTRACT));
   if (options.supervision !== undefined) initArgs.push('--supervision', options.supervision);
   if (options.boundaryMode !== undefined) initArgs.push('--boundary-mode', options.boundaryMode);
@@ -40,10 +40,10 @@ export function makeGoalFixture(options = {}) {
   }
   const runId = initial.json.run_id;
   const fence = { owner: runId, generation: 1, intent: 'business' };
-  const cli = (argv, { input } = {}) => invoke([
+  const cli = (argv, { input, fence: commandFence = fence } = {}) => invoke([
     ...argv, '--run-id', runId,
     ...(['state', 'next-action', 'validate', 'goal'].includes(argv[0])
-      && (argv[0] !== 'goal' || argv[1] === 'status') ? [] : ['--owner', fence.owner, '--generation', String(fence.generation)]),
+      && (argv[0] !== 'goal' || argv[1] === 'status') ? [] : ['--owner', commandFence.owner, '--generation', String(commandFence.generation)]),
   ], input);
   const state = () => {
     const result = cli(['state', 'get']);
