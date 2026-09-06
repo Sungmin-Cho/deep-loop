@@ -1,15 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runStep, substitutePlaceholders } from '../evals/lib/drive.mjs';
 import { assertFullBankGate, buildReport } from '../evals/lib/report.mjs';
-import { validateHostAcceptanceResult } from '../evals/lib/host-acceptance.mjs';
+import { runAllowReviewImport111, validateHostAcceptanceResult } from '../evals/lib/host-acceptance.mjs';
 import { materializeSetupFiles } from '../evals/lib/fixture.mjs';
 import { executeOutcome, loadFixtureProfile, runFamily3BarrierEvidence, runFixtureEvaluation } from '../scripts/eval-deep-loop.mjs';
-import { executeKernelTask } from '../evals/lib/scenarios.mjs';
+import { executeKernelTask, seedHostTopology } from '../evals/lib/scenarios.mjs';
 import { recomputeKernelObservation } from '../evals/lib/scenarios.mjs';
 import { validateResult } from '../evals/lib/validate.mjs';
 import { verdict } from '../evals/graders/verdict.mjs';
@@ -55,6 +55,24 @@ test('host acceptance result is validated before accounting and reports do not i
   assert.equal(validateHostAcceptanceResult(task, result, binding).ok, true);
   const report = buildReport([outcomeResult()], { now: '2026-08-10T00:00:00Z', bank: [{ id: 'x' }], out: '/tmp/private-root' });
   assert.equal(JSON.stringify(report).includes('/tmp/private-root'), false);
+});
+
+test('allow-review-import host acceptance executes the seeded dispatch claim and public import', (t) => {
+  const task = JSON.parse(readFileSync(new URL('../evals/tasks/allow-review-import-111.json', import.meta.url), 'utf8'));
+  const seeded = seedHostTopology(task);
+  t.after(() => rmSync(seeded.context.root, { recursive: true, force: true }));
+  const result = runAllowReviewImport111({
+    projectRoot: seeded.context.root, runId: seeded.context.runId,
+    fence: { owner: seeded.context.runId, generation: 1, intent: 'business' }, workstreamId: seeded.workstreamId,
+  });
+  assert.equal(result.status, 'pass');
+  assert.equal(result.import_exit, 0);
+  assert.equal(validateHostAcceptanceResult(task, result, seeded.expectedBinding).ok, true);
+  const persisted = JSON.parse(readFileSync(join(seeded.context.runDir, 'loop.json'), 'utf8'));
+  const checker = persisted.episodes.find(episode => episode.id === '002-deep-review');
+  assert.equal(checker.status, 'approved');
+  assert.equal(checker.review_source, 'imported-stdin');
+  assert.equal(checker.target_maker, seeded.makerId);
 });
 
 test('family 3 requires both executed named barrier results and the full-bank gate fails closed', () => {
