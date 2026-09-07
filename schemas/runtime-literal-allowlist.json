@@ -27,13 +27,13 @@
     },
     {
       "file": "scripts/lib/headless-host.mjs",
-      "line": 1644,
+      "line": 1645,
       "literal": "runtime === 'codex' && terminal(freshLoop) && childAcquired",
       "reason": "settleTerminalCodexMakerCost의 호출부. 불변식 6이 결제를 codex에 바인딩하므로 피호출부와 함께 정체성으로 남긴다"
     },
     {
       "file": "scripts/lib/headless-host.mjs",
-      "line": 1674,
+      "line": 1675,
       "literal": "runtime === 'codex' && terminal(freshLoop) && childAcquired",
       "reason": "위와 같은 결제 경로의 오류 처리"
     },

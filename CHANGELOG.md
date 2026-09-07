@@ -36,8 +36,8 @@ All notable changes to deep-loop are documented in this file.
   spending another two measured smokes.
 - Windows Git worktree and trusted-checker path identity now folds `\\?\` prefixes,
   separators and case, and accepts the same NTFS node when 8.3 and long names differ.
-- Windows Codex headless continuation uses the shared host preflight path instead of
-  pausing as `runtime-identity-unavailable`.
+- Windows Codex headless continuation threads the host's already-proved executable
+  revalidator into respawn instead of independently probing `--version`.
 
 ### Validation boundary
 

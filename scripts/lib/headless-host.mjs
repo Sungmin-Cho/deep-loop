@@ -1526,6 +1526,7 @@ function driveHeadlessRunLocked({
     launchCommandBuilder,
     expect: parentFence,
     expectedMode: 'headless',
+    revalidateRuntimeExecutable: revalidateExecutable,
   });
   const freshLoop = captureFreshLoop(projectRoot, runId);
   const childAcquired = exactChildAcquired(freshLoop, childRunId);

@@ -497,8 +497,8 @@ export function respawn(root, runId, {
   const requiresPosixTmuxLauncher = ['linux', 'darwin'].includes(platform) && mode === 'tmux';
   // The shared headless host owns Codex executable preflight and post-CAS
   // revalidation. This local authority path is for auto-visible continuation;
-  // Windows visible wt/powershell still require a direct runtime identity.
-  const requiresRuntime = (platform === 'win32' && (mode === 'wt' || mode === 'powershell'))
+  // Windows keeps its existing direct runtime requirement for every non-App mode.
+  const requiresRuntime = (platform === 'win32' && mode !== 'desktop')
     || requiresPosixVisibleTrust;
   const requiresWindowsLauncher = platform === 'win32'
     && (mode === 'wt' || mode === 'powershell'
