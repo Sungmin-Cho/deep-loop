@@ -15,7 +15,7 @@ test('agent profiles are separate from legacy read-only profiles and enforce cap
  assert.equal(validateAgentProfile({...profile,timeout_ms:600001}),false);assert.equal(validateAgentProfile({...profile,trials:2}),false);
 });
 test('native real behavioral oracle passes correct code and never trusts a completion label',async t=>{
- const out=base(t); const options={profile:{...profile,profiles:['native'],tasks:[profile.tasks[0]]},outDir:out,executable:process.execPath,codexHome:out};
+ const out=base(t); const options={profile:{...profile,profiles:['native'],tasks:[profile.tasks[0]]},outDir:out,executable:process.execPath,codexHome:out,platform:'linux'};
  const bad=await runAgentEvaluation({...options,runProcess:()=>result}); assert.equal(bad.attempts[0].outcome_pass,false);
  const good=await runAgentEvaluation({...options,runProcess:entry=>{const head=spawnSync('git',['-C',entry.cwd,'rev-parse','HEAD'],{encoding:'utf8'});assert.equal(head.status,0);assert.match(head.stdout.trim(),/^[0-9a-f]{40}$/);writeFileSync(join(entry.cwd,'solution.mjs'),'export function sumNumbers(v){return v.reduce((a,b)=>a+b,0)}\n');return result;}});
  assert.equal(good.attempts[0].outcome_pass,true);assert.equal(good.attempts[0].status,'passed');assert.equal(good.attempts[0].kernel_completed,false);
@@ -25,7 +25,7 @@ test('native real behavioral oracle passes correct code and never trusts a compl
 });
 test('unknown usage or teardown stops all subsequent trials before spawning',async t=>{
  for(const bad of [{...result,usage:null},{...result,termination:{confirmed:false}}]) {
-  let calls=0;const out=base(t);const r=await runAgentEvaluation({profile:{...profile,profiles:['native']},outDir:out,executable:process.execPath,codexHome:out,runProcess:()=>{calls++;return bad;}});
+  let calls=0;const out=base(t);const r=await runAgentEvaluation({profile:{...profile,profiles:['native']},outDir:out,executable:process.execPath,codexHome:out,platform:'linux',runProcess:()=>{calls++;return bad;}});
   assert.equal(calls,1);assert.equal(r.attempts.length,1);assert.equal(r.stopped,true);assert.equal(r.attempts[0].status,'unavailable');
  }
 });
@@ -36,7 +36,7 @@ test('unsupported process groups refuse before candidate or model spawn',async t
 test('current and minimal invoke the production goal kernel and fail closed on unmeasured owner output',async t=>{
  for(const variant of ['current','minimal']) {
   const out=base(t);let calls=0;let seenEntry;
-  const r=await runAgentEvaluation({profile:{...profile,profiles:[variant],tasks:[profile.tasks[0]]},outDir:out,executable:process.execPath,codexHome:out,approveExecutable:false,
+  const r=await runAgentEvaluation({profile:{...profile,profiles:[variant],tasks:[profile.tasks[0]]},outDir:out,executable:process.execPath,codexHome:out,platform:'linux',approveExecutable:false,
    preflight:()=>({ok:true,executable:{canonical_path:process.execPath},codexHome:{canonical_path:out}}),runProcess:entry=>{calls++;seenEntry=entry;return {...result,usage:null};}});
   t.after(()=>rmSync(r.attempts[0].paths.candidate,{recursive:true,force:true}));
   assert.match(seenEntry.stdin,/"kernel_path"/);
@@ -60,7 +60,7 @@ test('stable copy preserves executable bits, records source mode and rejects esc
  assert.throws(()=>copyStableAgentCandidate(source,join(dir,'unsafe-copy')),/AGENT_SNAPSHOT_SPECIAL_FILE/);
 });
 test('truncated raw traces cannot become a passing live receipt',async t=>{
- const out=base(t);const r=await runAgentEvaluation({profile:{...profile,profiles:['native'],tasks:[profile.tasks[0]]},outDir:out,executable:process.execPath,codexHome:out,
+ const out=base(t);const r=await runAgentEvaluation({profile:{...profile,profiles:['native'],tasks:[profile.tasks[0]]},outDir:out,executable:process.execPath,codexHome:out,platform:'linux',
  runProcess:(entry,options)=>{assert.equal(options.captureRawJsonl,true);writeFileSync(join(entry.cwd,'solution.mjs'),'export function sumNumbers(v){return v.reduce((a,b)=>a+b,0)}');return {...result,rawJsonlTruncated:true};}});
  t.after(()=>rmSync(r.attempts[0].paths.candidate,{recursive:true,force:true}));
  assert.equal(r.attempts[0].outcome_pass,true);assert.equal(r.attempts[0].raw_trace_available,false);assert.equal(r.attempts[0].status,'unavailable');

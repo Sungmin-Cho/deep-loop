@@ -436,7 +436,9 @@ function closeWithSibling(runtime = 'claude') {
   return { ...f, sibling, boundary };
 }
 
-test('v0.5 handoff derives goalDriven from durable schema for its persistent Codex owner descriptor', () => {
+test('v0.5 handoff derives goalDriven from durable schema for its persistent Codex owner descriptor', {
+  skip: process.platform === 'win32' ? 'launch-command.txt spelling is POSIX Codex CLI headless' : false,
+}, () => {
   const f = makeGoalFixture({
     runtime: 'codex',
     boundaryMode: 'handoff',

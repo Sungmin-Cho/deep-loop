@@ -38,7 +38,9 @@ test('goal-contract init opts into validated v0.5 while released v0.4 remains re
   assert.equal(legacyValidate(old, legacySchema).ok, true);
 });
 
-test('the released validator fixture matches its pinned source bytes', () => {
+test('the released validator fixture matches its pinned source bytes', {
+  skip: process.platform === 'win32' ? 'pinned fixture bytes are LF; win32 checkout may convert' : false,
+}, () => {
   const manifest = JSON.parse(readFileSync(new URL('./fixtures/legacy-v04/provenance.json', import.meta.url), 'utf8'));
   assert.equal(manifest.commit, '8763b48b14635ab40251d74de88448e43f722ec5');
   assert.equal(manifest.files.length, 6);

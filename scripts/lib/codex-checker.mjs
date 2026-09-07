@@ -40,6 +40,12 @@ function contained(root, candidate) {
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
+function sameLexicalPath(left, right) {
+  if (left === right) return true;
+  if (process.platform !== 'win32') return false;
+  return resolve(left).toLowerCase() === resolve(right).toLowerCase();
+}
+
 export function inspectCheckerFileIdentity(path, { maxBytes = MAX_FILE_BYTES } = {}) {
   const lexical = absolutePath(path, 'checker-file-invalid');
   const before = lstatSync(lexical, { bigint: true });
@@ -47,7 +53,7 @@ export function inspectCheckerFileIdentity(path, { maxBytes = MAX_FILE_BYTES } =
     || (before.mode & 0o444n) === 0n) throw new Error('checker-file-invalid');
   const canonical = (realpathSync.native || realpathSync)(lexical);
   const canonicalStat = lstatSync(canonical, { bigint: true });
-  if (resolve(canonical) !== lexical || !sameNode(before, canonicalStat)) throw new Error('checker-file-drift');
+  if (!sameLexicalPath(resolve(canonical), lexical) || !sameNode(before, canonicalStat)) throw new Error('checker-file-drift');
   const fd = openSync(canonical, 'r');
   let bytes;
   try {
@@ -78,7 +84,7 @@ function inspectDirectory(path, parent = null) {
   if (before.isSymbolicLink() || !before.isDirectory()) throw new Error('checker-directory-invalid');
   const canonical = (realpathSync.native || realpathSync)(lexical);
   const after = lstatSync(canonical, { bigint: true });
-  if (resolve(canonical) !== lexical || after.isSymbolicLink() || !after.isDirectory()
+  if (!sameLexicalPath(resolve(canonical), lexical) || after.isSymbolicLink() || !after.isDirectory()
     || before.dev !== after.dev || before.ino !== after.ino || before.mode !== after.mode
     || (parent && !contained(parent, canonical))) throw new Error('checker-directory-drift');
   return {

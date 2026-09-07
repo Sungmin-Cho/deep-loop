@@ -17,6 +17,8 @@ const fail = reason => { throw new Error(`GOAL_SNAPSHOT_UNAVAILABLE: ${reason}`)
 const order = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 const inside = (root, path) => path === root || path.startsWith(root + sep);
 const portable = path => path.split(sep).join('/');
+const sameFsPath = (left, right) => left === right
+  || (process.platform === 'win32' && resolve(left).toLowerCase() === resolve(right).toLowerCase());
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort(order).map(key => [key, canonical(value[key])]));
@@ -162,7 +164,7 @@ export function captureGoalSnapshot(rootInput, loop, options = {}) {
       }
       if (!marker(directory)) return null;
       const top = realpathSync(git(directory, ['rev-parse', '--show-toplevel']).trim());
-      if (top !== directory) fail('source is not the declared Git worktree');
+      if (!sameFsPath(top, directory)) fail('source is not the declared Git worktree');
       const gitDir = realpathSync(resolve(directory, git(directory, ['rev-parse', '--absolute-git-dir']).trim()));
       const commonDir = realpathSync(resolve(directory, git(directory, ['rev-parse', '--git-common-dir']).trim()));
       const symbolic = gitQuery(directory, ['symbolic-ref', '-q', 'HEAD'], [0, 1]);
