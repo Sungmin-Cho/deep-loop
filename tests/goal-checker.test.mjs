@@ -1,5 +1,6 @@
 import { snapshotEvidenceRefs } from '../scripts/lib/goal-snapshot.mjs';
 import { reviewedGoalWork } from './helpers/reviewed-goal.mjs';
+import { GOAL_NOW } from './helpers/goal-fixture.mjs';
 import { reconcileGoalReview, ingestMeasuredGoalReview } from '../scripts/lib/goal-review.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -45,8 +46,15 @@ for (const defect of ['missing usage','missing group','live group','malformed JS
 });
 function liveOptions(f,home,overrides={}) {
   return {root:f.root,runId:f.runId,expect:f.fence,executable:process.execPath,codexHome:home,env:process.env,timeoutMs:1000,
-    revalidateExecutable:()=>({canonical_path:process.execPath}),...overrides};
+    revalidateExecutable:()=>({canonical_path:process.execPath}),now:Date.parse(GOAL_NOW),...overrides};
 }
+test('goal review dispatch is gated by the fixture clock, not wall time',async t=>{
+  const {dispatchGoalReview}=await import('../scripts/lib/goal-review.mjs');
+  const f=reviewedGoalWork(t);
+  assert.throws(()=>dispatchGoalReview(f.root,f.runId,{transport:'native',fence:f.fence,now:Date.parse(GOAL_NOW)+86400*1000}),/GOAL_DISPATCH_GATE_BLOCKED/);
+  const dispatched=dispatchGoalReview(f.root,f.runId,{transport:'native',fence:f.fence,now:Date.parse(GOAL_NOW)});
+  assert.equal(dispatched.ok,true);
+});
 function actualOutput(entry) {
   const prompt=entry.stdin.split('Immutable goal review context: ')[1],c=JSON.parse(prompt);
   c.evidence_refs=snapshotEvidenceRefs(JSON.parse(readFileSync(c.snapshot_path)).payload);
@@ -71,7 +79,7 @@ test('missing settlement and forged public supervisor observations cannot approv
 });
 test('native goal descriptor exposes same strict result contract and no process is spawned',async t=>{
   const {drivePendingGoalReview}=await api(),f=reviewedGoalWork(t);let calls=0;
-  const result=await drivePendingGoalReview({root:f.root,runId:f.runId,expect:f.fence,transport:'native',runProcess:()=>{calls++;}});
+  const result=await drivePendingGoalReview({root:f.root,runId:f.runId,expect:f.fence,transport:'native',now:Date.parse(GOAL_NOW),runProcess:()=>{calls++;}});
   assert.equal(result.action,'native-goal-review');assert.equal(calls,0);assert.equal(result.output_schema.properties.attempt_id.const,result.review.execution.attempt_id);
   assert.doesNotMatch(result.prompt,/undefined/);
 });
