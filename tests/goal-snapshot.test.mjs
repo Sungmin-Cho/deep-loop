@@ -126,7 +126,9 @@ test('a verified unborn Git branch has explicit identity and remains fresh until
   assert.equal(committed.sources[0].git.unborn, false); assert.match(committed.sources[0].git.head, /^[0-9a-f]{40,64}$/);
 });
 
-test('the resolved Git executable bytes are bound across captures', t => {
+test('the resolved Git executable bytes are bound across captures', {
+  skip: process.platform === 'win32' ? 'relocated git.exe needs the Git-for-Windows DLL tree' : false,
+}, t => {
   const f = gitFixture(t);
   const toolDir = realpathSync(mkdtempSync(join(tmpdir(), 'goal-snapshot-tool-')));
   t.after(() => rmSync(toolDir, { recursive: true, force: true }));
