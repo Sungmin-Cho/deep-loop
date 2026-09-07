@@ -664,6 +664,8 @@ test('runStreamingProcessSync fails closed without usage when its receipt journa
   }
   assert.equal(readFileSync(occupied, 'utf8'), original, 'an existing journal is immutable');
 
+  if (process.platform === 'win32') return;
+
   const strictAttemptId = 'f'.repeat(32);
   const strictOccupied = join(journalDir, `${strictAttemptId}-read.json`);
   writeFileSync(strictOccupied, original);

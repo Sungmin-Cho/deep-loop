@@ -1154,6 +1154,31 @@ test('Codex headless transport is rejected before spawned CAS and never reaches 
   assert.equal(after.session_chain.lease.handoff_phase, 'emitted');
 });
 
+test('Windows Codex headless uses the shared host identity path instead of pausing as runtime-identity-unavailable', () => {
+  const { root, runId } = seed((data) => {
+    data.session_spawn = { ...data.session_spawn, platform: 'win32' };
+  }, 'codex');
+  const h = emitHandoff(root, runId, {
+    trigger: 'win32-headless-host-owned', now: NOW1, expect: expect_(runId), platform: 'win32',
+  });
+  let spawned = false;
+  const r = respawn(root, runId, {
+    childRunId: h.childRunId, key: h.key, handoffRel: h.handoffRel,
+    headless: true, now: NOW1, platform: 'win32',
+    codexExecutable: 'C:\\tools\\codex.exe',
+    deepLoopRoot: WINDOWS_DEEP_LOOP_ROOT,
+    spawnFn: (entry) => {
+      spawned = true;
+      assert.equal(entry.shell, false);
+      return { ok: true };
+    },
+  });
+  assert.notEqual(r.reason, 'runtime-identity-unavailable', JSON.stringify(r));
+  assert.equal(spawned, true, JSON.stringify(r));
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(readState(root, runId).data.session_chain.lease.handoff_phase, 'spawned');
+});
+
 test('Codex App manual continuation never probes the Claude Desktop handler', () => {
   const { root, runId } = seed((data) => {
     data.autonomy.spawn_style = 'desktop';

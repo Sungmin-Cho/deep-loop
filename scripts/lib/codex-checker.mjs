@@ -9,7 +9,8 @@ import {
   readdirSync,
   realpathSync,
 } from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
+import { isAbsolute, join, resolve, win32 } from 'node:path';
+import { pathKeyWithin, sameResolvedPath } from './path-portable.mjs';
 import { buildCodexExecEntry } from './codex-runtime.mjs';
 import { runStreamingProcessSync } from './streaming-process.mjs';
 import { isMeasuredOneTurnUsage } from './budget.mjs';
@@ -36,14 +37,17 @@ function sameNode(left, right) {
 }
 
 function contained(root, candidate) {
-  const rel = relative(root, candidate);
-  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+  return pathKeyWithin(root, candidate);
 }
 
 function sameLexicalPath(left, right) {
-  if (left === right) return true;
-  if (process.platform !== 'win32') return false;
-  return resolve(left).toLowerCase() === resolve(right).toLowerCase();
+  return sameResolvedPath(left, right);
+}
+
+function windowsSameNodeAlias(before, after) {
+  return process.platform === 'win32'
+    && before.dev === after.dev && before.ino === after.ino && before.ino !== 0n
+    && before.mode === after.mode;
 }
 
 export function inspectCheckerFileIdentity(path, { maxBytes = MAX_FILE_BYTES } = {}) {
@@ -53,7 +57,8 @@ export function inspectCheckerFileIdentity(path, { maxBytes = MAX_FILE_BYTES } =
     || (before.mode & 0o444n) === 0n) throw new Error('checker-file-invalid');
   const canonical = (realpathSync.native || realpathSync)(lexical);
   const canonicalStat = lstatSync(canonical, { bigint: true });
-  if (!sameLexicalPath(resolve(canonical), lexical) || !sameNode(before, canonicalStat)) throw new Error('checker-file-drift');
+  if ((!sameLexicalPath(resolve(canonical), lexical) && !windowsSameNodeAlias(before, canonicalStat))
+    || !sameNode(before, canonicalStat)) throw new Error('checker-file-drift');
   const fd = openSync(canonical, 'r');
   let bytes;
   try {
@@ -84,7 +89,8 @@ function inspectDirectory(path, parent = null) {
   if (before.isSymbolicLink() || !before.isDirectory()) throw new Error('checker-directory-invalid');
   const canonical = (realpathSync.native || realpathSync)(lexical);
   const after = lstatSync(canonical, { bigint: true });
-  if (!sameLexicalPath(resolve(canonical), lexical) || after.isSymbolicLink() || !after.isDirectory()
+  if ((!sameLexicalPath(resolve(canonical), lexical) && !windowsSameNodeAlias(before, after))
+    || after.isSymbolicLink() || !after.isDirectory()
     || before.dev !== after.dev || before.ino !== after.ino || before.mode !== after.mode
     || (parent && !contained(parent, canonical))) throw new Error('checker-directory-drift');
   return {

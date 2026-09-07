@@ -250,11 +250,16 @@ function targetAbsolutePath(value, platform) {
   return platform === 'win32' ? windowsFullyQualifiedPath(value) : posix.isAbsolute(value);
 }
 
+function windowsNativeExecutablePath(path) {
+  if (!windowsFullyQualifiedPath(path, { allowUnc: false })
+    || /\.(?:cmd|bat|ps1|js|mjs|cjs)$/i.test(path)) return null;
+  return path;
+}
+
 function windowsNativePath(identity, { runtime = null, kind = null } = {}) {
   const path = identity?.canonical_path;
   if (!identity || typeof identity !== 'object' || identity.platform !== 'win32'
-    || !windowsFullyQualifiedPath(path, { allowUnc: false })
-    || /\.(?:cmd|bat|ps1|js|mjs|cjs)$/i.test(path)
+    || !windowsNativeExecutablePath(path)
     || (runtime != null && identity.runtime !== runtime)
     || (kind != null && identity.kind !== kind)) return null;
   return path;
@@ -285,7 +290,8 @@ function posixRuntimePath(identity, { runtime, platform }) {
 
 function codexExecutablePath({ platform, runtimeExecutableIdentity, codexExecutable }) {
   if (platform === 'win32') {
-    return windowsNativePath(runtimeExecutableIdentity, { runtime: 'codex' });
+    return windowsNativePath(runtimeExecutableIdentity, { runtime: 'codex' })
+      ?? windowsNativeExecutablePath(codexExecutable);
   }
   if (runtimeExecutableIdentity != null) {
     return posixRuntimePath(runtimeExecutableIdentity, { runtime: 'codex', platform });

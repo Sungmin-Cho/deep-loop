@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { constants, lstatSync, realpathSync, openSync, closeSync, fstatSync, readSync, opendirSync, accessSync, readlinkSync } from 'node:fs';
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { pathKeyWithin, sameResolvedPath } from './path-portable.mjs';
 import { spawnSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 
@@ -15,10 +16,21 @@ const DEFAULT_LIMITS = Object.freeze({ files: 50000, entries: 150000, fileBytes:
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const fail = reason => { throw new Error(`GOAL_SNAPSHOT_UNAVAILABLE: ${reason}`); };
 const order = (a, b) => a < b ? -1 : a > b ? 1 : 0;
-const inside = (root, path) => path === root || path.startsWith(root + sep);
+const inside = (root, path) => path === root || path.startsWith(root + sep)
+  || (process.platform === 'win32' && pathKeyWithin(root, path));
 const portable = path => path.split(sep).join('/');
-const sameFsPath = (left, right) => left === right
-  || (process.platform === 'win32' && resolve(left).toLowerCase() === resolve(right).toLowerCase());
+function sameFsPath(left, right) {
+  if (sameResolvedPath(left, right)) return true;
+  if (process.platform !== 'win32') return false;
+  try {
+    const a = lstatSync(left, { bigint: true });
+    const b = lstatSync(right, { bigint: true });
+    return !a.isSymbolicLink() && !b.isSymbolicLink()
+      && a.dev === b.dev && a.ino === b.ino && a.ino !== 0n;
+  } catch {
+    return false;
+  }
+}
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort(order).map(key => [key, canonical(value[key])]));

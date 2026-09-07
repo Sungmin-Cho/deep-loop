@@ -34,6 +34,10 @@ All notable changes to deep-loop are documented in this file.
 - Codex runtime-preflight cache identity no longer includes the caller's remaining
   deadline, so a later checker probe can reuse a proved executable instead of
   spending another two measured smokes.
+- Windows Git worktree and trusted-checker path identity now folds `\\?\` prefixes,
+  separators and case, and accepts the same NTFS node when 8.3 and long names differ.
+- Windows Codex headless continuation uses the shared host preflight path instead of
+  pausing as `runtime-identity-unavailable`.
 
 ### Validation boundary
 

@@ -17,6 +17,7 @@ import {
 } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
+import { sameResolvedPath } from './path-portable.mjs';
 import {
   captureReconciledRunSnapshot,
   findRoot,
@@ -85,8 +86,12 @@ function inspectDirectoryNode(path) {
   const before = lstatSync(lexical, { bigint: true });
   if (before.isSymbolicLink() || !before.isDirectory()) throw new Error('directory must be non-symlink');
   const canonical = (realpathSync.native || realpathSync)(lexical);
-  if (resolve(canonical) !== lexical) throw new Error('directory must already be canonical');
   const after = lstatSync(canonical, { bigint: true });
+  const spellingOk = resolve(canonical) === lexical || sameResolvedPath(resolve(canonical), lexical);
+  const windowsAlias = process.platform === 'win32'
+    && before.dev === after.dev && before.ino === after.ino && before.ino !== 0n
+    && before.mode === after.mode;
+  if (!spellingOk && !windowsAlias) throw new Error('directory must already be canonical');
   if (after.isSymbolicLink() || !after.isDirectory()
     || before.dev !== after.dev || before.ino !== after.ino || before.mode !== after.mode) {
     throw new Error('directory identity changed');
@@ -108,7 +113,10 @@ function inspectRegularFileIdentity(path, { maxBytes = RESUME_SKILL_MAX_BYTES } 
   }
   const canonical = (realpathSync.native || realpathSync)(lexical);
   const canonicalStat = lstatSync(canonical, { bigint: true });
-  if (resolve(canonical) !== lexical || canonicalStat.isSymbolicLink() || !canonicalStat.isFile()
+  const spellingOk = resolve(canonical) === lexical || sameResolvedPath(resolve(canonical), lexical);
+  const windowsAlias = process.platform === 'win32'
+    && sameFileIdentity(before, canonicalStat) && before.ino !== 0n;
+  if ((!spellingOk && !windowsAlias) || canonicalStat.isSymbolicLink() || !canonicalStat.isFile()
     || !sameFileIdentity(before, canonicalStat)) {
     throw new Error('file identity changed during canonicalization');
   }
