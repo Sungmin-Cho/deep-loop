@@ -51,7 +51,9 @@ test('wrong task ID rejects before any model call',async t=>{
  let calls=0;await assert.rejects(()=>runAgentEvaluation({profile:{...profile,tasks:['unknown-task']},outDir:base(t),executable:process.execPath,codexHome:tmpdir(),runProcess:()=>{calls++;return result;}}),/AGENT_PROFILE_INVALID/);
  assert.equal(calls,0);
 });
-test('stable copy preserves executable bits, records source mode and rejects escaping symlinks',t=>{
+test('stable copy preserves executable bits, records source mode and rejects escaping symlinks',{
+  skip: process.platform === 'win32' ? 'POSIX file modes are not preserved on win32' : false,
+},t=>{
  const dir=base(t),source=join(dir,'source'),copy=join(dir,'copy');mkdirSync(source);writeFileSync(join(source,'run.mjs'),'export const x=1');chmodSync(join(source,'run.mjs'),0o755);
  const snapshot=copyStableAgentCandidate(source,copy);assert.equal(snapshot.files[0].mode,0o755);assert.equal(statSync(join(copy,'run.mjs')).mode&0o777,0o555);
  writeFileSync(join(dir,'private'),'not oracle input');createFileSymlink('../private',join(source,'escape'));

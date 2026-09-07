@@ -146,6 +146,7 @@ test('strict pre-spawn validation reports that no owned process group was create
   let spawns = 0;
   const result = await runStreamingProcess({ bin: process.execPath, argv: [] }, {
     processGroup: 'required',
+    platform: 'linux',
     spawnImpl: () => {
       spawns += 1;
       throw new Error('invalid request must not spawn');
@@ -157,7 +158,7 @@ test('strict pre-spawn validation reports that no owned process group was create
     reason: 'unsupported-usage-kind',
     process_group: {
       mode: 'required',
-      platform: process.platform,
+      platform: 'linux',
       group_id: null,
       termination_scope: 'none',
       quiescence_confirmed: true,
@@ -172,7 +173,9 @@ test('strict pre-spawn validation reports that no owned process group was create
   assert.equal(spawns, 0);
 });
 
-test('strict normal completion terminates and confirms inherited descendants before success', async () => {
+test('strict normal completion terminates and confirms inherited descendants before success', {
+  skip: process.platform === 'win32' ? 'POSIX process groups are unavailable on win32' : false,
+}, async () => {
   const { runStreamingProcess } = await streamingModule();
   const dir = mkdtempSync(join(tmpdir(), 'deep-loop-stream-group-success-'));
   const pidPath = join(dir, 'descendant.pid');
@@ -203,7 +206,9 @@ test('strict normal completion terminates and confirms inherited descendants bef
   }
 });
 
-test('strict deadline escalates to group SIGKILL and confirms no descendant survives', async () => {
+test('strict deadline escalates to group SIGKILL and confirms no descendant survives', {
+  skip: process.platform === 'win32' ? 'POSIX process groups are unavailable on win32' : false,
+}, async () => {
   const { runStreamingProcess } = await streamingModule();
   const dir = mkdtempSync(join(tmpdir(), 'deep-loop-stream-group-timeout-'));
   const pidPath = join(dir, 'descendant.pid');
@@ -548,7 +553,9 @@ test('runStreamingProcessSync uses one dedicated Node worker and one runtime spa
   assert.equal(Object.hasOwn(result, 'stdout'), false, 'worker protocol must not expose raw runtime stdout');
 });
 
-test('sync worker forwards strict process-group ownership and returns confirmed lifecycle evidence', async () => {
+test('sync worker forwards strict process-group ownership and returns confirmed lifecycle evidence', {
+  skip: process.platform === 'win32' ? 'POSIX process groups are unavailable on win32' : false,
+}, async () => {
   const { runStreamingProcessSync } = await streamingModule();
   const dir = mkdtempSync(join(tmpdir(), 'deep-loop-stream-group-sync-'));
   const pidPath = join(dir, 'descendant.pid');

@@ -188,7 +188,9 @@ export function captureGoalSnapshot(rootInput, loop, options = {}) {
     const projectGit = gitIdentity(root);
     function walk(directory, base, output) {
       tick(); safePath(directory); const before = lstatSync(directory, { bigint: true });
-      if (!before.isDirectory() || !(before.mode & 0o444n) || !(before.mode & 0o111n)) fail('unreadable source directory');
+      if (!before.isDirectory()) fail('unreadable source directory');
+      // Windows directory mode bits are not POSIX r-x; opendirSync is the authority there.
+      if (process.platform !== 'win32' && (!(before.mode & 0o444n) || !(before.mode & 0o111n))) fail('unreadable source directory');
       const handle = opendirSync(directory);
       try {
         for (let entry; (entry = handle.readSync()) !== null;) {
