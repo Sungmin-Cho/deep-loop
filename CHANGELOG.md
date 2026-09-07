@@ -37,8 +37,15 @@ All notable changes to deep-loop are documented in this file.
 
 ### Validation boundary
 
-- Release, full preflight and live smoke receipts are pending. Fixture and transport-seam
-  tests do not establish long-task efficacy or statistical model-performance uplift.
+- Node 24.20.0 `npm run preflight` on `0dcf752` recorded 2995 tests, 2978 pass, 0 fail,
+  17 skipped. The standalone fixture bank at that SHA recorded pass=25, skipped=17,
+  `host_acceptance_verified=1`.
+- Live current-profile smoke for requested `gpt-6-astra` is unavailable (GPT models
+  treated as unavailable). R3 native 201/211 passed; current 201 was
+  `budget_exceeded` with a passing behavior oracle; current 211 was
+  `checker-process-failed` from a Codex usage limit. The live gate is not claimed.
+  Fixture and transport-seam tests do not establish long-task efficacy or statistical
+  model-performance uplift.
 - Native independent reviewers require host evidence. Grok remains attended Darwin only;
   any reviewer bridge requires its verified installed-cache/read-only transport contract.
 - External publication approval and ordinary terminal mutation restrictions are unchanged.
