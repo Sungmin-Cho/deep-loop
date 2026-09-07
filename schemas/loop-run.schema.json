@@ -1,5 +1,6 @@
 {
-  "$schema": "deep-loop/v0.4.0",
+  "$schema": "deep-loop/v0.5.0",
+  "supported_versions": ["0.4.0", "0.5.0"],
   "required": ["schema_version","run_id","goal","status","project","routing","review","autonomy","budget","comprehension","circuit_breaker","session_chain","workstreams","active_workstreams","triage","episodes","termination","project.binding_generation","autonomy.continuation_policy","autonomy.attended_launch_approval","session_chain.lease.takeover_kind"],
   "enums": {
     "status": ["running","paused","completed","stopped"],
@@ -11,11 +12,15 @@
     "session_chain.lease.state": ["active","releasing","released"],
     "session_chain.lease.handoff_phase": ["idle","reserved","emitted","spawned","acquired"],
     "session_spawn.launcher": ["cmux","iterm2","terminal-app","wt","powershell","tmux","none"],
-    "autonomy.session_effort": ["low","medium","high","xhigh","max"],
+    "autonomy.session_effort": ["low","medium","high","xhigh","max","ultra"],
     "autonomy.session_runtime": ["claude","codex","grok"],
     "autonomy.runtime_source": ["skill-asserted"]
   },
   "properties": {
+    "orchestration": { "type": "object", "state_version": "0.5.0" },
+    "goal_contract": { "type": "object", "state_version": "0.5.0" },
+    "goal_obligations": { "type": "array", "state_version": "0.5.0" },
+    "goal_reviews": { "type": "array", "state_version": "0.5.0" },
     "session_spawn": { "type": "object" },
     "pause_reason": { "type": "string" },
     "session_chain.lease.resume_policy": { "type": "string" },

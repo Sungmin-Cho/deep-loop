@@ -11,8 +11,8 @@ export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 // (e.g. `--model -p`). Fixed-length anchored pattern → no ReDoS. Brackets allow ids like `claude-opus-4-8[1m]`.
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._[\]-]{0,127}$/;
 
-export function validateEffort(effort) {
-  if (!EFFORT_LEVELS.includes(effort)) throw Object.assign(new Error(`INVALID_EFFORT: ${effort}`), { code: 'INVALID_EFFORT' });
+export function validateEffort(effort, { allowGoalNative = false } = {}) {
+  if (!EFFORT_LEVELS.includes(effort) && !(allowGoalNative && effort === 'ultra')) throw Object.assign(new Error(`INVALID_EFFORT: ${effort}`), { code: 'INVALID_EFFORT' });
   return effort;
 }
 export function validateModel(model) {
@@ -20,14 +20,16 @@ export function validateModel(model) {
   return model;
 }
 
-export function validateRuntimeProfile(runtime, { model = null, effort = null } = {}) {
+export function validateRuntimeProfile(runtime, { model = null, effort = null } = {}, { goalDriven = false } = {}) {
   const selectedRuntime = validateSessionRuntime(runtime);
   if (model != null) validateModel(model);
-  if (effort != null) validateEffort(effort);
+  if (effort != null) validateEffort(effort, { allowGoalNative: goalDriven });
+  const passthrough = goalDriven && runtimeCapability(selectedRuntime, 'goal_effort_passthrough').includes(effort);
   if (effort != null && runtimeCapability(selectedRuntime, 'session_effort_allowed') === 'none') {
     throw Object.assign(new Error(`UNSUPPORTED_RUNTIME_EFFORT: ${selectedRuntime} ${effort}`), { code: 'UNSUPPORTED_RUNTIME_EFFORT' });
   }
-  if (effort === 'max' && !runtimeCapability(selectedRuntime, 'max_effort_supported')) {
+  if (effort === 'ultra' && !passthrough) throw Object.assign(new Error(`UNSUPPORTED_RUNTIME_EFFORT: ${selectedRuntime} ultra`), { code: 'UNSUPPORTED_RUNTIME_EFFORT' });
+  if (effort === 'max' && !runtimeCapability(selectedRuntime, 'max_effort_supported') && !passthrough) {
     throw Object.assign(new Error(`UNSUPPORTED_RUNTIME_EFFORT: ${selectedRuntime} max`), { code: 'UNSUPPORTED_RUNTIME_EFFORT' });
   }
   return { model, effort };
@@ -75,7 +77,7 @@ export function setSessionProfile(root, runId, { model, effort, expect, now = Da
   const empty = model == null && effort == null;
   if (empty && !allowEmpty) throw new Error('NOTHING_TO_SET: setSessionProfile');
   if (model != null) validateModel(model);
-  if (effort != null) validateEffort(effort);
+  if (effort != null) validateEffort(effort, { allowGoalNative: true });
 
   let needsWrite = false;
   withReconciledMutationLock(root, runId, (_guard, { data }) => {
@@ -85,7 +87,7 @@ export function setSessionProfile(root, runId, { model, effort, expect, now = Da
     validateRuntimeProfile(sessionRuntime(data), {
       model: model ?? data.autonomy?.session_model ?? null,
       effort: effort ?? data.autonomy?.session_effort ?? null,
-    });
+    }, { goalDriven: data.schema_version === '0.5.0' });
     const sameModel = model == null || data.autonomy?.session_model === model;
     const sameEffort = effort == null || data.autonomy?.session_effort === effort;
     needsWrite = !(sameModel && sameEffort);
@@ -106,7 +108,7 @@ export function setSessionProfile(root, runId, { model, effort, expect, now = Da
       validateRuntimeProfile(sessionRuntime(l), {
         model: model ?? l.autonomy?.session_model ?? null,
         effort: effort ?? l.autonomy?.session_effort ?? null,
-      });
+      }, { goalDriven: l.schema_version === '0.5.0' });
     });
   return { ok: true, changed: true };
 }

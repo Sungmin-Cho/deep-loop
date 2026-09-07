@@ -1,15 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runStep, substitutePlaceholders } from '../evals/lib/drive.mjs';
 import { assertFullBankGate, buildReport } from '../evals/lib/report.mjs';
-import { validateHostAcceptanceResult } from '../evals/lib/host-acceptance.mjs';
-import { materializeSetupFiles } from '../evals/lib/fixture.mjs';
+import { runAllowReviewImport111, validateHostAcceptanceResult } from '../evals/lib/host-acceptance.mjs';
+import { applyReference, materializeFixture, materializeSetupFiles } from '../evals/lib/fixture.mjs';
 import { executeOutcome, loadFixtureProfile, runFamily3BarrierEvidence, runFixtureEvaluation } from '../scripts/eval-deep-loop.mjs';
-import { executeKernelTask } from '../evals/lib/scenarios.mjs';
+import { executeKernelTask, seedHostTopology } from '../evals/lib/scenarios.mjs';
 import { recomputeKernelObservation } from '../evals/lib/scenarios.mjs';
 import { validateResult } from '../evals/lib/validate.mjs';
 import { verdict } from '../evals/graders/verdict.mjs';
@@ -29,7 +29,7 @@ function outcomeResult() {
       changed_files: ['solution.json'],
       isolation_receipt: {
         schema_version: 1, boundary: 'node-permission-model:permission',
-        covered_effects: ['child-process','file-write','network-write'], profile_id: 'deep-loop-current-v1.22',
+        covered_effects: ['child-process','file-write','network-write'], profile_id: 'deep-loop-current-v1.23',
         allowed_effects: ['read-only'], declared_command: ['node','--test','.eval/verify-outcome.test.mjs'],
         executed_argv: ['--permission','.eval/verify-outcome.test.mjs'], exit: 0, timed_out: false,
         observed_effects: [], passed: true,
@@ -55,6 +55,24 @@ test('host acceptance result is validated before accounting and reports do not i
   assert.equal(validateHostAcceptanceResult(task, result, binding).ok, true);
   const report = buildReport([outcomeResult()], { now: '2026-08-10T00:00:00Z', bank: [{ id: 'x' }], out: '/tmp/private-root' });
   assert.equal(JSON.stringify(report).includes('/tmp/private-root'), false);
+});
+
+test('allow-review-import host acceptance executes the seeded dispatch claim and public import', (t) => {
+  const task = JSON.parse(readFileSync(new URL('../evals/tasks/allow-review-import-111.json', import.meta.url), 'utf8'));
+  const seeded = seedHostTopology(task);
+  t.after(() => rmSync(seeded.context.root, { recursive: true, force: true }));
+  const result = runAllowReviewImport111({
+    projectRoot: seeded.context.root, runId: seeded.context.runId,
+    fence: { owner: seeded.context.runId, generation: 1, intent: 'business' }, workstreamId: seeded.workstreamId,
+  });
+  assert.equal(result.status, 'pass');
+  assert.equal(result.import_exit, 0);
+  assert.equal(validateHostAcceptanceResult(task, result, seeded.expectedBinding).ok, true);
+  const persisted = JSON.parse(readFileSync(join(seeded.context.runDir, 'loop.json'), 'utf8'));
+  const checker = persisted.episodes.find(episode => episode.id === '002-deep-review');
+  assert.equal(checker.status, 'approved');
+  assert.equal(checker.review_source, 'imported-stdin');
+  assert.equal(checker.target_maker, seeded.makerId);
 });
 
 test('family 3 requires both executed named barrier results and the full-bank gate fails closed', () => {
@@ -166,6 +184,30 @@ test('outcome trials execute cleanly, task 211 uses two distinct references, and
   assert.deepEqual(result.reference_replay.trials[0].isolation_receipt.declared_command, task.acceptance[0].command);
 });
 
+test('every miniature outcome fixture has real failing behavior and an executable reference', {
+  skip: NETWORK_BOUNDARY_AVAILABLE ? false : 'network-write isolation requires Node 24+',
+}, async () => {
+  const { gradeEndState } = await import('../evals/graders/end-state.grader.mjs');
+  const taskDir = join(process.cwd(), 'evals', 'tasks');
+  const tasks = readdirSync(taskDir).filter(file => file.startsWith('outcome-')).sort()
+    .map(file => JSON.parse(readFileSync(join(taskDir, file), 'utf8')));
+  const profile = loadFixtureProfile();
+  for (const task of tasks) {
+    for (let trialIndex = 0; trialIndex < task.trials; trialIndex += 1) {
+      const root = mkdtempSync(join(tmpdir(), `eval-behavior-${task.id}-`));
+      materializeFixture(root, task);
+      const baseline = gradeEndState(root, task.acceptance, {
+        profile, taskId: task.id, forbiddenEffects: task.forbidden_effects, referenceMode: true,
+      });
+      assert.equal(baseline.pass, task.id === 'outcome-noop-212', `${task.id}: baseline polarity`);
+      applyReference(root, task, { trialIndex });
+      assert.equal(gradeEndState(root, task.acceptance, {
+        profile, taskId: task.id, forbiddenEffects: task.forbidden_effects, referenceMode: true,
+      }).pass, true, `${task.id}: reference ${trialIndex + 1}`);
+    }
+  }
+});
+
 test('manifest-bound outcome validation rejects replay-evidence laundering and preserves the no-op exception', () => {
   const taskDir = join(process.cwd(), 'evals', 'tasks');
   const cases = [
@@ -224,6 +266,7 @@ test('manifest-bound outcome validation binds isolation receipts to fixture effe
     ['receipt profile drift', trial => { trial.isolation_receipt.profile_id = 'host-native'; }],
     ['normalized argv drift', trial => { trial.isolation_receipt.executed_argv[0] = '--experimental-permission'; }],
     ['boundary drift', trial => { trial.isolation_receipt.boundary = 'node-permission-model:experimental-permission'; }],
+    ['trusted runner hash drift', trial => { trial.isolation_receipt.trusted_runner.sha256 = '0'.repeat(64); }],
   ];
   for (const [label, mutate] of mutations) {
     const changed = structuredClone(payload);
@@ -259,7 +302,7 @@ test('fixture report bytes are stable under ambient FORCE_COLOR and NO_COLOR pol
 
 test('selected fixture profile is loaded, validated, and authoritative', () => {
   const profile = loadFixtureProfile();
-  assert.equal(profile.id, 'deep-loop-current-v1.22');
+  assert.equal(profile.id, 'deep-loop-current-v1.23');
   assert.equal(profile.driver, 'fixture');
   assert.deepEqual(profile.record.observables, ['exit', 'effects']);
   const bad = mkdtempSync(join(tmpdir(), 'eval-profile-bad-'));
@@ -436,7 +479,9 @@ test('fixture evaluation executes 26 kernel acceptance paths and every declared 
   }, 'invariant families are manifest-bound');
 });
 
-test('safe outcome execution rejects command escapes before spawn and binds effects to the fixture profile', async () => {
+test('safe outcome execution rejects command escapes before spawn and binds effects to the fixture profile', {
+  skip: NETWORK_BOUNDARY_AVAILABLE ? false : 'network-write isolation requires Node 24+',
+}, async () => {
   const { gradeEndState } = await import('../evals/graders/end-state.grader.mjs');
   const profile = loadFixtureProfile();
   const root = mkdtempSync(join(tmpdir(), 'eval-safe-command-'));
@@ -445,33 +490,37 @@ test('safe outcome execution rejects command escapes before spawn and binds effe
     ['sh', '-c', 'git push'], ['/usr/bin/node', '--test'],
   ]) assert.throws(() => gradeEndState(root, [{ type: 'command', command }], { profile }), /OUTCOME_COMMAND_FORBIDDEN/);
 
-  mkdirSync(join(root, '.eval'), { recursive: true });
-  writeFileSync(join(root, 'fixture.json'), '{}');
-  writeFileSync(join(root, 'solution.json'), '{}');
-  writeFileSync(join(root, '.eval', 'task.json'), '{"task_id":"malicious"}');
-  writeFileSync(join(root, '.eval', 'verify-outcome.test.mjs'), `
-    import { test } from 'node:test';
-    import assert from 'node:assert/strict';
-    import { spawnSync } from 'node:child_process';
-    test('permission boundary', () => { assert.throws(() => spawnSync('git', ['push', 'origin', 'main']), /restricted|denied/i); });
-  `);
-  const grade = gradeEndState(root, [{ type: 'command', command: ['node', '--test', '.eval/verify-outcome.test.mjs'] }], { profile });
+  const task = JSON.parse(readFileSync(join(process.cwd(), 'evals', 'tasks', 'outcome-deterministic-bug-201.json'), 'utf8'));
+  materializeFixture(root, task);
+  applyReference(root, task);
+  const grade = gradeEndState(root, task.acceptance, {
+    profile, taskId: task.id, forbiddenEffects: task.forbidden_effects, referenceMode: true,
+  });
   assert.equal(grade.pass, true);
   assert.deepEqual(grade.effect_receipt.observed_effects, []);
-  assert.equal(grade.effect_receipt.profile_id, 'deep-loop-current-v1.22');
+  assert.equal(grade.effect_receipt.profile_id, 'deep-loop-current-v1.23');
   assert.match(grade.effect_receipt.boundary, /^node-permission-model:/);
   assert.equal(JSON.stringify(grade.effect_receipt.executed_argv).includes(root), false);
+  assert.deepEqual(grade.effect_receipt.executed_argv.slice(-2), [
+    '--allow-fs-read=<TRUSTED_RUNNER>',
+    '<DEEP_LOOP_ROOT>/evals/fixtures/_support/verify-outcome.mjs',
+  ]);
+  assert.equal(grade.effect_receipt.result_protocol_verified, true);
+  assert.match(grade.effect_receipt.trusted_runner.sha256, /^[0-9a-f]{64}$/);
+  assert.match(grade.effect_receipt.node_executable.sha256, /^[0-9a-f]{64}$/);
 });
 
 test('task 211 accepts an unlisted valid strategy without changing the grader', async () => {
   const { gradeEndState } = await import('../evals/graders/end-state.grader.mjs');
   const root = mkdtempSync(join(tmpdir(), 'eval-unlisted-strategy-'));
-  mkdirSync(join(root, '.eval'), { recursive: true });
-  writeFileSync(join(root, 'fixture.json'), readFileSync(join(process.cwd(), 'evals', 'fixtures', 'outcome-valid-alternative-211', 'fixture.json')));
-  writeFileSync(join(root, 'solution.json'), readFileSync(join(process.cwd(), 'evals', 'fixtures', 'outcome-valid-alternative-211', 'reference', 'variant-c', 'solution.json')));
-  writeFileSync(join(root, '.eval', 'task.json'), '{"task_id":"outcome-valid-alternative-211"}');
-  writeFileSync(join(root, '.eval', 'verify-outcome.test.mjs'), readFileSync(join(process.cwd(), 'evals', 'fixtures', '_support', 'verify-outcome.mjs')));
-  const grade = gradeEndState(root, [{ type: 'command', command: ['node', '--test', '.eval/verify-outcome.test.mjs'] }], { profile: loadFixtureProfile() });
+  const task = JSON.parse(readFileSync(join(process.cwd(), 'evals', 'tasks', 'outcome-valid-alternative-211.json'), 'utf8'));
+  materializeFixture(root, task);
+  writeFileSync(join(root, 'solution.mjs'), readFileSync(join(
+    process.cwd(), 'evals', 'fixtures', 'outcome-valid-alternative-211', 'reference', 'variant-c', 'solution.mjs',
+  )));
+  const grade = gradeEndState(root, task.acceptance, {
+    profile: loadFixtureProfile(), taskId: task.id, referenceMode: true,
+  });
   assert.equal(grade.pass, true);
 });
 
@@ -597,9 +646,9 @@ test('static violations remain structured, reportable, and finding-bound before 
 test('fixture profile identity, version, and comparison roles are exact', {
   skip: NETWORK_BOUNDARY_AVAILABLE ? false : 'network-write isolation requires Node 24+',
 }, async () => {
-  const source = JSON.parse(readFileSync(join(process.cwd(), 'evals', 'profiles', 'deep-loop-current-v1.22.json'), 'utf8'));
+  const source = JSON.parse(readFileSync(join(process.cwd(), 'evals', 'profiles', 'deep-loop-current-v1.23.json'), 'utf8'));
   const root = mkdtempSync(join(tmpdir(), 'eval-profile-spoof-'));
-  const file = join(root, 'deep-loop-current-v1.22.json');
+  const file = join(root, 'deep-loop-current-v1.23.json');
   writeFileSync(file, JSON.stringify({ ...source, id: 'host-native', model: 'spoof', harness: 'spoof' }));
   assert.throws(() => loadFixtureProfile(file), /PROFILE_INVALID/);
 
@@ -608,7 +657,7 @@ test('fixture profile identity, version, and comparison roles are exact', {
   const payload = buildReport([row], { bank: [task], profile: loadFixtureProfile() }).payload;
   payload.profile_comparison_stub = [
     { task_id: task.id, profile: 'host-native', outcome_pass: false, agency_loss_incident: true, harness_block_incident: false, hard_safety_invariant_violated: false, attribution: 'harness-constraint' },
-    { task_id: task.id, profile: 'deep-loop-current-v1.22', outcome_pass: true, agency_loss_incident: false, harness_block_incident: false, hard_safety_invariant_violated: false, attribution: 'not-applicable' },
+    { task_id: task.id, profile: 'deep-loop-current-v1.23', outcome_pass: true, agency_loss_incident: false, harness_block_incident: false, hard_safety_invariant_violated: false, attribution: 'not-applicable' },
   ];
   assert.equal((await import('../evals/lib/validate.mjs')).validateResult(payload).ok, false);
 });

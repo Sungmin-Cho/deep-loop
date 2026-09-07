@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { posix, win32 } from 'node:path';
 import { isTrustedPsBin, trustedPsCandidates } from './detect-terminal.mjs';
 import { runtimeCapability, skillToken, validateSessionRuntime } from './runtime.mjs';
-import { buildCodexExecEntry } from './codex-runtime.mjs';
+import { buildCodexExecEntry, buildCodexGoalOwnerEntry } from './codex-runtime.mjs';
 import { validateRuntimeProfile } from './session-profile.mjs';
 import { tomlBasicString } from './toml-safe.mjs';
 import { contentHash } from './envelope.mjs';
@@ -250,11 +250,16 @@ function targetAbsolutePath(value, platform) {
   return platform === 'win32' ? windowsFullyQualifiedPath(value) : posix.isAbsolute(value);
 }
 
+function windowsNativeExecutablePath(path) {
+  if (!windowsFullyQualifiedPath(path, { allowUnc: false })
+    || /\.(?:cmd|bat|ps1|js|mjs|cjs)$/i.test(path)) return null;
+  return path;
+}
+
 function windowsNativePath(identity, { runtime = null, kind = null } = {}) {
   const path = identity?.canonical_path;
   if (!identity || typeof identity !== 'object' || identity.platform !== 'win32'
-    || !windowsFullyQualifiedPath(path, { allowUnc: false })
-    || /\.(?:cmd|bat|ps1|js|mjs|cjs)$/i.test(path)
+    || !windowsNativeExecutablePath(path)
     || (runtime != null && identity.runtime !== runtime)
     || (kind != null && identity.kind !== kind)) return null;
   return path;
@@ -285,7 +290,8 @@ function posixRuntimePath(identity, { runtime, platform }) {
 
 function codexExecutablePath({ platform, runtimeExecutableIdentity, codexExecutable }) {
   if (platform === 'win32') {
-    return windowsNativePath(runtimeExecutableIdentity, { runtime: 'codex' });
+    return windowsNativePath(runtimeExecutableIdentity, { runtime: 'codex' })
+      ?? windowsNativeExecutablePath(codexExecutable);
   }
   if (runtimeExecutableIdentity != null) {
     return posixRuntimePath(runtimeExecutableIdentity, { runtime: 'codex', platform });
@@ -361,13 +367,46 @@ function codexInteractivePsArgs(root, prompt, model, effort) {
   ].join(' ');
 }
 
+function buildGoalAcquirePrompt({ root, runId, childRunId, kernelPath }) {
+  const script = [
+    "const { spawnSync } = require('node:child_process');",
+    `const nodeExecutable = ${JSON.stringify(process.execPath)};`,
+    `const kernelPath = ${JSON.stringify(kernelPath)};`,
+    `const projectRoot = ${JSON.stringify(root)};`,
+    `const runId = ${JSON.stringify(runId)};`,
+    `const childRunId = ${JSON.stringify(childRunId)};`,
+    "const fail = (reason) => { process.stdout.write(`${JSON.stringify({ ok: false, reason })}\\n`); process.exit(1); };",
+    "const runKernel = (args) => {",
+    "  const result = spawnSync(nodeExecutable, [kernelPath, ...args, '--project-root', projectRoot, '--run-id', runId], { encoding: 'utf8', timeout: 15000, maxBuffer: 1048576, shell: false });",
+    "  if (result.error || result.signal || result.status !== 0) fail(`goal-acquire-kernel-${result.error?.code || result.signal || result.status || 'failed'}`);",
+    "  try { return JSON.parse(result.stdout); } catch { fail('goal-acquire-kernel-output-invalid'); }",
+    "};",
+    "const lease = runKernel(['state', 'get', '--field', 'session_chain.lease']);",
+    "if (!lease || typeof lease !== 'object' || Array.isArray(lease) || lease.state !== 'releasing' || lease.handoff_phase !== 'spawned' || lease.handoff_child_run_id !== childRunId || !Number.isSafeInteger(lease.generation) || lease.generation < 1) fail('goal-acquire-lease-mismatch');",
+    "const attemptId = 'goal_acquire_' + childRunId;",
+    "const acquired = runKernel(['lease', 'acquire', '--owner', childRunId, '--expect-generation', String(lease.generation), '--runtime', 'codex', '--attempt-id', attemptId]);",
+    "const consumed = acquired?.consumed;",
+    "if (acquired?.ok !== true || acquired.reason !== 'acquired' || acquired.proceed !== true || acquired.replayed !== false || acquired.generation !== lease.generation + 1 || consumed?.takeover_kind !== 'boundary-handoff' || consumed.child_run_id !== childRunId || consumed.superseded_owner_run_id !== lease.owner_run_id || consumed.from_generation !== lease.generation || consumed.to_generation !== lease.generation + 1 || JSON.stringify(consumed.boundary_event) !== JSON.stringify(lease.handoff_boundary_event) || consumed.project_root_digest !== lease.handoff_project_root_digest || consumed.project_binding_generation !== lease.handoff_project_binding_generation) fail('goal-acquire-result-mismatch');",
+    "process.stdout.write(`${JSON.stringify(acquired)}\\n`);",
+  ].join('\n');
+  const argv = [process.execPath, '-e', script];
+  return [
+    'This is an acquisition-only turn for one already-reserved deep-loop goal owner.',
+    'Use exactly one native terminal tool call to execute the typed argv below. Do not alter, wrap, or split it.',
+    `GOAL_ACQUIRE_ARGV_JSON=${JSON.stringify(argv)}`,
+    'Do not read files, inspect the repository, edit source, initialize Git, invoke another command, or perform business work.',
+    'Return only the script stdout, then stop. The host will verify the lease and provide the official owner frame on an exact-thread resume.',
+  ].join('\n');
+}
+
 function buildCodexEntries({
   root, parentRunId, childRunId, handoffRel,
   launcher, launcherBin, launcherSocket, launcherSession, exists = existsSync,
   model = null, effort = null, codexExecutable = null, deepLoopRoot = null,
   platform = process.platform, runtimeExecutableIdentity = null, launcherIdentity = null,
+  goalDriven = false,
 }) {
-  validateRuntimeProfile('codex', { model, effort });
+  validateRuntimeProfile('codex', { model, effort }, { goalDriven });
   const invocation = resumeInvocation('codex', root, parentRunId);
   const handoffPath = pathFor(platform, root, '.deep-loop', 'runs', parentRunId, handoffRel);
   const manualPrompt = `Read ${JSON.stringify(handoffPath)} first; then run ${invocation}`;
@@ -399,10 +438,17 @@ function buildCodexEntries({
   const visibleExecutable = codexVisibleExecutablePath(platform, runtimeExecutableIdentity);
   if (effectiveExecutable != null) {
     if (!targetAbsolutePath(deepLoopRoot, platform)) throw new Error('INVALID_DEEP_LOOP_ROOT: explicit absolute deep-loop root required');
-    const skillPath = pathFor(platform, deepLoopRoot, 'skills', 'deep-loop-resume', 'SKILL.md');
-    const prompt = `Read ${JSON.stringify(handoffPath)} first. Then read ${JSON.stringify(skillPath)} and execute that workflow inline for project root ${JSON.stringify(root)} and run id ${JSON.stringify(parentRunId)}.`;
+    const prompt = goalDriven
+      ? buildGoalAcquirePrompt({
+          root,
+          runId: parentRunId,
+          childRunId,
+          kernelPath: pathFor(platform, deepLoopRoot, 'scripts', 'deep-loop.mjs'),
+        })
+      : `Read ${JSON.stringify(handoffPath)} first. Then read ${JSON.stringify(pathFor(platform, deepLoopRoot, 'skills', 'deep-loop-resume', 'SKILL.md'))} and execute that workflow inline for project root ${JSON.stringify(root)} and run id ${JSON.stringify(parentRunId)}.`;
+    const buildHeadlessEntry = goalDriven ? buildCodexGoalOwnerEntry : buildCodexExecEntry;
     entries.headless = {
-      ...buildCodexExecEntry({ executable: effectiveExecutable, projectRoot: root, prompt, model, effort }),
+      ...buildHeadlessEntry({ executable: effectiveExecutable, projectRoot: root, prompt, model, effort }),
       ...(platform === 'win32' ? { platform: 'win32', shell: false } : {}),
       display: `# Codex CLI headless: ${JSON.stringify(effectiveExecutable)} (isolated descriptor; prompt via stdin)`,
     };
@@ -753,11 +799,13 @@ export function buildRuntimeResumeDescriptor({
   launcher, launcherBin, launcherSocket, launcherSession,
   platform = process.platform, desktopTarget = null, exists = existsSync,
   model = null, effort = null,
+  goalDriven = false,
   codexExecutable = null, deepLoopRoot = null,
   runtimeExecutableIdentity = null, launcherIdentity = null,
 } = {}) {
   const selectedRuntime = validateSessionRuntime(runtime);
-  validateRuntimeProfile(selectedRuntime, { model, effort });
+  if (typeof goalDriven !== 'boolean') throw new Error('INVALID_GOAL_MODE: goalDriven must be boolean');
+  validateRuntimeProfile(selectedRuntime, { model, effort }, { goalDriven });
   validateSpawnArgs({ parentRunId, childRunId, handoffRel });
   const invocation = resumeInvocation(selectedRuntime, root, parentRunId);
   const buildPrompt = RESUME_PROMPTS[selectedRuntime];
@@ -770,6 +818,7 @@ export function buildRuntimeResumeDescriptor({
     root, parentRunId, childRunId, handoffRel,
     launcher, launcherBin, launcherSocket, launcherSession,
     platform, desktopTarget, exists, model, effort,
+    goalDriven,
     codexExecutable, deepLoopRoot,
     runtimeExecutableIdentity, launcherIdentity,
   });
@@ -784,6 +833,7 @@ export function buildRuntimeResumeDescriptor({
     resumeInvocation: invocation,
     resumePrompt,
     entries,
+    ...(goalDriven ? { goalDriven: true } : {}),
   };
 }
 

@@ -95,7 +95,8 @@ export function validateStrictSelf(env, { runId, key }) {
     || !exactKeys(env.envelope.provenance.tool_versions, [])
     || !exactKeys(env.payload, PAYLOAD_KEYS)
     || env.payload.checkpoint_key !== key
-    || !exactKeys(env.payload.context, CONTEXT_KEYS)
+    || !exactKeys(env.payload.context, Object.hasOwn(env.payload.context || {}, 'scope_epoch') ? [...CONTEXT_KEYS, 'scope_epoch'] : CONTEXT_KEYS)
+    || (Object.hasOwn(env.payload.context || {}, 'scope_epoch') && (!Number.isSafeInteger(env.payload.context.scope_epoch) || env.payload.context.scope_epoch < 0))
     || !sha256(env.payload.context_sha256)
     || contentHash(JSON.stringify(env.payload.context)) !== env.payload.context_sha256
     || contentHash(JSON.stringify([STRICT_CONTEXT_DOMAIN, env.payload.context])) !== key

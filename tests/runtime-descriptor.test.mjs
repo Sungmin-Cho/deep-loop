@@ -194,3 +194,24 @@ test('Codex Slice 1 descriptor is manual/fail-closed and never emits Claude tran
   assert.ok(!serialized.includes('--effort'), 'Claude --effort flag must not leak into Codex output');
   assert.ok(!serialized.includes('"bin":"claude"'), 'Codex must not route through the Claude process');
 });
+
+test('Windows Codex headless uses a fully-qualified native executable when identity is host-supplied', async () => {
+  const { buildLaunchCommand } = await descriptorModule();
+  const executable = 'C:\\Program Files\\Codex\\codex.exe';
+  const cmds = buildLaunchCommand({
+    runtime: 'codex',
+    root: 'C:\\Fixture Project',
+    parentRunId: '01PARENT',
+    childRunId: '01CHILD',
+    handoffRel: 'handoffs/next.md',
+    platform: 'win32',
+    codexExecutable: executable,
+    deepLoopRoot: 'C:\\Fixture Deep Loop',
+  });
+  assert.equal(cmds.headless.unavailable, undefined);
+  assert.equal(cmds.headless.bin, executable);
+  assert.equal(cmds.headless.shell, false);
+  assert.equal(cmds.headless.platform, 'win32');
+  assert.equal(cmds.wt.unavailable, true);
+  assert.equal(cmds.powershell.unavailable, true);
+});

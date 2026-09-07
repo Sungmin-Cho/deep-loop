@@ -1,5 +1,12 @@
+import { captureReconciledRunSnapshot } from './state.mjs';
+import { leaseCheck } from './lease.mjs';
+import { exactGoalObject } from './goal-contract.mjs';
+import { captureGoalSnapshot } from './goal-snapshot.mjs';
+import { goalReviewContextForLoop, parseGoalResult } from './goal-review.mjs';
+import { buildGoalCheckerPrompt } from './goal-checker.mjs';
+import { resolveTrustedCheckerSkill } from './codex-checker.mjs';
 import { createHash } from 'node:crypto';
-import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, fstatSync, lstatSync, openSync, readSync, accessSync, constants, existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { isHeadlessInvocation } from './respawn.mjs';
@@ -689,6 +696,7 @@ export function bindBridgeExec({
   effort,
   prompt,
   supervisorArgv,
+  goalSubject = null,
   home = homedir(),
   env = process.env,
 } = {}) {
@@ -725,7 +733,7 @@ export function bindBridgeExec({
   if (SUPERVISOR_REQUIRED.some((flag) => !Object.hasOwn(flags, flag))) {
     return { ok: false, reason: 'supervisor-untrusted' };
   }
-  if (flags['--output-schema'] !== 'review') return { ok: false, reason: 'supervisor-untrusted' };
+  if (flags['--output-schema'] !== (goalSubject === null ? 'review' : 'none')) return { ok: false, reason: 'supervisor-untrusted' };
   const supervisorRuntime = runtimeCapability('grok', 'observation_runtime');
   if (flags['--runtime'] !== supervisorRuntime) return { ok: false, reason: 'supervisor-untrusted' };
   if (flags['--transport-id'] !== `${supervisorRuntime}.${direction}`) return { ok: false, reason: 'supervisor-untrusted' };
@@ -762,6 +770,16 @@ export function bindBridgeExec({
   }
   const spawnArgv = [...reconstructed, '--', ...expanded.argv];
   const argvSha256 = createHash('sha256').update(JSON.stringify(spawnArgv)).digest('hex');
+  let goalAttestation;
+  if (goalSubject !== null) {
+    try {
+      goalAttestation = attestGoalBridge(cwd, goalSubject, { home, env });
+      if (goalAttestation.review.execution.phase !== 'running' || goalAttestation.review.execution.handle !== `goal-bridge:${attemptId}`
+        || goalSubject.attempt_id !== attemptId || !goalAttestation.probe.ready_directions.includes(direction)
+        || goalAttestation.probe.directions[direction].mechanism !== mechanism
+        || goalAttestation.probe.router.dispatch_agent !== dispatcherReal || prompt !== goalAttestation.prompt) throw new Error('GOAL_BRIDGE_ATTESTATION_MISMATCH');
+    } catch (error) { return { ok: false, reason: error.message }; }
+  }
   const sidecarPayload = {
     cwd_realpath: cwd,
     argv_sha256: argvSha256,
@@ -769,6 +787,9 @@ export function bindBridgeExec({
     direction,
     mechanism_sha256: createHash('sha256').update(String(mechanism)).digest('hex'),
     attempt_id: attemptId,
+    ...(goalAttestation ? { goal_subject: goalSubject, child_argv_sha256: shaBridge(JSON.stringify(expanded.argv)),
+      dispatcher_sha256: shaBridge(readGoalBridgeFile(dispatcherReal, 4 * 1024 * 1024)), checker_sha256: goalAttestation.checker.skill.sha256,
+      model, effort, seat: flags['--seat'], permission_mode: flags['--permission-mode'] ?? null } : {}),
   };
   return {
     ok: true,
@@ -779,7 +800,7 @@ export function bindBridgeExec({
   };
 }
 
-function containedDest(cwdReal, destPath) {
+function containedDest(cwdReal, destPath, suffix = '.md') {
   let bridgeReal;
   let destDirReal;
   try {
@@ -796,7 +817,7 @@ function containedDest(cwdReal, destPath) {
     }
   } catch { /* receipts dir optional */ }
   if (existsSync(destResolved)) return { ok: false, reason: 'dest-exists' };
-  if (!destResolved.endsWith('.md')) return { ok: false, reason: 'dest-uncontained' };
+  if (!destResolved.endsWith(suffix)) return { ok: false, reason: 'dest-uncontained' };
   return { ok: true, destPath: destResolved };
 }
 
@@ -808,7 +829,19 @@ export function materializeFromReceipt({
   expectedSha256,
   stdoutPath,
   sidecarPath,
+  goalSubject = null,
+  home = homedir(),
+  env = process.env,
 } = {}) {
+  if (goalSubject !== null) {
+    try {
+      const proof = verifyGoalBridgeReceipt({ receiptPath, attemptId, cwdFlag, sidecarPath, goalSubject, home, env });
+      const target = containedDest(realpathSync(cwdFlag), destPath, '.json');
+      if (!target.ok) return target;
+      writeFileSync(target.destPath, proof.raw, { flag: 'wx' });
+      return { ok: true, sha256: proof.sha256, verdict: proof.result.verdict, subject: goalSubject };
+    } catch (error) { return { ok: false, reason: error.message }; }
+  }
   if (!receiptPath || !attemptId || !destPath || !cwdFlag) {
     return { ok: false, reason: 'usage' };
   }
@@ -867,4 +900,72 @@ export function materializeFromReceipt({
     expectedSha256: digest,
     destPath: dest.destPath,
   });
+}
+
+const shaBridge = bytes => createHash('sha256').update(bytes).digest('hex');
+const SUBJECT_KEYS = ['kind','project_root','run_id','owner','generation','review_id','attempt_id','goal_sha256','snapshot_sha256'];
+export function goalBridgeSubject(root, context) {
+  return { kind:'goal',project_root:realpathSync(root),run_id:context.run_id,owner:context.owner,generation:context.generation,
+    review_id:context.review_id,attempt_id:context.attempt_id,goal_sha256:context.goal_sha256,snapshot_sha256:context.snapshot_sha256 };
+}
+function readGoalBridgeFile(path, max = 1048576) {
+  const before=lstatSync(path); if(!before.isFile() || before.isSymbolicLink() || before.size>max)throw new Error('GOAL_BRIDGE_FILE_INVALID');
+  const fd=openSync(path,constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
+  try {
+    const opened=fstatSync(fd);if(!opened.isFile() || opened.nlink!==1 || opened.size>max || opened.dev!==before.dev || opened.ino!==before.ino)throw new Error('GOAL_BRIDGE_FILE_INVALID');
+    const buffer=Buffer.alloc(opened.size+1);let offset=0;
+    while(offset<buffer.length){const n=readSync(fd,buffer,offset,buffer.length-offset,null);if(!n)break;offset+=n;}
+    const after=fstatSync(fd),last=lstatSync(path);
+    if(offset!==opened.size || after.size!==opened.size || after.mtimeMs!==opened.mtimeMs || after.ctimeMs!==opened.ctimeMs
+      || last.isSymbolicLink() || last.dev!==opened.dev || last.ino!==opened.ino || last.size!==opened.size
+      || last.mtimeMs!==opened.mtimeMs || last.ctimeMs!==opened.ctimeMs || last.mode!==opened.mode)throw new Error('GOAL_BRIDGE_FILE_DRIFT');
+    return buffer.subarray(0,offset);
+  } finally {closeSync(fd);}
+}
+export function attestGoalBridge(root, subject, {home=homedir(),env=process.env,loopData=null}={}) {
+  if(!exactGoalObject(subject,SUBJECT_KEYS) || subject.kind!=='goal' || subject.project_root!==realpathSync(root)
+    || !ATTEMPT_ID.test(subject.attempt_id || '') || !HEX64.test(subject.goal_sha256 || '') || !HEX64.test(subject.snapshot_sha256 || ''))throw new Error('GOAL_BRIDGE_SUBJECT_INVALID');
+  const loop=loopData || captureReconciledRunSnapshot(root,subject.run_id).data, fence={owner:subject.owner,generation:subject.generation};
+  const checked=leaseCheck(loop,fence);if(!checked.ok)throw new Error('GOAL_BRIDGE_FENCED');
+  const review=loop.goal_reviews?.find(item=>item.id===subject.review_id);
+  if(!review || review.status!=='pending' || review.transport!=='bridge' || review.execution.attempt_id!==subject.attempt_id
+    || review.goal_sha256!==subject.goal_sha256 || review.snapshot_sha256!==subject.snapshot_sha256)throw new Error('GOAL_BRIDGE_SUBJECT_MISMATCH');
+  const probe=probeCheckerBridge({loopData:loop,home,env,cwd:root});if(!probe.ready)throw new Error('GOAL_BRIDGE_PROBE_UNAVAILABLE');
+  if(captureGoalSnapshot(root,loop).sha256!==subject.snapshot_sha256)throw new Error('GOAL_PROOF_STALE');
+  const checker=resolveTrustedCheckerSkill({codexHome:env.CODEX_HOME || join(home,'.codex')});
+  if(pathWithin(realpathSync(root),checker.skill.canonical_path))throw new Error('GOAL_BRIDGE_CHECKER_UNTRUSTED');
+  const context=goalReviewContextForLoop(root,subject.run_id,loop,review,fence);
+  return {loop,review,probe,checker,context,prompt:buildGoalCheckerPrompt({...context,checker_skill_path:checker.skill.canonical_path})};
+}
+export function verifyGoalBridgeReceipt({receiptPath,attemptId,cwdFlag,sidecarPath,goalSubject,home=homedir(),env=process.env,loopData=null}={}) {
+  const root=realpathSync(cwdFlag),attested=attestGoalBridge(root,goalSubject,{home,env,loopData});
+  if(attemptId!==goalSubject.attempt_id || attested.review.execution.phase!=='running'
+    || attested.review.execution.handle!==`goal-bridge:${attemptId}`)throw new Error('GOAL_BRIDGE_SUBJECT_MISMATCH');
+  const receipts=join(root,'.deep-review','bridge','receipts');
+  if(realpathSync(receipts)!==receipts || resolve(receiptPath)!==join(receipts,`${attemptId}.json`)
+    || resolve(sidecarPath)!==join(receipts,`${attemptId}-cwd.json`))throw new Error('GOAL_BRIDGE_PATH_UNCONTAINED');
+  try { lstatSync(join(receipts,`${attemptId}.claim`)); throw new Error('GOAL_BRIDGE_ATTEMPT_ACTIVE'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const receipt=JSON.parse(readGoalBridgeFile(receiptPath)),sidecar=JSON.parse(readGoalBridgeFile(sidecarPath));
+  if(JSON.stringify(sidecar.goal_subject)!==JSON.stringify(goalSubject) || sidecar.cwd_realpath!==root || sidecar.attempt_id!==attemptId
+    || !attested.probe.ready_directions.includes(sidecar.direction) || sidecar.dispatcher!==attested.probe.router.dispatch_agent
+    || sidecar.mechanism_sha256!==shaBridge(attested.probe.directions[sidecar.direction].mechanism)
+    || sidecar.dispatcher_sha256!==shaBridge(readGoalBridgeFile(sidecar.dispatcher,4*1048576)) || sidecar.checker_sha256!==attested.checker.skill.sha256)throw new Error('GOAL_BRIDGE_SIDECAR_MISMATCH');
+  if(receipt.attempt_id!==attemptId || receipt.output_schema!=='none' || receipt.result?.state!=='SUCCEEDED'
+    || receipt.result.exit_status!==0 || receipt.result.termination_confirmed!==true || receipt.result.schema_valid!==true
+    || !Array.isArray(receipt.result.invalid_reasons) || receipt.result.invalid_reasons.length!==0
+    || receipt.output_envelope!=null || receipt.runtime!==attested.probe.runtime || receipt.transport_id!==`${attested.probe.runtime}.${sidecar.direction}`
+    || receipt.model_id!==sidecar.model || receipt.effort_native!==sidecar.effort || receipt.seat!==sidecar.seat || receipt.permission_mode!==sidecar.permission_mode
+    || !Array.isArray(receipt.argv) || shaBridge(JSON.stringify(receipt.argv))!==sidecar.child_argv_sha256
+    || !Number.isFinite(Date.parse(receipt.timing?.started_at)) || !Number.isFinite(Date.parse(receipt.timing?.finished_at))
+    || Date.parse(receipt.timing.finished_at)<Date.parse(receipt.timing.started_at))throw new Error('GOAL_BRIDGE_RECEIPT_INVALID');
+  const expectedArgv=expandAttestedMechanism(attested.probe.directions[sidecar.direction].mechanism,{direction:sidecar.direction,model:sidecar.model,effort:sidecar.effort,prompt:attested.prompt,cwd:root});
+  if(!expectedArgv.ok || JSON.stringify(receipt.argv)!==JSON.stringify(expectedArgv.argv))throw new Error('GOAL_BRIDGE_ARGV_MISMATCH');
+  const stdout=join(receipts,`${attemptId}.stdout`);if(receipt.result.stdout_path!==stdout)throw new Error('GOAL_BRIDGE_STDOUT_MISMATCH');
+  const bytes=readGoalBridgeFile(stdout),digest=shaBridge(bytes);if(digest!==receipt.result.output_sha256)throw new Error('GOAL_BRIDGE_OUTPUT_HASH_MISMATCH');
+  const raw=new TextDecoder('utf-8',{fatal:true}).decode(bytes),result=parseGoalResult(raw);
+  for(const key of ['review_id','attempt_id','goal_sha256','snapshot_sha256'])if(result[key]!==goalSubject[key])throw new Error('GOAL_RESULT_BINDING_MISMATCH');
+  if(JSON.stringify(result.requirements.map(r=>r.id).sort())!==JSON.stringify(attested.context.requirements.map(r=>r.id).sort()))throw new Error('GOAL_RESULT_REQUIREMENTS_MISMATCH');
+  const refs=new Set(attested.context.evidence_refs);if(result.requirements.some(r=>r.evidence.some(ref=>!refs.has(ref))))throw new Error('GOAL_RESULT_EVIDENCE_UNKNOWN');
+  return {raw,result,sha256:digest,subject:goalSubject,receipt_path:receiptPath};
 }

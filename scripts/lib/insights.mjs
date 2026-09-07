@@ -21,6 +21,7 @@ import {
 } from './integrity.mjs';
 import { contentHash, wrap, unwrap, ulid, atomicWrite, renameAtomicWithRetry } from './envelope.mjs';
 import { leaseCheck } from './lease.mjs';
+import { isTerminalGoalOwnerCostEvent } from './budget.mjs';
 import { captureStableFileIdentity, matchingStableFileIdentity } from './fs-safe.mjs';
 
 export const INSIGHTS_SCHEMA_VERSION = 1;
@@ -336,8 +337,8 @@ const terminalMakerReceipt = e => e.type === 'cost'
   && Number.isFinite(e.data?.reported_tokens) && e.data.reported_tokens >= 0
   && Number.isFinite(e.data?.turns) && e.data.turns >= 0
   && Number.isFinite(e.data?.tokens) && e.data.tokens >= 0;
-const nonExemptEvent = e => !(e.type === 'cost'
-  && (e.data?.auto_floor === true || terminalMakerReceipt(e)));
+const nonExemptEvent = (e, loop, lines) => !(e.type === 'cost'
+  && (e.data?.auto_floor === true || terminalMakerReceipt(e) || isTerminalGoalOwnerCostEvent(e, loop, lines)));
 
 export { captureReconciledRunSet };
 
@@ -440,7 +441,7 @@ export function computeInsights(runSet, { selfRunId = null, now = Date.now() } =
     // terminal 로그는 집계에 유지하되 노출만 한다 (suspicious_active와 동일한 라벨 정신 — 제외는 run 전체
     // 이력의 학습 손실이라 채택 안 함). finish 이벤트 없는 terminal 로그(레거시)는 판정 불가 → 라벨 없음.
     const fin = events.find(e => e.type === 'finish');
-    if (fin && events.some(e => e.seq > fin.seq && nonExemptEvent(e))) out.post_finish_mutated.push(id);
+    if (fin && events.some(e => e.seq > fin.seq && nonExemptEvent(e, loop, events))) out.post_finish_mutated.push(id);
     out.per_run[id] = m;
     out.runs_analyzed.push({ run_id: id, last_seq: m.last_seq, loop_sha256: loopHash });
   }
@@ -712,7 +713,7 @@ export function latestInsights(snapshotSet) {
       // (b) finish-edge: 앵커 이후 non-exempt 이벤트가 정확히 finish 하나(=마지막 non-exempt)여야 신뢰
       // (spec §3, r2 리뷰 🔴 2/2 일치) — mid-run emit(뒤에 business/명시 cost 이벤트)과 post-finish
       // mutation(finish 뒤 non-exempt) 로그의 pre-finish payload를 모두 skip한다. 회복 경로는 재-emit.
-      const after = lines.filter(e => e.seq > ev.seq && nonExemptEvent(e));
+      const after = lines.filter(e => e.seq > ev.seq && nonExemptEvent(e, producerData, lines));
       if (after.length !== 1 || after[0].type !== 'finish') return integrityFailure('finish-edge');
       if (deadlineExpired()) return bound('finish-edge');
       // sha256: anchored insights-emitted 이벤트에 기록된 값(위에서 contentHash(raw) 일치 검증 완료) —

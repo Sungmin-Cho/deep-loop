@@ -17,7 +17,14 @@ if (!receiptPath || !attemptId || !dest || !cwdFlag) {
   process.exit(2);
 }
 
+let goalSubject = null;
+try {
+  const rawSubject = argValue(argv, '--goal-subject');
+  if (argv.filter(value => value === '--goal-subject').length > 1) throw new Error('duplicate');
+  if (rawSubject !== null) goalSubject = JSON.parse(rawSubject);
+} catch { process.stderr.write('GOAL_BRIDGE_SUBJECT_INVALID\n'); process.exit(1); }
 const result = materializeFromReceipt({
+  goalSubject,
   receiptPath,
   attemptId,
   destPath: dest,

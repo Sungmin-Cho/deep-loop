@@ -1,3 +1,4 @@
+import { contentHash } from './envelope.mjs';
 const WORKSTREAM_TERMINAL = new Set(['ready', 'merged', 'abandoned']);
 
 function authenticLegacy(loop, scope) {
@@ -125,4 +126,57 @@ export function supersedeScope(scope, {
   scope.supersede_reason = reason;
   scope.superseded_by = supersededBy;
   return scope;
+}
+
+// History carries identities and evidence only; current scope remains the sole authority.
+export const SCOPE_HISTORY_LIMIT = 256;
+export function goalScopeEpoch(loop) {
+  return loop?.schema_version === '0.5.0' ? ownerSession(loop).scope_epoch : null;
+}
+function canonicalScopeValue(value) {
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(canonicalScopeValue);
+  return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalScopeValue(value[key])]));
+}
+export function scopeToken(loop) {
+  const lease = loop.session_chain.lease;
+  return contentHash(JSON.stringify(['deep-loop-scope-v1', lease.owner_run_id, lease.generation,
+    goalScopeEpoch(loop), canonicalScopeValue(currentWorkstreamScope(loop))]));
+}
+export function inheritGoalScopeState(sourceSession, { turns = 0 } = {}) {
+  if (!Object.hasOwn(sourceSession || {}, 'scope_epoch')) return {};
+  return { scope_epoch: sourceSession.scope_epoch,
+    scope_history: structuredClone(sourceSession.scope_history), scope_turn_baseline: turns };
+}
+export function validateScopeHistory(loop, session, errors) {
+  const rows = session?.scope_history;
+  const fail = () => errors.push('v0.5 scope_history is invalid');
+  if (!Array.isArray(rows) || rows.length > SCOPE_HISTORY_LIMIT) { fail(); return; }
+  const seen = new Set();
+  const workstreams = Array.isArray(loop.workstreams) ? loop.workstreams : [];
+  const episodes = Array.isArray(loop.episodes) ? loop.episodes : [];
+  const sessions = Array.isArray(loop.session_chain?.sessions) ? loop.session_chain.sessions : [];
+  const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v)
+    && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v,k));
+  const text = v => typeof v === 'string' && v.length > 0 && v.length <= 1024 && !v.includes('\0');
+  const identity = v => exact(v,['seq','checksum']) && Number.isSafeInteger(v.seq) && v.seq > 0 && /^[a-f0-9]{64}$/.test(v.checksum);
+  for (const row of rows) {
+    const s = row?.scope, ws = workstreams.find(w => w?.id === s?.workstream_id);
+    if (!exact(row,['scope','owner_run_id','generation','scope_epoch','reason','parked_episode_id','parked_cursor_ref'])
+      || !exact(s,['kind','workstream_id','bound_at_seq','terminal_event','closed_at','superseded_at'])
+      || s.kind !== 'workstream' || !ws || seen.has(ws.id) || s.superseded_at !== null
+      || !Number.isSafeInteger(s.bound_at_seq) || s.bound_at_seq < 1
+      || !(s.terminal_event === null ? s.closed_at === null : identity(s.terminal_event)
+        && typeof s.closed_at === 'string' && Number.isFinite(Date.parse(s.closed_at))
+        && new Date(s.closed_at).toISOString() === s.closed_at)
+      || !text(row.owner_run_id) || !sessions.some(x => x?.run_id === row.owner_run_id)
+      || !Number.isSafeInteger(row.generation) || row.generation < 1
+      || !Number.isSafeInteger(row.scope_epoch) || row.scope_epoch < 0 || row.scope_epoch >= session.scope_epoch
+      || !text(row.reason)
+      || !(row.parked_episode_id === null || episodes.some(e => e?.id === row.parked_episode_id && e.workstream_id === s.workstream_id))
+      || !(row.parked_cursor_ref === null || /^checkpoints\/[a-f0-9]{64}-compact\.json$/.test(row.parked_cursor_ref))) { fail(); continue; }
+    seen.add(ws.id);
+    if (s.terminal_event !== null && !(ws.terminal_events || []).some(event => JSON.stringify(event) === JSON.stringify(s.terminal_event))) fail();
+  }
+  if (session.run_id === loop.session_chain.lease.owner_run_id && seen.has(session.scope?.workstream_id)) fail();
 }

@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import { driveGoalRun } from './lib/goal-host.mjs';
+import { buildGoalBridgeDescriptor } from './lib/goal-checker.mjs';
+import { selectWorkstream } from './lib/scope-selection.mjs';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -34,10 +37,15 @@ import { resolveRunContext } from './lib/run-context.mjs';
 import { leaseCheck, acquireLease, releaseLease, sameBoundaryEvent } from './lib/lease.mjs';
 import { newWorkstream, setWorkstreamStatus, recordWorkstreamTerminal } from './lib/workspace.mjs';
 import { newEpisode, recordEpisode, abandonEpisode } from './lib/episode.mjs';
+import { prepareExecution, startExecution, returnExecution, reconcileExecution } from './lib/execution.mjs';
+import { isGoalDriven } from './lib/goal-contract.mjs';
+import { dispatchGoalReview, startGoalReview, recordGoalReview, reconcileGoalReview, goalProofState,
+  upsertGoalObligation, resolveGoalObligation, recordGoalBridgeReview, GOAL_RESULT_MAX_BYTES } from './lib/goal-review.mjs';
 import { projectObservationForCli } from './lib/route-observation.mjs';
 import {
   configureReviewFlags,
   dispatchReview,
+  claimIndependentReview,
   importReviewOutcome,
   recordReviewOutcome,
 } from './lib/review.mjs';
@@ -346,9 +354,11 @@ export const MUTATING_ROUTE_INVENTORY = Object.freeze([
   'root recovery acquire', 'root rebind', 'root recover',
   'runtime-executable approve', 'launcher-executable approve',
   'checkpoint emit', 'checkpoint observe', 'checkpoint restore', 'lease acquire', 'lease release',
-  'workstream new', 'workstream set', 'workstream terminal',
+  'workstream new', 'workstream select', 'workstream set', 'workstream terminal',
   'episode new', 'episode record', 'episode abandon',
-  'review configure', 'review dispatch', 'review record', 'review import',
+  'execution prepare', 'execution start', 'execution return', 'execution reconcile',
+  'goal drive', 'goal bridge-descriptor', 'goal bridge-record', 'goal dispatch', 'goal start', 'goal record', 'goal reconcile', 'goal obligation', 'goal obligation-resolve',
+  'review configure', 'review dispatch', 'review claim', 'review record', 'review import',
   'handoff emit', 'respawn', 'state patch', 'pause', 'recover', 'recovery acquire',
   'budget record', 'budget extend', 'comprehension ack', 'breaker reset',
   'insights emit', 'spawn-style offer-desktop', 'spawn-style confirm-desktop',
@@ -750,8 +760,11 @@ const handlers = {
     if (f.continuation === true) { error('USAGE: --continuation <workstream-session>'); return 2; }
     const model = profile.value.model ?? null;
     const effort = profile.value.effort ?? null;
+    for (const name of ['goal-contract', 'supervision', 'boundary-mode']) {
+      if (f[name] === true || f[name] === '') { error(`USAGE: --${name} requires a value`); return 2; }
+    }
     try {
-      const { runId } = initRun(root, { runtime, goal: f.goal, protocol: f.protocol, recipe: f.recipe, detected: detectPlugins(root), review: f.review ? JSON.parse(f.review) : undefined, model, effort, continuation: f.continuation ?? null, now: new Date(parseNow(f)) });
+      const { runId } = initRun(root, { runtime, goal: f.goal, protocol: f.protocol, recipe: f.recipe, detected: detectPlugins(root), review: f.review ? JSON.parse(f.review) : undefined, model, effort, continuation: f.continuation ?? null, now: new Date(parseNow(f)), goalContract: f['goal-contract'] !== undefined ? JSON.parse(f['goal-contract']) : undefined, supervision: f.supervision, boundaryMode: f['boundary-mode'] });
       json({ run_id: runId }); return 0;
     } catch (e) {
       error(String(e?.message || e)); return 1;   // INVALID_RUNTIME / INVALID_MODEL / INVALID_EFFORT → exit 1 (fail-closed)
@@ -1253,7 +1266,15 @@ const handlers = {
         if (!Array.isArray(parsed) || parsed.some(d => typeof d !== 'string' || d.length === 0)) { error('INVALID_DEPENDS_ON'); return 1; }
         dependsOn = parsed;
       }
-      const r = newWorkstream(root, runId, { title, branch, worktree, dependsOn, fence, now: parseNow(f) }); json(r); return 0;
+      if (f.requirements === true || f.requirements === '') { error('USAGE: --requirements requires JSON'); return 2; }
+      const requirementIds = f.requirements !== undefined ? JSON.parse(f.requirements) : undefined;
+      const r = newWorkstream(root, runId, { title, branch, worktree, dependsOn, requirementIds, fence, now: parseNow(f) }); json(r); return 0;
+    }
+    if (verb === 'select') {
+      for (const name of ['id', 'expected-scope', 'reason']) {
+        if (flagOccurrences(rest, name) !== 1 || typeof f[name] !== 'string' || f[name].length === 0) { error(`USAGE: --${name} requires one value`); return 2; }
+      }
+      json(selectWorkstream(root, runId, { id: f.id, expectedScope: f['expected-scope'], reason: f.reason, fence, now: parseNow(f) })); return 0;
     }
     if (verb === 'set') {
       const id = reqStr(f, 'id'); if (!id) { error('MISSING_ID'); return 2; }
@@ -1296,6 +1317,77 @@ const handlers = {
     }
     error(`unknown workstream verb: ${verb}`); return 2;
   },
+  goal: async (a) => {
+    const [verb, ...rest] = a; const f = parseFlags(rest);
+    if (verb === 'capabilities') {
+      const runtime = reqStr(f, 'runtime'); if (!runtime) { error('USAGE: --runtime is required'); return 2; }
+      try {
+        json({ runtime, implemented_transports: [...runtimeCapability(runtime, 'goal_checker_transports')], host_verification_required: true }); return 0;
+      } catch (cause) { const failure = kernelFailure(cause); error(failure.message); return failure.code; }
+    }
+    const root = rootOf(f);
+    if (verb === 'status') {
+      const runId = exactReadRunId(f); if (!runId) return exactReadFailureCode(f);
+      const captured = verifiedExactSnapshot(root, runId); if (!captured.ok) return reportVerifiedExactFailure(captured);
+      json(goalProofState(root, captured.snapshot.data)); return 0;
+    }
+    const required = { 'bridge-record': ['id','attempt','receipt','sidecar'], 'bridge-descriptor': ['id','attempt','direction','model','effort'], drive: [], dispatch: ['transport'], start: ['id', 'attempt', 'handle'], record: [], reconcile: ['id', 'attempt', 'observation'], obligation: ['value'], 'obligation-resolve': ['id'] };
+    if (!required[verb]) { error('USAGE: unknown goal verb'); return 2; }
+    for (const name of required[verb]) if (!reqStr(f, name)) { error(`USAGE: --${name} requires a value`); return 2; }
+    for (const name of Object.keys(f)) {
+      if (flagOccurrences(rest, name) !== 1 || (!['stdin', 'confirm'].includes(name) && (f[name] === true || f[name] === ''))) {
+        error(`USAGE: --${name} requires one value`); return 2;
+      }
+    }
+    if (verb === 'record' && f.stdin !== true) { error('USAGE: goal record requires --stdin'); return 2; }
+    const runId = runIdOf(root, f); requireLease(root, runId, f);
+    const common = { fence: { owner: f.owner, generation: intArg(f, 'generation'), intent: 'business' }, now: parseNow(f) };
+    try {
+      let result;
+      if (verb === 'drive') {
+        const driven = await driveGoalRun({root,runId,expect:common.fence,
+          ...(f['timeout-ms'] === undefined ? {} : {timeoutMs:intArg(f,'timeout-ms')}),
+          ...(f['max-turns'] === undefined ? {} : {maxTurns:intArg(f,'max-turns')}),
+          ...(f['token-limit'] === undefined ? {} : {tokenLimit:intArg(f,'token-limit')}),
+          profile:f.profile ?? 'current'});
+        json({ok:driven.ok,status:driven.status,reason:driven.reason,invocations:driven.invocations?.length ?? 0}); return driven.ok ? 0 : 1;
+      }
+      if (verb === 'bridge-descriptor') result = buildGoalBridgeDescriptor({root,runId,fence:common.fence,id:f.id,attemptId:f.attempt,direction:f.direction,model:f.model,effort:f.effort});
+      if (verb === 'bridge-record') result = recordGoalBridgeReview(root,runId,{...common,id:f.id,attemptId:f.attempt,receiptPath:f.receipt,sidecarPath:f.sidecar});
+      if (verb === 'dispatch') result = dispatchGoalReview(root, runId, { ...common, transport: f.transport });
+      if (verb === 'start') result = startGoalReview(root, runId, { ...common, id: f.id, attemptId: f.attempt, handle: f.handle });
+      if (verb === 'record') result = recordGoalReview(root, runId, { ...common, raw: await readBoundedText(process.stdin, { maxBytes: GOAL_RESULT_MAX_BYTES }) });
+      if (verb === 'reconcile') result = reconcileGoalReview(root, runId, { ...common, id: f.id, attemptId: f.attempt, observation: JSON.parse(f.observation) });
+      if (verb === 'obligation') result = upsertGoalObligation(root, runId, { ...common, value: JSON.parse(f.value) });
+      if (verb === 'obligation-resolve') result = resolveGoalObligation(root, runId, { ...common, id: f.id,
+        ...(f.workstreams !== undefined ? { workstreamIds: JSON.parse(f.workstreams) } : {}),
+        actor: f.actor ?? 'agent', confirm: f.confirm === true || f.confirm === 'true', reason: f.reason });
+      json(result); return 0;
+    } catch (cause) { const failure = kernelFailure(cause); error(failure.message); return failure.code; }
+  },
+  execution: async (a) => {
+    const [verb, ...rest] = a;
+    const f = parseFlags(rest); const root = rootOf(f); const runId = runIdOf(root, f);
+    const required = { prepare: ['episode', 'mode', 'stage', 'task'], start: ['episode', 'attempt', 'handle'], return: ['episode', 'attempt', 'artifacts'], reconcile: ['episode', 'attempt', 'observation'] };
+    if (!required[verb]) { error('USAGE: execution prepare|start|return|reconcile'); return 2; }
+    for (const name of Object.keys(f)) {
+      if (f[name] === true || f[name] === '' || flagOccurrences(rest, name) !== 1) { error(`USAGE: --${name} requires one value`); return 2; }
+    }
+    for (const name of required[verb]) if (!reqStr(f, name)) { error(`USAGE: --${name} requires a value`); return 2; }
+    requireLease(root, runId, f);
+    const fence = { owner: f.owner, generation: intArg(f, 'generation'), intent: 'business' };
+    const common = { episodeId: f.episode, attemptId: f.attempt, fence, now: parseNow(f) };
+    try {
+      let result;
+      if (verb === 'prepare') result = prepareExecution(root, runId, { ...common, mode: f.mode, stage: f.stage, task: f.task, ...(f.routing !== undefined ? { routing: JSON.parse(f.routing) } : {}) });
+      if (verb === 'start') result = startExecution(root, runId, { ...common, handle: f.handle });
+      if (verb === 'return') result = returnExecution(root, runId, { ...common, artifacts: JSON.parse(f.artifacts), ...(f.observation !== undefined ? { observation: JSON.parse(f.observation) } : {}) });
+      if (verb === 'reconcile') result = reconcileExecution(root, runId, { ...common, observation: JSON.parse(f.observation) });
+      json(result); return 0;
+    } catch (cause) {
+      const failure = kernelFailure(cause); error(failure.message); return failure.code;
+    }
+  },
   episode: async (a) => {
     const [verb, ...rest] = a; const f = parseFlags(rest); const root = rootOf(f); const runId = runIdOf(root, f);
     requireLease(root, runId, f);
@@ -1305,7 +1397,8 @@ const handlers = {
       const role = reqStr(f, 'role'); if (!role) { error('MISSING_ROLE'); return 2; }
       const kind = reqStr(f, 'kind'); if (!kind) { error('MISSING_KIND'); return 2; }
       const point = reqStr(f, 'point'); if (!point) { error('MISSING_POINT'); return 2; }
-      const r = newEpisode(root, runId, { plugin, role, kind, point, workstream: f.workstream, expectedArtifacts: f.artifacts ? JSON.parse(f.artifacts) : [], fence, now: parseNow(f) }); json({ id: r.id, request_rel: r.requestRel, request_path: r.requestPath }); return 0;
+      if (f['retry-of'] === true || f['retry-of'] === '') { error('USAGE: --retry-of requires an episode ID'); return 2; }
+      const r = newEpisode(root, runId, { plugin, role, kind, point, workstream: f.workstream, expectedArtifacts: f.artifacts ? JSON.parse(f.artifacts) : [], retryOf: f['retry-of'], fence, now: parseNow(f) }); json({ id: r.id, request_rel: r.requestRel, request_path: r.requestPath }); return 0;
     }
     if (verb === 'record') {
       const id = reqStr(f, 'id'); if (!id) { error('MISSING_ID'); return 2; }
@@ -1398,6 +1491,12 @@ const handlers = {
         const failure = kernelFailure(e, { extra: [['CONFIRM_REQUIRED', 2]] });
         error(failure.message); return failure.code;
       }
+    }
+    if (verb === 'claim') {
+      const episodeId = reqStr(f, 'episode');
+      if (!episodeId) { error('USAGE: --episode is required'); return 2; }
+      if (!isGoalDriven(captureReconciledRunSnapshot(root, runId).data)) throw new Error('GOAL_CONTRACT_REQUIRED: public review claim requires v0.5');
+      json(claimIndependentReview(root, runId, { episodeId, fence, now: parseNow(f) })); return 0;
     }
     if (verb === 'dispatch') {
       const point = reqStr(f, 'point'); if (!point) { error('MISSING_POINT'); return 2; }

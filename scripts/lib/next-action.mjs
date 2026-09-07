@@ -4,6 +4,8 @@ import { computeDebt } from './comprehension.mjs';
 import { makerReviewed, unsatisfiedReviewPoints, rejectionResolved } from './review.mjs';
 import { finishProofState } from './finish.mjs';
 import { classifyCompactHostForLoop, readableSessionRuntime } from './runtime.mjs';
+import { isGoalDriven } from './goal-contract.mjs';
+import { goalNextAction } from './goal-actions.mjs';
 
 function currentSessionTurns(loop) {
   const s = (loop.session_chain?.sessions || []).find(x => x.run_id === loop.session_chain?.lease?.owner_run_id);
@@ -35,7 +37,7 @@ function baselineForWorkstreamAdvice(loop, session) {
     && Number.isSafeInteger(cursor.baseline_turns)
     && cursor.baseline_turns >= 0
     ? cursor.baseline_turns
-    : 0;
+    : isGoalDriven(loop) && Number.isSafeInteger(session?.scope_turn_baseline) ? session.scope_turn_baseline : 0;
 }
 
 export function workstreamSessionAdviceCadence(loop, { unattended = false } = {}) {
@@ -156,7 +158,7 @@ function finishOrAdvance(loop, gate, fanoutBlocked, blockingMakers) {
   return A(gate, { type: 'await_human', reason: 'active-work-remains' }, '/deep-loop-status');
 }
 
-export function nextAction(loop, { now = Date.now(), unattended = false } = {}) {
+export function nextAction(loop, { now = Date.now(), unattended = false, goalProof } = {}) {
   const b = checkBudget(loop, { now });
   const br = checkBreaker(loop);
   const debt = computeDebt(loop);
@@ -207,7 +209,7 @@ export function nextAction(loop, { now = Date.now(), unattended = false } = {}) 
     && currentSession.scope.closed_at != null
     && currentSession.scope.superseded_at == null
     && sameBoundary(boundary, boundary);
-  if (closedBoundary && !boundaryAlreadyLinked(loop, currentSession, boundary)) {
+  if (!isGoalDriven(loop) && closedBoundary && !boundaryAlreadyLinked(loop, currentSession, boundary)) {
     if (finishProofState(loop).missing.length === 0) {
       return A(gate, { type: 'finish' }, '/deep-loop-finish');
     }
@@ -234,6 +236,8 @@ export function nextAction(loop, { now = Date.now(), unattended = false } = {}) 
     && (workstreamCadence.advice || migratedCap.advice)
     ? { ...r, action: { ...r.action, advice: 'compact', advice_reason: 'per_session_turn_cap' } }
     : r;
+
+  if (isGoalDriven(loop)) return withAdvice(goalNextAction(loop, { gate, debt, blockingMakers, goalProof }));
 
   const routingLoop = workstreamSession ? scopedRoutingView(loop, currentSession) : loop;
   const route = () => {

@@ -1,3 +1,4 @@
+import { prepareExecution, returnExecution } from '../scripts/lib/execution.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -34,14 +35,15 @@ function events(root, runId) {
   return readFileSync(path, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
 }
 
-function seed({ reviewer = 'deep-review', newPolicy = false, observation = false } = {}) {
+function seed({ reviewer = 'deep-review', newPolicy = false, observation = false, goalDriven = false } = {}) {
   const root = canonicalRealpath(mkdtempSync(join(tmpdir(), 'dl-checker-int-')));
   const detected = reviewer === 'deep-review' ? { 'deep-review': true } : { 'deep-review': false };
   const { runId } = initRun(root, {
     runtime: 'codex', goal: 'g', detected, now: new Date('2026-07-11T00:00:00Z'),
     env: {}, platform: 'linux', run: () => ({ code: 1 }),
+    ...(goalDriven ? {goalContract:{version:1,requirements:[{id:'REQ-A',statement:'Deliver A',acceptance:'Artifact is correct'}],non_goals:[]}} : {}),
   });
-  if (!newPolicy) migrateAuthenticLegacyTransport(root, runId);
+  if (!newPolicy && !goalDriven) migrateAuthenticLegacyTransport(root, runId);
   const fence = { owner: runId, generation: 1, intent: 'business' };
   if (observation) {
     mkdirSync(join(root, '.claude-plugin'), { recursive: true });
@@ -57,13 +59,14 @@ function seed({ reviewer = 'deep-review', newPolicy = false, observation = false
   mkdirSync(join(root, worktree), { recursive: true });
   const bytes = Buffer.from('maker artifact bytes');
   writeFileSync(join(root, artifact), bytes);
-  const ws = newWorkstream(root, runId, { title: 'w', branch: 'b', worktree, fence }).id;
+  const ws = newWorkstream(root, runId, { title: 'w', branch: 'b', worktree, fence, ...(goalDriven?{requirementIds:['REQ-A']}: {}) }).id;
   const makerId = newEpisode(root, runId, {
     plugin: 'deep-work', role: 'maker', kind: 'implementation', point: 'implementation',
     workstream: ws, expectedArtifacts: [artifact], fence,
   }).id;
-  recordEpisode(root, runId, makerId, { status: 'in_progress', fence });
-  recordEpisode(root, runId, makerId, { status: 'done', artifacts: [artifact], fence });
+  if(goalDriven){const prepared=prepareExecution(root,runId,{episodeId:makerId,mode:'inline',task:'Deliver A',fence,now:FIXED_NOW});returnExecution(root,runId,{episodeId:makerId,attemptId:prepared.execution.attempt_id,artifacts:[artifact],fence,now:FIXED_NOW});}
+  else {recordEpisode(root, runId, makerId, { status: 'in_progress', fence });
+  recordEpisode(root, runId, makerId, { status: 'done', artifacts: [artifact], fence });}
   const checkerId = dispatchReview(root, runId, {
     point: 'implementation', workstreamId: ws, detected,
     independentSubagent: reviewer !== 'deep-review', fence,
@@ -837,4 +840,25 @@ test('session model or effort drift after preflight blocks before checker spawn'
     assert.equal(result.reason, 'checker-identity-drift', field);
     assert.equal(checkerCalls, 0, field);
   }
+});
+
+ test('v0.5 host records measured execution return before importing ordinary checker proof without rotating owner',()=>{
+  const f=seed({goalDriven:true});const deps=hostDeps(f);
+  const result=driveHeadlessRun({root:f.root,runId:f.runId,now:Date.parse(FIXED_NOW),...deps,
+    checkerRunFn:options=>({...deps.checkerRunFn(options),process_group:{mode:'required',group_id:12345,quiescence_confirmed:true},termination:{confirmed:true}})});
+  assert.equal(result.action,'checker-complete',JSON.stringify(result));
+  const loop=readState(f.root,f.runId).data, checker=loop.episodes.find(x=>x.id===f.checkerId);
+  assert.equal(checker.status,'approved');assert.equal(checker.execution.phase,'returned');
+  assert.equal(checker.execution.observation.source,'supervisor-receipt');
+  assert.equal(loop.session_chain.lease.owner_run_id,f.runId);
+  assert.equal(loop.session_chain.lease.handoff_phase,'idle');
+ });
+
+test('v0.5 import rejects report bytes differing from the observed checker process output',()=>{
+ const f=seed({goalDriven:true});const deps=hostDeps(f);
+ const result=driveHeadlessRun({root:f.root,runId:f.runId,now:Date.parse(FIXED_NOW),...deps,
+  checkerRunFn:options=>({...deps.checkerRunFn(options),process_group:{mode:'required',group_id:12345,quiescence_confirmed:true},termination:{confirmed:true}}),
+  checkerImportFn:(_options,bytes)=>{const changed=JSON.parse(bytes);changed.report_body='A different report';return {ok:true,value:importReviewOutcome(f.root,f.runId,{raw:JSON.stringify(changed),fence:f.fence,now:FIXED_NOW})};}});
+ assert.equal(result.ok,false);
+ assert.notEqual(readState(f.root,f.runId).data.episodes.find(x=>x.id===f.checkerId).status,'approved');
 });

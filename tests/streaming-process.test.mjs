@@ -11,6 +11,38 @@ import { makeCodexPreflightReceipt } from '../scripts/lib/budget.mjs';
 import { canonicalRealpath } from './helpers/fs-fixtures.mjs';
 
 const fixture = fileURLToPath(new URL('./fixtures/stream-emitter.mjs', import.meta.url));
+const descendantWriter = String.raw`
+  const fs = require('node:fs');
+  const markerPath = process.argv[1];
+  process.on('SIGTERM', () => process.exit(0));
+  setInterval(() => fs.appendFileSync(markerPath, '.'), 20);
+`;
+const processGroupParent = String.raw`
+  const { spawn } = require('node:child_process');
+  const fs = require('node:fs');
+  const descendant = spawn(process.execPath, ['-e', process.argv[1], process.argv[3]], {
+    stdio: 'ignore',
+  });
+  fs.writeFileSync(process.argv[2], String(descendant.pid));
+  descendant.unref();
+  process.stdout.write(JSON.stringify({ num_turns: 1 }));
+  if (process.argv[4] === 'deadline') {
+    process.on('SIGTERM', () => {});
+    setInterval(() => {}, 1_000);
+  } else {
+    setTimeout(() => process.exit(0), 80);
+  }
+`;
+
+function pidIsGone(pid) {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    if (error?.code === 'ESRCH') return true;
+    throw error;
+  }
+}
 
 async function streamingModule() {
   try {
@@ -41,6 +73,7 @@ test('runStreamingProcess streams stdin to one real child with cwd and explicit 
       spawnImpl: (bin, argv, options) => {
         spawnCount += 1;
         assert.equal(options.shell, false);
+        assert.equal(Object.hasOwn(options, 'detached'), false, 'legacy mode must not alter spawn topology');
         assert.deepEqual(options.env, { STREAM_TOKEN: 'explicit-only' });
         return spawn(bin, argv, options);
       },
@@ -54,6 +87,155 @@ test('runStreamingProcess streams stdin to one real child with cwd and explicit 
   assert.equal(result.ok, true);
   assert.equal(spawnCount, 1, 'the runtime must be spawned exactly once');
   assert.equal(Object.hasOwn(result, 'stdout'), false, 'raw runtime stdout must never escape');
+});
+
+test('strict process-group mode rejects unsupported platforms before async or worker spawn', async () => {
+  const { runStreamingProcess, runStreamingProcessSync } = await streamingModule();
+  let asyncSpawns = 0;
+  const asyncResult = await runStreamingProcess({
+    bin: process.execPath,
+    argv: [],
+    usageOutputKind: 'claude-json',
+  }, {
+    processGroup: 'required',
+    platform: 'win32',
+    spawnImpl: () => {
+      asyncSpawns += 1;
+      throw new Error('unsupported strict mode must not spawn');
+    },
+  });
+  let workerSpawns = 0;
+  const syncResult = runStreamingProcessSync({
+    bin: process.execPath,
+    argv: [],
+    usageOutputKind: 'claude-json',
+  }, {
+    processGroup: 'required',
+    platform: 'win32',
+    spawnSyncImpl: () => {
+      workerSpawns += 1;
+      throw new Error('unsupported strict mode must not spawn a worker');
+    },
+  });
+
+  const unavailable = {
+    ok: false,
+    reason: 'process-group-unavailable',
+    process_group: {
+      mode: 'required',
+      platform: 'win32',
+      group_id: null,
+      termination_scope: 'none',
+      quiescence_confirmed: null,
+    },
+    termination: {
+      trigger: 'unsupported-platform',
+      term_requested: false,
+      kill_requested: false,
+      confirmed: false,
+    },
+  };
+  assert.deepEqual(asyncResult, unavailable);
+  assert.deepEqual(syncResult, unavailable);
+  assert.equal(asyncSpawns, 0);
+  assert.equal(workerSpawns, 0);
+});
+
+test('strict pre-spawn validation reports that no owned process group was created', async () => {
+  const { runStreamingProcess } = await streamingModule();
+  let spawns = 0;
+  const result = await runStreamingProcess({ bin: process.execPath, argv: [] }, {
+    processGroup: 'required',
+    platform: 'linux',
+    spawnImpl: () => {
+      spawns += 1;
+      throw new Error('invalid request must not spawn');
+    },
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    reason: 'unsupported-usage-kind',
+    process_group: {
+      mode: 'required',
+      platform: 'linux',
+      group_id: null,
+      termination_scope: 'none',
+      quiescence_confirmed: true,
+    },
+    termination: {
+      trigger: 'preflight-rejected',
+      term_requested: false,
+      kill_requested: false,
+      confirmed: true,
+    },
+  });
+  assert.equal(spawns, 0);
+});
+
+test('strict normal completion terminates and confirms inherited descendants before success', {
+  skip: process.platform === 'win32' ? 'POSIX process groups are unavailable on win32' : false,
+}, async () => {
+  const { runStreamingProcess } = await streamingModule();
+  const dir = mkdtempSync(join(tmpdir(), 'deep-loop-stream-group-success-'));
+  const pidPath = join(dir, 'descendant.pid');
+  const markerPath = join(dir, 'descendant.marker');
+  let descendantPid;
+  try {
+    const result = await runStreamingProcess({
+      bin: process.execPath,
+      argv: ['-e', processGroupParent, descendantWriter, pidPath, markerPath, 'success'],
+      usageOutputKind: 'claude-json',
+    }, { timeoutMs: 2_000, processGroup: 'required' });
+    descendantPid = Number(readFileSync(pidPath, 'utf8'));
+    const markerAtReturn = readFileSync(markerPath, 'utf8');
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(result.usage, { num_turns: 1, tokens: null });
+    assert.equal(result.process_group.mode, 'required');
+    assert.equal(result.process_group.termination_scope, 'owned-posix-process-group');
+    assert.equal(result.process_group.quiescence_confirmed, true);
+    assert.equal(result.termination.trigger, 'post-exit-cleanup');
+    assert.equal(result.termination.term_requested, true);
+    assert.equal(result.termination.confirmed, true);
+    assert.equal(pidIsGone(descendantPid), true, 'descendant must be dead before success returns');
+    assert.equal(readFileSync(markerPath, 'utf8'), markerAtReturn, 'descendant cannot mutate files after success');
+  } finally {
+    if (Number.isInteger(descendantPid) && !pidIsGone(descendantPid)) process.kill(descendantPid, 'SIGKILL');
+  }
+});
+
+test('strict deadline escalates to group SIGKILL and confirms no descendant survives', {
+  skip: process.platform === 'win32' ? 'POSIX process groups are unavailable on win32' : false,
+}, async () => {
+  const { runStreamingProcess } = await streamingModule();
+  const dir = mkdtempSync(join(tmpdir(), 'deep-loop-stream-group-timeout-'));
+  const pidPath = join(dir, 'descendant.pid');
+  const markerPath = join(dir, 'descendant.marker');
+  let descendantPid;
+  try {
+    const result = await runStreamingProcess({
+      bin: process.execPath,
+      argv: ['-e', processGroupParent, descendantWriter, pidPath, markerPath, 'deadline'],
+      usageOutputKind: 'claude-json',
+    }, { timeoutMs: 200, processGroup: 'required' });
+    descendantPid = Number(readFileSync(pidPath, 'utf8'));
+    const markerAtReturn = readFileSync(markerPath, 'utf8');
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.reason, 'timeout');
+    assert.equal(result.process_group.quiescence_confirmed, true);
+    assert.equal(result.termination.trigger, 'deadline');
+    assert.equal(result.termination.term_requested, true);
+    assert.equal(result.termination.kill_requested, true);
+    assert.equal(result.termination.confirmed, true);
+    assert.equal(pidIsGone(descendantPid), true, 'deadline must terminate the inherited descendant');
+    assert.equal(readFileSync(markerPath, 'utf8'), markerAtReturn, 'deadline descendant cannot keep mutating files');
+  } finally {
+    if (Number.isInteger(descendantPid) && !pidIsGone(descendantPid)) process.kill(descendantPid, 'SIGKILL');
+  }
 });
 
 test('runStreamingProcess discards valid usage after timeout or non-zero exit', async () => {
@@ -233,6 +415,36 @@ test('runStreamingProcess feeds Codex JSONL incrementally without returning raw 
   assert.equal(Object.hasOwn(result, 'stdout'), false);
 });
 
+test('streaming async and sync paths return only the parser-verified provider thread UUID', async () => {
+  const { runStreamingProcess, runStreamingProcessSync } = await streamingModule();
+  const providerThreadId = '019d1234-5678-7abc-8def-0123456789ab';
+  const source = [
+    JSON.stringify({ type: 'thread.started', thread_id: providerThreadId }),
+    JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 3, output_tokens: 2 } }),
+  ].join('\n');
+  const entry = {
+    bin: process.execPath,
+    argv: ['-e', `process.stdout.write(${JSON.stringify(source)})`],
+    usageOutputKind: 'codex-jsonl',
+    captureProviderThreadId: true,
+  };
+
+  const asyncResult = await runStreamingProcess(entry, { timeoutMs: 2_000 });
+  const syncResult = runStreamingProcessSync(entry, { timeoutMs: 2_000 });
+  for (const result of [asyncResult, syncResult]) {
+    assert.deepEqual(result, {
+      ok: true,
+      usage: {
+        num_turns: 1,
+        tokens: 5,
+        input_tokens: 3,
+        output_tokens: 2,
+      },
+      providerThreadId,
+    });
+  }
+});
+
 test('streaming async and sync paths opt into exact Codex final-message bytes', async () => {
   const { runStreamingProcess, runStreamingProcessSync } = await streamingModule();
   const entry = {
@@ -266,6 +478,7 @@ test('sync worker rejects non-canonical or malformed final-message transport', a
   for (const stdout of [
     JSON.stringify({ ok: true, usage, finalMessageBase64: '@@@' }),
     JSON.stringify({ ok: true, usage, finalMessageBase64: Buffer.from('x').toString('base64'), finalMessage: 'spoof' }),
+    JSON.stringify({ ok: true, usage, providerThreadId: 'thread-1' }),
   ]) {
     const result = runStreamingProcessSync({
       bin: process.execPath,
@@ -338,6 +551,34 @@ test('runStreamingProcessSync uses one dedicated Node worker and one runtime spa
   assert.equal(workerArgv.includes('worker-only stdin'), false, 'runtime stdin must not appear in worker argv');
   assert.equal(Buffer.from(workerInput).includes(Buffer.from('worker-only stdin')), true);
   assert.equal(Object.hasOwn(result, 'stdout'), false, 'worker protocol must not expose raw runtime stdout');
+});
+
+test('sync worker forwards strict process-group ownership and returns confirmed lifecycle evidence', {
+  skip: process.platform === 'win32' ? 'POSIX process groups are unavailable on win32' : false,
+}, async () => {
+  const { runStreamingProcessSync } = await streamingModule();
+  const dir = mkdtempSync(join(tmpdir(), 'deep-loop-stream-group-sync-'));
+  const pidPath = join(dir, 'descendant.pid');
+  const markerPath = join(dir, 'descendant.marker');
+  let descendantPid;
+  try {
+    const result = runStreamingProcessSync({
+      bin: process.execPath,
+      argv: ['-e', processGroupParent, descendantWriter, pidPath, markerPath, 'success'],
+      usageOutputKind: 'claude-json',
+    }, { timeoutMs: 2_000, processGroup: 'required' });
+    descendantPid = Number(readFileSync(pidPath, 'utf8'));
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(result.usage, { num_turns: 1, tokens: null });
+    assert.equal(result.process_group.mode, 'required');
+    assert.equal(result.process_group.quiescence_confirmed, true);
+    assert.equal(result.termination.trigger, 'post-exit-cleanup');
+    assert.equal(result.termination.confirmed, true);
+    assert.equal(pidIsGone(descendantPid), true);
+  } finally {
+    if (Number.isInteger(descendantPid) && !pidIsGone(descendantPid)) process.kill(descendantPid, 'SIGKILL');
+  }
 });
 
 test('runStreamingProcessSync durably journals and returns an exact worker-owned usage receipt before success', async () => {
@@ -422,6 +663,31 @@ test('runStreamingProcessSync fails closed without usage when its receipt journa
     assert.equal(Object.hasOwn(result, 'usageReceipt'), false, label);
   }
   assert.equal(readFileSync(occupied, 'utf8'), original, 'an existing journal is immutable');
+
+  if (process.platform === 'win32') return;
+
+  const strictAttemptId = 'f'.repeat(32);
+  const strictOccupied = join(journalDir, `${strictAttemptId}-read.json`);
+  writeFileSync(strictOccupied, original);
+  const strictResult = runStreamingProcessSync({
+    bin: process.execPath,
+    argv: [fixture, 'codex-stream'],
+    usageOutputKind: 'codex-jsonl',
+  }, {
+    timeoutMs: 2_000,
+    processGroup: 'required',
+    usageReceipt: {
+      ...base,
+      attemptId: strictAttemptId,
+      journalPath: strictOccupied,
+    },
+  });
+  assert.equal(strictResult.ok, false);
+  assert.equal(strictResult.reason, 'usage-receipt-write-failed');
+  assert.equal(strictResult.process_group.quiescence_confirmed, true);
+  assert.equal(strictResult.termination.confirmed, true);
+  assert.equal(Object.hasOwn(strictResult, 'usage'), false);
+  assert.equal(readFileSync(strictOccupied, 'utf8'), original);
 });
 
 test('runStreamingProcessSync preserves timeout/non-zero precedence across the worker boundary', async () => {

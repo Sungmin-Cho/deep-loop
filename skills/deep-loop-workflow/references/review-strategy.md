@@ -85,3 +85,17 @@ reviewer 선택은 `references/adapters.md`의 상호 배타 Route A–D 중 하
 - 리뷰 없이 completed 전이 불가 — `finishProofState`가 독립 리뷰 proof를 요구한다.
 - checker 없이 maker `done`만으로는 workstream을 `ready`로 전이할 수 없다.
 - **machine review(checker APPROVE)는 agent 카운터(`episodes_agent_reviewed`)로만 계상되어 comprehension debt를 줄이지 않는다.** comprehension 게이트(사람 검토)는 `/deep-loop-ack --actor human --confirm`만 해제한다.
+
+## Goal-driven v0.5 review selection
+
+For new v0.5 runs, honor explicit user/recipe review requirements; otherwise start
+with an implementation review and delegated supervision. Routine configuration
+within an already authorized goal does not require another survey. Human mode
+keeps its actual human comprehension gate; machine approval never creates human
+credit. Existing v0.4 settings keep their original meaning.
+
+Ordinary claimed checkers use the stdin form of `review import` after their
+observed return. The final whole-goal review is a separate GoalResult assessment,
+with every requirement and fresh source/evidence bindings. Its approval cannot
+replace the ordinary maker/checker chain. Use a supported independent host
+mechanism and retain unavailable evidence as unavailable.

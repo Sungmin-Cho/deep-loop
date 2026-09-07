@@ -15,6 +15,13 @@ import { dispatchReview, recordReviewOutcome } from '../scripts/lib/review.mjs';
 import { nextAction } from '../scripts/lib/next-action.mjs';
 import * as finishModule from '../scripts/lib/finish.mjs';
 import { emitHandoff } from '../scripts/lib/handoff.mjs';
+import { buildLaunchCommand, buildRuntimeResumeDescriptor } from '../scripts/lib/runtime-descriptor.mjs';
+import { makeGoalFixture } from './helpers/goal-fixture.mjs';
+import {
+  createScenarioMaker,
+  produceScenarioMaker,
+  reviewScenarioMaker,
+} from './helpers/goal-scenario.mjs';
 import { acquireLease } from '../scripts/lib/lease.mjs';
 import { runDir } from '../scripts/lib/state.mjs';
 import { contentHash } from '../scripts/lib/envelope.mjs';
@@ -428,6 +435,75 @@ function closeWithSibling(runtime = 'claude') {
     .find(session => session.run_id === f.runId).scope.terminal_event;
   return { ...f, sibling, boundary };
 }
+
+test('v0.5 handoff derives goalDriven from durable schema for its persistent Codex owner descriptor', {
+  skip: process.platform === 'win32' ? 'launch-command.txt spelling is POSIX Codex CLI headless' : false,
+}, () => {
+  const f = makeGoalFixture({
+    runtime: 'codex',
+    boundaryMode: 'handoff',
+    effort: 'ultra',
+    review: {
+      points: ['implementation'], reviewer: 'subagent-checker', mode: 'cross-model',
+      flags: [], converge: true, max_review_rounds: 5, require_human_ack: false,
+    },
+  });
+  try {
+    const workstream = f.workstream('persistent-owner');
+    const maker = createScenarioMaker(f, workstream);
+    produceScenarioMaker(f, maker);
+    reviewScenarioMaker(f, maker.id);
+    const closed = f.cli(['workstream', 'terminal', '--id', workstream.id, '--status', 'ready', '--proof', '{}']);
+    assert.equal(closed.exit, 0, closed.stderr);
+    const boundary = f.state().session_chain.sessions
+      .find(session => session.run_id === f.runId).scope.terminal_event;
+    let seen;
+    const emitted = emitHandoff(f.root, f.runId, {
+      boundaryEvent: boundary,
+      reason: 'workstream-terminal',
+      trigger: 'workstream-terminal',
+      now: Date.parse(NOW),
+      expect: { owner: f.runId, generation: 1 },
+      env: {},
+      descriptorBuilder(options) {
+        seen = options;
+        return buildRuntimeResumeDescriptor({ ...options, codexExecutable: '/trusted/codex' });
+      },
+    });
+
+    assert.equal(emitted.ok, true);
+    assert.equal(seen.goalDriven, true);
+    const launch = readFileSync(join(runDir(f.root, f.runId), 'terminal', 'launch-command.txt'), 'utf8');
+    assert.match(launch, /Codex CLI headless/);
+    assert.match(readFileSync(emitted.handoffPath, 'utf8'), /persistent goal-owner descriptor/);
+
+    let respawnSeen;
+    let spawnedEntry;
+    const spawned = respawn(f.root, f.runId, {
+      childRunId: emitted.childRunId,
+      key: emitted.key,
+      handoffRel: emitted.handoffRel,
+      headless: true,
+      now: Date.parse(NOW) + 1,
+      env: {},
+      codexExecutable: '/trusted/codex',
+      launchCommandBuilder(options) {
+        respawnSeen = options;
+        return buildLaunchCommand(options);
+      },
+      spawnFn(entry) {
+        spawnedEntry = entry;
+        return { ok: true };
+      },
+    });
+    assert.equal(spawned.ok, true, JSON.stringify(spawned));
+    assert.equal(respawnSeen.goalDriven, true);
+    assert.equal(spawnedEntry.captureProviderThreadId, true);
+    assert.equal(spawnedEntry.argv.includes('--ephemeral'), false);
+  } finally {
+    f.cleanup();
+  }
+});
 
 function realBoundaryFixture() {
   const f = seedReviewed();

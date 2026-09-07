@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { validateProfile, validateTask, STEP_VOCAB } from '../../evals/lib/validate.mjs';
+import { OUTCOME_CASE_IDS, describeOutcomeCase } from '../../evals/lib/outcome-cases.mjs';
 
 test('task bank has the exact 42-row two-layer contract', () => {
   const dir = join(process.cwd(), 'evals', 'tasks');
@@ -20,6 +21,26 @@ test('task bank has the exact 42-row two-layer contract', () => {
   }
   const alternative = tasks.find(task => task.id === 'outcome-valid-alternative-211');
   assert.equal(alternative.trials, 2);
+});
+
+test('every outcome task is backed by a parent-owned executable case contract', () => {
+  const taskDir = join(process.cwd(), 'evals', 'tasks');
+  const tasks = readdirSync(taskDir).filter(file => file.startsWith('outcome-'))
+    .map(file => JSON.parse(readFileSync(join(taskDir, file), 'utf8')));
+  assert.deepEqual([...OUTCOME_CASE_IDS].sort(), tasks.map(task => task.id).sort());
+  for (const task of tasks) {
+    const definition = describeOutcomeCase(task.id);
+    assert.ok(definition.module.endsWith('.mjs'), task.id);
+    assert.ok(definition.case_count >= 2, task.id);
+    const fixtureFiles = readdirSync(join(process.cwd(), task.fixture));
+    assert.equal(fixtureFiles.includes('solution.json'), false, task.id);
+    assert.equal(fixtureFiles.includes('fixture.json'), false, task.id);
+  }
+  assert.deepEqual(tasks.filter(task => describeOutcomeCase(task.id).decision_focused)
+    .map(task => task.id).sort(), [
+    'outcome-should-not-replan-216', 'outcome-should-not-review-214',
+    'outcome-should-replan-215', 'outcome-should-review-213',
+  ]);
 });
 
 test('STEP_VOCAB mutating surface stays synchronized with the production inventory', () => {
@@ -70,7 +91,7 @@ test('profiles, taxonomy, result schema, and the 12-row synthetic sample match r
   assert.equal(profiles.length, 4);
   profiles.forEach(profile => assert.equal(validateProfile(profile).ok, true, profile.id));
   assert.deepEqual(new Set(profiles.map(profile => profile.id)), new Set([
-    'host-native', 'deep-loop-kernel-minimal', 'deep-loop-current-v1.22', 'deep-loop-experimental',
+    'host-native', 'deep-loop-kernel-minimal', 'deep-loop-current-v1.23', 'deep-loop-experimental',
   ]));
 
   const resultSchema = JSON.parse(readFileSync(join(process.cwd(), 'schemas', 'eval-result.schema.json'), 'utf8'));
@@ -78,7 +99,7 @@ test('profiles, taxonomy, result schema, and the 12-row synthetic sample match r
     'not-applicable', 'harness-constraint', 'procedural-rigidity', 'model-error', 'task-error', 'environment-error',
   ]);
   const readme = readFileSync(join(process.cwd(), 'evals', 'README.md'), 'utf8');
-  assert.match(readme, /agency_loss_incident.*host-native.*deep-loop-current-v1\.22.*valid solution.*deep-loop-experimental.*fails.*harness-constraint.*procedural-rigidity.*hard safety invariant/is);
+  assert.match(readme, /agency_loss_incident.*host-native.*deep-loop-current-v1\.23.*valid solution.*deep-loop-experimental.*fails.*harness-constraint.*procedural-rigidity.*hard safety invariant/is);
   assert.match(readme, /harness_block_incident.*valid solution.*harness.*prevented.*outcome/is);
   assert.match(readme, /`not-applicable`/);
   assert.match(readme, /without (?:a|the) manifest bank[^.]*structural validation only[^.]*does not recompute task-bound evidence/i);
@@ -106,7 +127,7 @@ test('STEP_VOCAB exactly equals production mutating routes plus the explicit eva
   const source = readFileSync(join(process.cwd(), 'scripts', 'deep-loop.mjs'), 'utf8');
   const inventory = source.match(/const MUTATING_ROUTE_INVENTORY\s*=\s*Object\.freeze\(\[([\s\S]*?)\]\);/)?.[1];
   const production = [...inventory.matchAll(/['"]([^'"]+)['"]/g)].map(match => match[1]);
-  const readSurface = ['validate', 'next-action', 'state get', 'checkpoint inspect', 'init-run'];
+  const readSurface = ['validate', 'next-action', 'state get', 'checkpoint inspect', 'init-run', 'goal status'];
   assert.deepEqual([...STEP_VOCAB].sort(), [...new Set([...production, ...readSurface])].sort());
 });
 

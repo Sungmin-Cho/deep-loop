@@ -1,0 +1,1 @@
+{"schema_version":1,"mode":"real-agent","profiles":["native","current"],"tasks":["outcome-deterministic-bug-201","outcome-valid-alternative-211"],"trials":1,"model":"gpt-6-astra","effort":"high","timeout_ms":600000,"token_limit":500000,"allowed_effects":["isolated-workspace-write"]}

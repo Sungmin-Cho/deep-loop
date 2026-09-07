@@ -666,24 +666,41 @@ test('a malicious workspace cannot shadow any instruction the plugin issues', ()
     const isLanding = (target) =>
       target.startsWith(evil + sep) && existsSync(target) && statSync(target).isFile();
 
-    // Excluding directory landings is safe only while no shipped directory is a
-    // Node LOAD_AS_DIRECTORY target. `<dir>/index.js`, or a `package.json` that
-    // names an entry point, would make a planted DIRECTORY reachable again — the
-    // same resolution path the module-load rule calls arbitrary code execution —
-    // and nothing else would notice, because `isFile()` would keep skipping it.
-    // Derived by asking each candidate rather than carving out the root entry by
-    // name: this repo's root `package.json` declares neither `main` nor
-    // `exports`, so the directory it sits in is not loadable, and if that ever
-    // changes this fails.
-    const loadable = [...PLUGIN_FILES].filter((k) => {
-      if (/(^|\/)index\.[cm]?js$/.test(k)) return true;
-      if (!/(^|\/)package\.json$/.test(k)) return false;
-      const pkg = JSON.parse(readFileSync(join(ROOT, k), 'utf8'));
-      return Boolean(pkg.main || pkg.exports);
-    });
-    assert.deepEqual(loadable.sort(), [],
-      'a shipped directory just became loadable by name — the isFile() landing '
-      + 'filter now hides a reachable shadow, and must be revisited');
+    // Fixture programs are shipped data, and may legitimately use index.mjs.
+    // A loadable directory becomes an instruction surface only when shipped
+    // guidance tells the agent to load it by an unanchored name. Keep the
+    // directory inventory derived, require every current exception to remain
+    // fixture data, and pressure-test the classifier against each directory.
+    const loadableDirectories = new Set([...PLUGIN_FILES].flatMap((key) => {
+      if (/(^|\/)index\.[cm]?js$/.test(key)) return [normalizePath(dirname(key))];
+      if (!/(^|\/)package\.json$/.test(key)) return [];
+      const pkg = JSON.parse(readFileSync(join(ROOT, key), 'utf8'));
+      return pkg.main || pkg.exports ? [normalizePath(dirname(key))] : [];
+    }));
+    assert.ok(loadableDirectories.size > 0,
+      'the fixture-data distinction needs at least one real loadable directory');
+    assert.deepEqual(
+      [...loadableDirectories].filter(dir => !dir.startsWith('evals/fixtures/')),
+      [],
+      'a non-fixture shipped directory became loadable and needs an explicit instruction-surface decision',
+    );
+    for (const dir of loadableDirectories) {
+      assert.ok(shadowableTokens(`node ${dir}`).length > 0,
+        `fixture data must not authorize an unanchored directory execution: ${dir}`);
+    }
+    const loadableInstructionLandings = [];
+    for (const file of markdownFiles()) {
+      readFileSync(file, 'utf8').split('\n').forEach((line, index) => {
+        for (const hit of shadowableTokens(line, file)) {
+          const token = normalizePath(hit.token).replace(/^\.\//, '');
+          if (loadableDirectories.has(token)) {
+            loadableInstructionLandings.push(`${relative(ROOT, file)}:${index + 1}  ${token}`);
+          }
+        }
+      });
+    }
+    assert.deepEqual(loadableInstructionLandings, [],
+      'shipped guidance must not issue an unanchored load of fixture-data directories');
 
     // Non-vacuity FIRST, deliberately. The sibling this came from asserts its
     // control after the landing sweep, which is unreachable the moment the sweep

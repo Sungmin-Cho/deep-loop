@@ -135,3 +135,14 @@ node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" review record --episode <checkerEpis
 - 또는 protocol의 계획된 산출물 경로
 
 항상 비어있지 않은 배열이어야 한다 — maker `done` 전이는 expected_artifacts 존재와 실제 파일을 요구한다.
+
+## Goal-driven v0.5 execution
+
+For v0.5, use the kernel `execution prepare` invocation and its `required_stages`.
+A goal-driven adapter dispatch declares `completion: execution-return`; the
+legacy `awaitResult` plan-file descriptor is not implementation completion proof.
+Superpowers returns its primary plan, then invokes the declared continuation
+with that actual plan path. A final returned stage and declared output artifacts
+are required before maker done. The normal/fix path is the same.
+
+See [goal execution](goal-execution.md) at `DEEP_LOOP_ROOT/skills/deep-loop-workflow/references/goal-execution.md` for current host call sequences.

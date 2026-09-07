@@ -9,7 +9,8 @@ import {
   readdirSync,
   realpathSync,
 } from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
+import { isAbsolute, join, resolve, win32 } from 'node:path';
+import { pathKeyWithin, sameResolvedPath } from './path-portable.mjs';
 import { buildCodexExecEntry } from './codex-runtime.mjs';
 import { runStreamingProcessSync } from './streaming-process.mjs';
 import { isMeasuredOneTurnUsage } from './budget.mjs';
@@ -36,8 +37,17 @@ function sameNode(left, right) {
 }
 
 function contained(root, candidate) {
-  const rel = relative(root, candidate);
-  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+  return pathKeyWithin(root, candidate);
+}
+
+function sameLexicalPath(left, right) {
+  return sameResolvedPath(left, right);
+}
+
+function windowsSameNodeAlias(before, after) {
+  return process.platform === 'win32'
+    && before.dev === after.dev && before.ino === after.ino && before.ino !== 0n
+    && before.mode === after.mode;
 }
 
 export function inspectCheckerFileIdentity(path, { maxBytes = MAX_FILE_BYTES } = {}) {
@@ -47,7 +57,8 @@ export function inspectCheckerFileIdentity(path, { maxBytes = MAX_FILE_BYTES } =
     || (before.mode & 0o444n) === 0n) throw new Error('checker-file-invalid');
   const canonical = (realpathSync.native || realpathSync)(lexical);
   const canonicalStat = lstatSync(canonical, { bigint: true });
-  if (resolve(canonical) !== lexical || !sameNode(before, canonicalStat)) throw new Error('checker-file-drift');
+  if ((!sameLexicalPath(resolve(canonical), lexical) && !windowsSameNodeAlias(before, canonicalStat))
+    || !sameNode(before, canonicalStat)) throw new Error('checker-file-drift');
   const fd = openSync(canonical, 'r');
   let bytes;
   try {
@@ -78,7 +89,8 @@ function inspectDirectory(path, parent = null) {
   if (before.isSymbolicLink() || !before.isDirectory()) throw new Error('checker-directory-invalid');
   const canonical = (realpathSync.native || realpathSync)(lexical);
   const after = lstatSync(canonical, { bigint: true });
-  if (resolve(canonical) !== lexical || after.isSymbolicLink() || !after.isDirectory()
+  if ((!sameLexicalPath(resolve(canonical), lexical) && !windowsSameNodeAlias(before, after))
+    || after.isSymbolicLink() || !after.isDirectory()
     || before.dev !== after.dev || before.ino !== after.ino || before.mode !== after.mode
     || (parent && !contained(parent, canonical))) throw new Error('checker-directory-drift');
   return {
@@ -227,6 +239,7 @@ export function runIndependentCodexChecker({
   effort = null,
   timeoutMs,
   usageReceipt = null,
+  goalDriven = false,
   runProcess = runStreamingProcessSync,
 } = {}) {
   const root = absolutePath(projectRoot, 'checker-project-root-invalid');
@@ -240,6 +253,7 @@ export function runIndependentCodexChecker({
     model,
     effort,
     sandbox: 'read-only',
+    goalDriven,
   });
   const cwdIndex = entry.argv.indexOf('-C');
   if (cwdIndex < 0) throw new Error('checker-entry-invalid');
@@ -250,6 +264,7 @@ export function runIndependentCodexChecker({
   entry.captureFinalMessage = true;
   const result = runProcess(entry, {
     timeoutMs,
+    ...(goalDriven ? { processGroup: 'required', captureRawJsonl: true } : {}),
     ...(usageReceipt == null ? {} : { usageReceipt }),
   });
   if (!result || result.ok !== true) return result || { ok: false, reason: 'checker-worker-invalid' };
@@ -265,6 +280,7 @@ export function runIndependentCodexChecker({
   }
   return {
     ok: true,
+    ...(goalDriven ? { process_group: result.process_group, termination: result.termination, rawJsonl: result.rawJsonl, rawJsonlTruncated: result.rawJsonlTruncated } : {}),
     usage: result.usage,
     finalMessage: Buffer.from(result.finalMessage),
     ...(result.usageReceipt != null ? { usageReceipt: result.usageReceipt } : {}),

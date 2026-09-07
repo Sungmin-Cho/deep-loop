@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Deep-loop real-agent evaluation profile v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "mode",
+    "profiles",
+    "tasks",
+    "trials",
+    "model",
+    "effort",
+    "timeout_ms",
+    "token_limit",
+    "allowed_effects"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "mode": {
+      "const": "real-agent"
+    },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "native",
+          "current",
+          "minimal"
+        ]
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "outcome-deterministic-bug-201",
+          "outcome-valid-alternative-211"
+        ]
+      }
+    },
+    "trials": {
+      "const": 1
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "effort": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 600000
+    },
+    "token_limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500000
+    },
+    "allowed_effects": {
+      "const": [
+        "isolated-workspace-write"
+      ]
+    }
+  }
+}

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { posix, win32 } from 'node:path';
 import { validateRuntimeProfile } from './session-profile.mjs';
 import { tomlBasicString } from './toml-safe.mjs';
+import { isCanonicalCodexProviderThreadId } from './usage-parser.mjs';
 
 const POSIX_CORE_ENV = Object.freeze([
   ['PATH', ['PATH']],
@@ -50,8 +51,14 @@ export function buildCodexExecEntry({
   model = null,
   effort = null,
   sandbox = 'workspace-write',
+  goalDriven = false,
 } = {}) {
   const bin = absoluteExecutable(executable);
+  if (typeof goalDriven !== 'boolean') {
+    throw Object.assign(new Error('INVALID_CODEX_GOAL_MODE: goalDriven must be boolean'), {
+      code: 'INVALID_CODEX_GOAL_MODE',
+    });
+  }
   if (typeof projectRoot !== 'string' || projectRoot.length === 0 || (!posix.isAbsolute(projectRoot) && !win32.isAbsolute(projectRoot))) {
     throw Object.assign(new Error('INVALID_CODEX_PROJECT_ROOT: expected absolute path'), { code: 'INVALID_CODEX_PROJECT_ROOT' });
   }
@@ -61,7 +68,7 @@ export function buildCodexExecEntry({
   if (sandbox !== 'workspace-write' && sandbox !== 'read-only') {
     throw Object.assign(new Error('INVALID_CODEX_SANDBOX: expected workspace-write or read-only'), { code: 'INVALID_CODEX_SANDBOX' });
   }
-  const profile = validateRuntimeProfile('codex', { model, effort });
+  const profile = validateRuntimeProfile('codex', { model, effort }, { goalDriven });
   const modelArgs = profile.model == null ? [] : ['--model', profile.model];
   const effortArgs = profile.effort == null ? [] : ['-c', `model_reasoning_effort=${tomlBasicString(profile.effort)}`];
 
@@ -86,6 +93,62 @@ export function buildCodexExecEntry({
     ],
     stdin: prompt,
     shell: false,
+  };
+}
+
+export function buildCodexGoalOwnerEntry({
+  executable,
+  projectRoot,
+  prompt,
+  model = null,
+  effort = null,
+  sandbox = 'workspace-write',
+  providerThreadId = null,
+  isolationProfile = 'strict',
+} = {}) {
+  if (isolationProfile !== 'strict') {
+    throw Object.assign(new Error('INVALID_CODEX_ISOLATION_PROFILE: expected strict'), {
+      code: 'INVALID_CODEX_ISOLATION_PROFILE',
+    });
+  }
+  if (providerThreadId !== null
+    && !isCanonicalCodexProviderThreadId(providerThreadId)) {
+    throw Object.assign(new Error('INVALID_CODEX_PROVIDER_THREAD_ID: expected canonical UUID'), {
+      code: 'INVALID_CODEX_PROVIDER_THREAD_ID',
+    });
+  }
+
+  const legacyShape = buildCodexExecEntry({
+    executable,
+    projectRoot,
+    prompt,
+    model,
+    effort,
+    sandbox,
+    goalDriven: true,
+  });
+  const argv = [...legacyShape.argv];
+  if (argv[0] !== 'exec' || argv[1] !== '--ephemeral' || argv.at(-1) !== '-') {
+    throw Object.assign(new Error('INVALID_CODEX_OWNER_BASE: unexpected exec descriptor'), {
+      code: 'INVALID_CODEX_OWNER_BASE',
+    });
+  }
+  argv.splice(1, 1);
+  argv.pop();
+  const projectRootAt = argv.indexOf('-C');
+  argv.splice(projectRootAt, 0,
+    '--disable', 'hooks',
+    '--disable', 'memories',
+    '--disable', 'multi_agent',
+    '--enable', 'skip_host_skill_discovery',
+    '-c', 'project_doc_max_bytes=0');
+  if (providerThreadId == null) argv.push('-');
+  else argv.push('resume', providerThreadId, '-');
+
+  return {
+    ...legacyShape,
+    argv,
+    captureProviderThreadId: true,
   };
 }
 

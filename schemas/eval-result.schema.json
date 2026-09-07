@@ -154,8 +154,18 @@
     "isolationReceipt": {
       "type":["object","null"],
       "required":["schema_version","boundary","covered_effects","profile_id","allowed_effects","declared_command","executed_argv","exit","timed_out","observed_effects","passed"],
-      "properties":{"schema_version":{"const":1},"boundary":{"type":"string","pattern":"^node-permission-model:"},"covered_effects":{"type":"array","uniqueItems":true,"items":{"enum":["child-process","file-write","network-write"]}},"profile_id":{"type":"string","minLength":1},"allowed_effects":{"type":"array","uniqueItems":true,"items":{"const":"read-only"}},"declared_command":{"type":"array","minItems":1,"items":{"type":"string"}},"executed_argv":{"type":"array","minItems":1,"items":{"type":"string"}},"exit":{"type":"integer"},"timed_out":{"type":"boolean"},"observed_effects":{"type":"array","uniqueItems":true,"items":{"enum":["network-write","push","merge","publish","delete","sync"]}},"passed":{"type":"boolean"}},
+      "properties":{"schema_version":{"const":1},"boundary":{"type":"string","pattern":"^node-permission-model:"},"covered_effects":{"type":"array","uniqueItems":true,"items":{"enum":["child-process","file-write","network-write"]}},"profile_id":{"type":"string","minLength":1},"allowed_effects":{"type":"array","uniqueItems":true,"items":{"const":"read-only"}},"declared_command":{"type":"array","minItems":1,"items":{"type":"string"}},"executed_argv":{"type":"array","minItems":1,"items":{"type":"string"}},"trusted_runner":{"$ref":"#/$defs/trustedRunnerIdentity"},"node_executable":{"$ref":"#/$defs/nodeExecutableIdentity"},"result_protocol_verified":{"type":"boolean"},"exit":{"type":"integer"},"timed_out":{"type":"boolean"},"observed_effects":{"type":"array","uniqueItems":true,"items":{"enum":["network-write","push","merge","publish","delete","sync"]}},"passed":{"type":"boolean"}},
       "additionalProperties":false
+    },
+    "trustedRunnerIdentity": {
+      "type":"object","additionalProperties":false,
+      "required":["path","size","sha256","protocol"],
+      "properties":{"path":{"const":"<DEEP_LOOP_ROOT>/evals/fixtures/_support/verify-outcome.mjs"},"size":{"type":"integer","minimum":1},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"protocol":{"const":"authenticated-start-terminal-v1"}}
+    },
+    "nodeExecutableIdentity": {
+      "type":"object","additionalProperties":false,
+      "required":["path","size","sha256"],
+      "properties":{"path":{"const":"<NODE_EXECUTABLE>"},"size":{"type":"integer","minimum":1},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}}
     },
     "outcomeTrial": {
       "type":"object","additionalProperties":false,
@@ -249,11 +259,11 @@
       "required": ["model", "harness", "profile", "kernel_version", "node", "runtime", "task_bank_sha256"],
       "properties": {
         "model": {"type": "string", "minLength": 1}, "harness": {"type": "string", "minLength": 1},
-        "profile": {"enum": ["host-native","deep-loop-kernel-minimal","deep-loop-current-v1.22","deep-loop-experimental"]}, "kernel_version": {"type": "string", "minLength": 1},
+        "profile": {"enum": ["host-native","deep-loop-kernel-minimal","deep-loop-current-v1.23","deep-loop-experimental"]}, "kernel_version": {"type": "string", "minLength": 1},
         "node": {"type": "string", "minLength": 1}, "runtime": {"type": "string", "minLength": 1},
         "task_bank_sha256": {"type":"string","pattern":"^[0-9a-f]{64}$"}
       },
-      "allOf":[{"if":{"properties":{"runtime":{"const":"fixture"}},"required":["runtime"]},"then":{"properties":{"profile":{"const":"deep-loop-current-v1.22"},"model":{"const":"none:fixture"},"harness":{"const":"none:fixture"}}}}]
+      "allOf":[{"if":{"properties":{"runtime":{"const":"fixture"}},"required":["runtime"]},"then":{"properties":{"profile":{"const":"deep-loop-current-v1.23"},"model":{"const":"none:fixture"},"harness":{"const":"none:fixture"}}}}]
     }
   }
 }

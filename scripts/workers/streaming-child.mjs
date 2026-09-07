@@ -1,4 +1,4 @@
-import { runStreamingProcess } from '../lib/streaming-process.mjs';
+import { runStreamingProcess, WORKER_RAW_RESULT_BYTES } from '../lib/streaming-process.mjs';
 import {
   validateProcessUsageReceiptDescriptor,
   writeProcessUsageReceipt,
@@ -42,6 +42,7 @@ function decodeEntry(value) {
     shell: value.shell,
     usageOutputKind: value.usageOutputKind,
     captureFinalMessage: value.captureFinalMessage === true,
+    captureProviderThreadId: value.captureProviderThreadId === true,
     stdin: decodedStdin,
   };
 }
@@ -51,24 +52,39 @@ function boundedMessage(error) {
 }
 
 let result;
+let captureRawJsonl = false;
 try {
   const request = await readRequest();
-  const allowedKeys = new Set(['version', 'entry', 'timeoutMs', 'usageReceipt']);
+  const allowedKeys = new Set(['version', 'entry', 'timeoutMs', 'processGroup', 'usageReceipt', 'captureRawJsonl']);
   if (request?.version !== 1 || !Number.isFinite(request.timeoutMs) || request.timeoutMs < 0
     || request == null || typeof request !== 'object' || Array.isArray(request)
     || Object.keys(request).some(key => !allowedKeys.has(key))) {
     throw new Error('worker-request-invalid');
   }
+  if (Object.hasOwn(request, 'captureRawJsonl') && typeof request.captureRawJsonl !== 'boolean') throw new Error('worker-request-invalid');
+  captureRawJsonl = request.captureRawJsonl === true;
   const usageReceipt = Object.hasOwn(request, 'usageReceipt')
     ? validateProcessUsageReceiptDescriptor(request.usageReceipt)
     : null;
-  result = await runStreamingProcess(decodeEntry(request.entry), { timeoutMs: request.timeoutMs });
+  result = await runStreamingProcess(decodeEntry(request.entry), {
+    timeoutMs: request.timeoutMs,
+    processGroup: request.processGroup ?? 'direct',
+    captureRawJsonl,
+  });
   if (result?.ok === true && usageReceipt != null) {
     try {
       const receipt = writeProcessUsageReceipt(usageReceipt, result.usage);
       result = { ...result, usageReceipt: receipt };
     } catch {
-      result = { ok: false, reason: 'usage-receipt-write-failed' };
+      result = {
+        ok: false,
+        reason: 'usage-receipt-write-failed',
+        ...(Buffer.isBuffer(result.rawJsonl) ? { rawJsonl: result.rawJsonl, rawJsonlTruncated: result.rawJsonlTruncated } : {}),
+        ...(Object.hasOwn(result, 'process_group') ? {
+          process_group: result.process_group,
+          termination: result.termination,
+        } : {}),
+      };
     }
   }
 } catch (error) {
@@ -87,8 +103,12 @@ const transportResult = result?.ok === true && Buffer.isBuffer(result.finalMessa
 if (transportResult && Object.hasOwn(transportResult, 'finalMessage') && transportResult.finalMessage === undefined) {
   delete transportResult.finalMessage;
 }
+if (transportResult && Buffer.isBuffer(transportResult.rawJsonl)) {
+  transportResult.rawJsonlBase64 = transportResult.rawJsonl.toString('base64');
+  delete transportResult.rawJsonl;
+}
 let encoded = JSON.stringify(transportResult);
-if (Buffer.byteLength(encoded, 'utf8') > WORKER_RESULT_BYTES) {
+if (Buffer.byteLength(encoded, 'utf8') > (captureRawJsonl ? WORKER_RAW_RESULT_BYTES : WORKER_RESULT_BYTES)) {
   encoded = JSON.stringify({ ok: false, reason: 'worker-result-overflow' });
 }
 process.stdout.write(encoded);

@@ -39,12 +39,22 @@ function safeTokenCount(value) {
   return Number.isSafeInteger(value) && value >= 0;
 }
 
-export function createCodexJsonlParser({ captureFinalMessage = false } = {}) {
+const CODEX_PROVIDER_THREAD_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+export function isCanonicalCodexProviderThreadId(value) {
+  return typeof value === 'string' && CODEX_PROVIDER_THREAD_ID_RE.test(value);
+}
+
+export function createCodexJsonlParser({
+  captureFinalMessage = false,
+  captureProviderThreadId = false,
+} = {}) {
   let decoder = new StringDecoder('utf8');
   let line = '';
   let lineBytes = 0;
   let terminal = null;
   let finalMessage = null;
+  let providerThreadId = null;
   let failure = null;
   let ended = false;
   let result = null;
@@ -67,6 +77,7 @@ export function createCodexJsonlParser({ captureFinalMessage = false } = {}) {
     resetCurrentLine();
     terminal = null;
     finalMessage = null;
+    providerThreadId = null;
   }
 
   function validUtf8(segment) {
@@ -127,6 +138,22 @@ export function createCodexJsonlParser({ captureFinalMessage = false } = {}) {
     }
     if (event?.type === 'turn.failed') {
       fail('codex-turn-failed');
+      return;
+    }
+    if (captureProviderThreadId && event?.type === 'thread.started') {
+      if (terminal != null) {
+        fail('codex-provider-thread-after-terminal');
+        return;
+      }
+      if (!isCanonicalCodexProviderThreadId(event.thread_id)) {
+        fail('codex-invalid-provider-thread');
+        return;
+      }
+      if (providerThreadId != null) {
+        fail('codex-multiple-provider-threads');
+        return;
+      }
+      providerThreadId = event.thread_id;
       return;
     }
     if (captureFinalMessage && event?.type === 'item.completed' && event.item?.type === 'agent_message') {
@@ -211,15 +238,18 @@ export function createCodexJsonlParser({ captureFinalMessage = false } = {}) {
           consumeLine();
         }
       }
-      result = failure != null
-        ? { ok: false, reason: failure }
-        : terminal == null
-          ? { ok: false, reason: 'codex-missing-terminal' }
-          : {
-              ok: true,
-              usage: terminal,
-              ...(captureFinalMessage && finalMessage != null ? { finalMessage } : {}),
-            };
+      if (failure != null) result = { ok: false, reason: failure };
+      else if (terminal == null) result = { ok: false, reason: 'codex-missing-terminal' };
+      else if (captureProviderThreadId && providerThreadId == null) {
+        result = { ok: false, reason: 'codex-missing-provider-thread' };
+      } else {
+        result = {
+          ok: true,
+          usage: terminal,
+          ...(captureFinalMessage && finalMessage != null ? { finalMessage } : {}),
+          ...(captureProviderThreadId ? { providerThreadId } : {}),
+        };
+      }
       return result;
     },
   };

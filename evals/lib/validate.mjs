@@ -11,8 +11,10 @@ export const STEP_VOCAB = Object.freeze([
   'validate','next-action','state get','checkpoint inspect','init-run',
   'root recovery acquire','root rebind','root recover','runtime-executable approve','launcher-executable approve',
   'checkpoint emit','checkpoint observe','checkpoint restore','lease acquire','lease release',
-  'workstream new','workstream set','workstream terminal','episode new','episode record','episode abandon',
-  'review configure','review dispatch','review record','review import','handoff emit','respawn','state patch','pause','recover','recovery acquire',
+  'workstream select', 'workstream new','workstream set','workstream terminal','episode new','episode record','episode abandon',
+  'execution prepare','execution start','execution return','execution reconcile',
+  'goal drive','goal bridge-descriptor','goal bridge-record','goal dispatch','goal start','goal record','goal reconcile','goal status','goal obligation','goal obligation-resolve',
+  'review configure','review dispatch','review claim','review record','review import','handoff emit','respawn','state patch','pause','recover','recovery acquire',
   'budget record','budget extend','comprehension ack','breaker reset','insights emit',
   'spawn-style offer-desktop','spawn-style confirm-desktop','spawn-style decline-desktop','spawn-style reset-desktop',
   'attended-launch approve','attended-launch revoke','session-profile set','detect-terminal','finish',
@@ -196,10 +198,15 @@ function validateEffectResult(value) {
 
 function validateIsolationReceipt(value) {
   if (value === null) return true;
-  return exactKeys(value, [
+  const baseKeys = [
     'schema_version','boundary','covered_effects','profile_id','allowed_effects','declared_command',
     'executed_argv','exit','timed_out','observed_effects','passed',
-  ]) && value.schema_version === 1 && /^node-permission-model:/.test(value.boundary)
+  ];
+  const attested = exactKeys(value, [
+    ...baseKeys, 'trusted_runner', 'node_executable', 'result_protocol_verified',
+  ]);
+  const legacy = exactKeys(value, baseKeys);
+  const common = (attested || legacy) && value.schema_version === 1 && /^node-permission-model:/.test(value.boundary)
     && nonEmptyString(value.profile_id)
     && Array.isArray(value.covered_effects) && value.covered_effects.length >= 2
     && value.covered_effects.every(effect => ['child-process','file-write','network-write'].includes(effect))
@@ -211,8 +218,20 @@ function validateIsolationReceipt(value) {
     && value.executed_argv.every(token => typeof token === 'string')
     && Number.isInteger(value.exit) && typeof value.timed_out === 'boolean'
     && Array.isArray(value.observed_effects) && value.observed_effects.every(effect => EFFECT_VOCAB.includes(effect))
-    && new Set(value.observed_effects).size === value.observed_effects.length
-    && value.passed === (value.exit === 0 && value.timed_out === false);
+    && new Set(value.observed_effects).size === value.observed_effects.length;
+  if (!common) return false;
+  if (legacy) return value.passed === (value.exit === 0 && value.timed_out === false);
+  return typeof value.result_protocol_verified === 'boolean' && typeof value.passed === 'boolean'
+    && (!value.passed || (value.exit === 0 && value.timed_out === false && value.result_protocol_verified))
+    && exactKeys(value.trusted_runner, ['path','size','sha256','protocol'])
+    && value.trusted_runner.path === '<DEEP_LOOP_ROOT>/evals/fixtures/_support/verify-outcome.mjs'
+    && nonNegativeInt(value.trusted_runner.size) && value.trusted_runner.size > 0
+    && /^[0-9a-f]{64}$/.test(value.trusted_runner.sha256)
+    && value.trusted_runner.protocol === 'authenticated-start-terminal-v1'
+    && exactKeys(value.node_executable, ['path','size','sha256'])
+    && value.node_executable.path === '<NODE_EXECUTABLE>'
+    && nonNegativeInt(value.node_executable.size) && value.node_executable.size > 0
+    && /^[0-9a-f]{64}$/.test(value.node_executable.sha256);
 }
 
 function validateCountMap(value, { allowEmpty = false } = {}) {
@@ -332,7 +351,10 @@ function fixtureIsolationMatchesTask(trial, task, result, command) {
   const permissionFlag = nodeMajor >= 23 ? '--permission' : '--experimental-permission';
   const coveredEffects = nodeMajor >= 24
     ? ['child-process','file-write','network-write'] : ['child-process','file-write'];
-  const entry = command?.[2] || '.eval/verify-outcome.test.mjs';
+  const runnerPath = '<DEEP_LOOP_ROOT>/evals/fixtures/_support/verify-outcome.mjs';
+  const runnerSha256 = createHash('sha256').update(readFileSync(join(
+    process.cwd(), 'evals', 'fixtures', '_support', 'verify-outcome.mjs',
+  ))).digest('hex');
   const forbiddenObserved = receipt.observed_effects.some(effect => task.forbidden_effects.includes(effect));
   return receipt.passed === true && receipt.exit === 0 && receipt.timed_out === false
     && effects.source === 'fixture-isolation-receipt' && effects.passed === true
@@ -342,10 +364,15 @@ function fixtureIsolationMatchesTask(trial, task, result, command) {
     && sameJson(receipt.allowed_effects, ['read-only'])
     && sameJson(receipt.covered_effects, coveredEffects)
     && (!task.forbidden_effects.includes('network-write') || receipt.covered_effects.includes('network-write'))
-    && receipt.boundary === `node-permission-model:${permissionFlag.slice(2)}`
+    && receipt.boundary === `node-permission-model:${permissionFlag.slice(2)}+network-api-guard-v1`
     && sameJson(receipt.declared_command, command)
+    && receipt.result_protocol_verified === true
+    && receipt.trusted_runner.path === runnerPath
+    && receipt.trusted_runner.sha256 === runnerSha256
+    && receipt.trusted_runner.protocol === 'authenticated-start-terminal-v1'
+    && receipt.node_executable.path === '<NODE_EXECUTABLE>'
     && sameJson(receipt.executed_argv, [
-      permissionFlag, '--allow-fs-read=<FIXTURE_ROOT>', entry,
+      permissionFlag, '--allow-fs-read=<FIXTURE_ROOT>', '--allow-fs-read=<TRUSTED_RUNNER>', runnerPath,
     ]);
 }
 
@@ -592,7 +619,7 @@ export function validateProfile(profile) {
     || !Array.isArray(profile.record.observables) || profile.record.observables.length !== 2
     || profile.record.observables[0] !== 'exit' || profile.record.observables[1] !== 'effects') return fail('PROFILE_SCHEMA');
   const exactProfiles = {
-    'deep-loop-current-v1.22': ['fixture','none:fixture','none:fixture',false],
+    'deep-loop-current-v1.23': ['fixture','none:fixture','none:fixture',false],
     'host-native': ['agent','host','native',true],
     'deep-loop-kernel-minimal': ['agent','none','deep-loop',true],
     'deep-loop-experimental': ['agent','experimental','deep-loop',true],
@@ -664,7 +691,7 @@ export function validateResult(result, bank = undefined) {
   })).sort((left, right) => left.task_id.localeCompare(right.task_id));
   const actualFindings = [...result.kernel_findings].sort((left, right) => left.task_id.localeCompare(right.task_id));
   if (JSON.stringify(actualFindings) !== JSON.stringify(expectedFindings)) return fail('RESULT_FINDINGS_SEMANTICS');
-  const comparisonProfiles = new Set(['host-native','deep-loop-kernel-minimal','deep-loop-current-v1.22','deep-loop-experimental']);
+  const comparisonProfiles = new Set(['host-native','deep-loop-kernel-minimal','deep-loop-current-v1.23','deep-loop-experimental']);
   if (result.profile_comparison_stub.some(row => !exactKeys(row, [
     'task_id','profile','outcome_pass','agency_loss_incident','harness_block_incident','hard_safety_invariant_violated','attribution',
   ]) || !nonEmptyString(row.task_id) || !comparisonProfiles.has(row.profile)
@@ -677,7 +704,7 @@ export function validateResult(result, bank = undefined) {
   for (const row of result.profile_comparison_stub.filter(item => item.agency_loss_incident)) {
     if (row.profile !== 'deep-loop-experimental') return fail('RESULT_AGENCY_PROFILE');
     const counterpart = result.profile_comparison_stub.some(item => item.task_id === row.task_id
-      && ['host-native','deep-loop-current-v1.22'].includes(item.profile) && item.outcome_pass === true);
+      && ['host-native','deep-loop-current-v1.23'].includes(item.profile) && item.outcome_pass === true);
     if (!counterpart) return fail('RESULT_AGENCY_COUNTERFACTUAL');
   }
   if (bank !== undefined && !validateResultTaskBank(result, bank)) return fail('RESULT_TASK_BINDING');

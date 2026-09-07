@@ -9,57 +9,93 @@
     },
     {
       "file": "scripts/lib/headless-host.mjs",
-      "line": 642,
+      "line": 653,
       "literal": "sessionRuntime(postCostLoop) !== 'codex'",
       "reason": "fresh-loop 드리프트 fence — 능력이 아니라 '시작할 때와 같은 런타임인가'를 묻는다"
     },
     {
       "file": "scripts/lib/headless-host.mjs",
-      "line": 773,
+      "line": 784,
       "literal": "sessionRuntime(freshLoop) === 'codex'",
       "reason": "fresh-loop 드리프트 fence (identityFresh)"
     },
     {
       "file": "scripts/lib/headless-host.mjs",
-      "line": 1393,
+      "line": 1424,
       "literal": "sessionRuntime(freshLoop) !== 'codex'",
       "reason": "post-CAS 드리프트 fence — 극성을 바꾸면 드리프트 탐지가 사라진다"
     },
     {
       "file": "scripts/lib/headless-host.mjs",
-      "line": 1611,
+      "line": 1645,
       "literal": "runtime === 'codex' && terminal(freshLoop) && childAcquired",
       "reason": "settleTerminalCodexMakerCost의 호출부. 불변식 6이 결제를 codex에 바인딩하므로 피호출부와 함께 정체성으로 남긴다"
     },
     {
       "file": "scripts/lib/headless-host.mjs",
-      "line": 1641,
+      "line": 1675,
       "literal": "runtime === 'codex' && terminal(freshLoop) && childAcquired",
       "reason": "위와 같은 결제 경로의 오류 처리"
     },
     {
       "file": "scripts/lib/budget.mjs",
-      "line": 1000,
+      "line": 1001,
       "literal": "sessionRuntime(loop) !== 'codex'",
       "reason": "codex preflight 계상 fence — 계약 문자열이 codex 버전에 묶여 있다"
     },
     {
       "file": "scripts/lib/budget.mjs",
-      "line": 1334,
+      "line": 1335,
       "literal": "claim.runtime !== 'codex'",
       "reason": "codex checker claim 계약"
     },
     {
       "file": "scripts/lib/budget.mjs",
-      "line": 1423,
+      "line": 1424,
       "literal": "sessionRuntime(loop) !== 'codex'",
       "reason": "deep-loop-codex-process-accounting-receipt-v1 계약에 묶임"
     },
     {
       "file": "scripts/lib/budget.mjs",
-      "line": 1531,
+      "line": 1532,
       "literal": "sessionRuntime(loop) !== 'codex'",
       "reason": "불변식 6 — terminal maker settlement는 codex 바인딩이다"
+    },
+    {
+      "file": "scripts/lib/goal-review.mjs",
+      "line": 213,
+      "literal": "if (!isAttemptObservation(observation) || observation.source !== 'supervisor-receipt' || review.transport !== 'codex') throw new Error('GOAL_OBSERVATION_UNSUPPORTED');",
+      "reason": "Exact persisted goal transport identity for supervisor-only ingestion."
+    },
+    {
+      "file": "scripts/lib/goal-review.mjs",
+      "line": 243,
+      "literal": "|| review.transport !== 'codex' || (issued.state === 'succeeded' && issued.settled !== true)) throw new Error('GOAL_HOST_RECEIPT_INVALID');",
+      "reason": "Exact persisted goal transport identity for supervisor-only ingestion."
+    },
+    {
+      "file": "scripts/lib/goal-checker.mjs",
+      "line": 98,
+      "literal": "if(transport==='codex') {",
+      "reason": "Goal transport discriminator codex versus native or bridge; not a host runtime fallback."
+    },
+    {
+      "file": "scripts/lib/budget.mjs",
+      "line": 1661,
+      "literal": "if (loop.schema_version !== '0.5.0' || sessionRuntime(loop) !== 'codex') throw new Error('OWNER_TURN_RUNTIME_INVALID');",
+      "reason": "Fixed Codex goal owner receipt settlement and historical receipt identity validation."
+    },
+    {
+      "file": "scripts/lib/budget.mjs",
+      "line": 1728,
+      "literal": "||sessionRuntime(loop)!=='codex'||!['completed','stopped'].includes(loop.status)||lease?.state!=='active'",
+      "reason": "Fixed Codex goal owner receipt settlement and historical receipt identity validation."
+    },
+    {
+      "file": "scripts/lib/goal-owner-receipt.mjs",
+      "line": 37,
+      "literal": "if (loop.schema_version !== '0.5.0' || sessionRuntime(loop) !== 'codex') {",
+      "reason": "Fixed Codex provider owner receipt identity; not a capability fallback."
     }
   ]
 }

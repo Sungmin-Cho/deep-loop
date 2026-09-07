@@ -102,11 +102,11 @@ function rejectedRound(context, workstream, round) {
   return maker;
 }
 
-function setupContext(task, now) {
+function setupContext(task, now, { reviewer = 'subagent-checker' } = {}) {
   // Kernel fixtures must be host-neutral: review dispatch is exercised as a
   // subagent-checker path, so a clean CI checkout does not need deep-review's
   // project marker or plugin cache merely to run the deterministic scenario.
-  const seeded = seedFixture({ now, goal: `eval:${task.id}`, reviewer: 'subagent-checker' });
+  const seeded = seedFixture({ now, goal: `eval:${task.id}`, reviewer });
   return { ...seeded, owner: seeded.runId, generation: 1, priorOwner: seeded.runId };
 }
 
@@ -492,7 +492,9 @@ export function executeKernelTask(task, { now = NOW } = {}) {
 }
 
 export function seedHostTopology(task, { now = NOW } = {}) {
-  const context = setupContext(task, now);
+  // This host-only scenario verifies the measured deep-review claim/import
+  // contract. Other deterministic scenarios keep their host-neutral reviewer.
+  const context = setupContext(task, now, { reviewer: 'deep-review-loop' });
   const ws = newWorkstream(context, 'eval-primary');
   const maker = newMaker(context, ws, { name: 'host-review.txt' }); completeMaker(context, maker);
   return {

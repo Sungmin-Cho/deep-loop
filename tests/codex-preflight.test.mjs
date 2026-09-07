@@ -196,6 +196,7 @@ function cacheKeyInput(projectRoot, prompt) {
     executableIdentity: EXECUTABLE,
     model: 'gpt-5.4',
     effort: 'xhigh',
+    goalDriven: false,
     durableSchemaContract: 'loop-run.schema.json:0.3.0',
     usageParserContract: 'codex-jsonl-safe-integer-v1',
     resumeSkillIdentity: RESUME_SKILL,
@@ -215,6 +216,36 @@ function cacheKeyInput(projectRoot, prompt) {
   };
 }
 
+test('schema upgrades invalidate preflight cache and a legacy run can re-probe without rewriting state', () => {
+  const h = harness();
+  const before = readFileSync(h.statePath);
+  const old = h.call({ durableSchemaContract: 'loop-run.schema.json:released-v04' });
+  assert.equal(old.ok, true, JSON.stringify(old));
+  assert.equal(h.runner.calls.length, 2);
+  const upgraded = h.call({ durableSchemaContract: 'loop-run.schema.json:v04-and-v05' });
+  assert.equal(upgraded.ok, true, JSON.stringify(upgraded));
+  assert.equal(upgraded.cache_hit, false);
+  assert.notEqual(upgraded.cache_key, old.cache_key);
+  assert.equal(h.runner.calls.length, 4, 'both actual smoke paths run again for the new schema contract');
+  const hit = h.call({ durableSchemaContract: 'loop-run.schema.json:v04-and-v05' });
+  assert.equal(hit.cache_hit, true);
+  assert.equal(h.runner.calls.length, 4);
+  assert.deepEqual(readFileSync(h.statePath), before, 'preflight does not migrate or erase the existing state');
+});
+
+test('a later shorter host deadline does not invalidate a proved preflight cache', () => {
+  const h = harness();
+  const first = h.call({ timeoutMs: 5000 });
+  assert.equal(first.ok, true, JSON.stringify(first));
+  assert.equal(first.cache_hit, false);
+  assert.equal(h.runner.calls.length, 2);
+  const second = h.call({ timeoutMs: 1000 });
+  assert.equal(second.ok, true, JSON.stringify(second));
+  assert.equal(second.cache_hit, true);
+  assert.equal(second.cache_key, first.cache_key);
+  assert.equal(h.runner.calls.length, 2, 'deadline leftover is not runtime identity');
+});
+
 test('codexPreflightCacheKey is pure and normalizes only probe root and prompt churn', () => {
   const first = codexPreflightCacheKey(cacheKeyInput('/tmp/probe-a', 'write nonce-a'));
   const second = codexPreflightCacheKey(cacheKeyInput('/tmp/probe-b', 'write nonce-b'));
@@ -232,6 +263,7 @@ test('codexPreflightCacheKey changes for every security and compatibility contra
     ['executable path', (value) => { value.executableIdentity.canonical_path = '/opt/codex/bin/codex-new'; }],
     ['model', (value) => { value.model = 'gpt-6'; }],
     ['effort', (value) => { value.effort = 'high'; }],
+    ['goal mode', (value) => { value.goalDriven = true; }],
     ['durable schema', (value) => { value.durableSchemaContract = 'loop-run.schema.json:0.4.0'; }],
     ['isolation descriptor', (value) => { value.isolationProfile.descriptor.argv[2] = '--not-json'; }],
     ['environment policy', (value) => { value.isolationProfile.envPolicy.inherit = 'all'; }],
@@ -249,6 +281,45 @@ test('codexPreflightCacheKey changes for every security and compatibility contra
     assert.notEqual(codexPreflightCacheKey(changed), baseline, label);
   }
   assert.deepEqual(base, cacheKeyInput('/tmp/probe-a', 'write nonce-a'), 'the pure key function must not mutate input');
+});
+
+test('goal-driven preflight accepts max and ultra while keeping both bounded smokes ephemeral', () => {
+  for (const effort of ['max', 'ultra']) {
+    const h = harness();
+    const result = h.call({ goalDriven: true, effort });
+
+    assert.equal(result.ok, true, `${effort}: ${JSON.stringify(result)}`);
+    assert.equal(h.runner.calls.length, 2, effort);
+    for (const call of h.runner.calls) {
+      assert.equal(call.entry.argv[0], 'exec', effort);
+      assert.equal(call.entry.argv[1], '--ephemeral', effort);
+      assert.equal(call.entry.argv.includes(`model_reasoning_effort="${effort}"`), true, effort);
+    }
+  }
+});
+
+test('preflight cache identity separates goal mode at the same model and effort', () => {
+  const h = harness();
+  const legacy = h.call();
+  const goal = h.call({ goalDriven: true });
+
+  assert.equal(legacy.ok, true, JSON.stringify(legacy));
+  assert.equal(goal.ok, true, JSON.stringify(goal));
+  assert.equal(goal.cache_hit, false);
+  assert.notEqual(goal.cache_key, legacy.cache_key);
+  assert.equal(h.runner.calls.length, 4, 'goal mode must run its own two-smoke preflight');
+});
+
+test('preflight rejects a non-boolean goal mode before any smoke', () => {
+  const h = harness();
+  const result = h.call({ goalDriven: 'true', effort: 'xhigh' });
+  assert.deepEqual(result, {
+    ok: false,
+    reason: 'preflight-invalid',
+    pause_mode: 'preserve',
+    measured_usage: [],
+  });
+  assert.equal(h.runner.calls.length, 0);
 });
 
 test('default cache identity can be invalidated by exact environment-builder and preflight-verifier contracts', () => {

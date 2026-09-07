@@ -26,6 +26,7 @@ const FIELDS = [
   'supported_platforms', 'measured_headless', 'session_effort_allowed',
   'compact_supported', 'compact_measured_cli_versions', 'handoff_continuity_note', 'observation_runtime',
   'independent_checker_bridge',
+  'persistent_goal_owner', 'goal_checker_transports', 'goal_effort_passthrough',
 ];
 
 test('every session runtime has every capability field', () => {
@@ -93,6 +94,12 @@ test('current values match today behavior', () => {
   assert.equal(runtimeCapability('codex', 'observation_runtime'), 'codex');
   assert.equal(runtimeCapability('claude', 'independent_checker_bridge'), null);
   assert.equal(runtimeCapability('codex', 'independent_checker_bridge'), null);
+  assert.equal(runtimeCapability('claude', 'persistent_goal_owner'), false);
+  assert.equal(runtimeCapability('codex', 'persistent_goal_owner'), true);
+  assert.deepEqual(runtimeCapability('claude', 'goal_checker_transports'), ['native']);
+  assert.deepEqual(runtimeCapability('codex', 'goal_checker_transports'), ['native', 'codex']);
+  assert.deepEqual(runtimeCapability('claude', 'goal_effort_passthrough'), []);
+  assert.deepEqual(runtimeCapability('codex', 'goal_effort_passthrough'), ['max', 'ultra']);
 });
 
 test('assertRuntimePlatform accepts current hosts and rejects others without falling back', () => {

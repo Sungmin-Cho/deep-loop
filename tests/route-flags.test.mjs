@@ -25,9 +25,11 @@ const EXPECTED_KEYS = Object.freeze([
   'init-run', 'next-action', 'resume-command', 'tick',
   'checkpoint emit', 'checkpoint inspect', 'checkpoint observe', 'checkpoint restore',
   'lease check', 'lease acquire', 'lease release',
-  'workstream new', 'workstream set', 'workstream terminal',
+  'workstream select', 'workstream new', 'workstream set', 'workstream terminal',
   'episode new', 'episode record', 'episode abandon',
-  'review configure', 'review dispatch', 'review record', 'review import',
+  'execution prepare', 'execution start', 'execution return', 'execution reconcile',
+  'goal bridge-descriptor', 'goal bridge-record', 'goal drive', 'goal capabilities', 'goal dispatch', 'goal start', 'goal record', 'goal reconcile', 'goal status', 'goal obligation', 'goal obligation-resolve',
+  'review configure', 'review dispatch', 'review claim', 'review record', 'review import',
   'review bridge-probe',
   'handoff emit', 'respawn', 'state get', 'state patch',
   'pause', 'recover', 'recovery acquire', 'adapter resolve',
@@ -47,7 +49,7 @@ function invoke(args) {
 
 test('ROUTE_FLAGS lists every rawRouteKey the dispatcher can produce', () => {
   assert.deepEqual(Object.keys(ROUTE_FLAGS).sort(), [...EXPECTED_KEYS].sort());
-  assert.equal(EXPECTED_KEYS.length, 64);
+  assert.equal(EXPECTED_KEYS.length, 81);
   const source = readFileSync(CLI, 'utf8');
   const inventory = source.match(/const MUTATING_ROUTE_INVENTORY = Object\.freeze\(\[([\s\S]*?)\]\);/)?.[1];
   assert.ok(inventory);
@@ -191,9 +193,11 @@ function extractQuotedRoutePairs(source) {
   let match;
   while ((match = blockRe.exec(source))) {
     const tokens = [...match[0].matchAll(/['"]([^'"]+)['"]/g)].map((item) => item[1]);
-    const key = routeKeyFromTokens(tokens);
+    const kernelIndex = tokens.findIndex(token => token.endsWith('deep-loop.mjs'));
+    const commandTokens = kernelIndex < 0 ? tokens : tokens.slice(kernelIndex + 1);
+    const key = routeKeyFromTokens(commandTokens);
     if (!key) continue;
-    for (const token of tokens) {
+    for (const token of commandTokens) {
       if (token.startsWith('--')) pairs.push([key, token.slice(2).split('=')[0]]);
     }
   }
@@ -211,6 +215,7 @@ function isLandingSource(file) {
 }
 
 const SCRIPT_LANDING_EXEMPT = Object.freeze({
+  'scripts/lib/goal-host.mjs': 'prompt identifies kernel executable; LLM chooses CLI actions from shipped skills',
   'scripts/lib/headless-host.mjs': 'kernel path snapshot only; no CLI argv',
 });
 

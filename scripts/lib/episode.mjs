@@ -10,6 +10,8 @@ import { assertScopeAllows, bindMakerScope } from './session-scope.mjs';
 import { normalizePortableRelativePath, pathWithin } from './fs-safe.mjs';
 import { assertRoutingDigest, assertRoutingRecord } from './router-adapter.mjs';
 import { observeTerminalEpisode } from './route-observation.mjs';
+import { isGoalDriven } from './goal-contract.mjs';
+import { epOrder } from './episode-predicates.mjs';
 
 const NON_TERMINAL = ['pending', 'in_progress', 'blocked'];
 const RECORDABLE_TERMINAL = ['done'];
@@ -74,7 +76,7 @@ function normalizeRoutingInput(routing) {
   return structuredClone(routing);
 }
 
-function createEpisode(root, runId, { plugin, role, kind, point, workstream = null, expectedArtifacts = [], targetMaker, reviewerResolution, evidence, contract, expectedReviewConfig, routing, initialStatus = 'pending', blockReason, fence, operation, now = Date.now() } = {}) {
+function createEpisode(root, runId, { plugin, role, kind, point, workstream = null, expectedArtifacts = [], targetMaker, reviewerResolution, evidence, contract, expectedReviewConfig, routing, initialStatus = 'pending', blockReason, retryOf, fence, operation, now = Date.now() } = {}) {
   if (!fence || typeof fence.owner !== 'string' || !Number.isInteger(fence.generation)) throw new Error(`FENCE_REQUIRED: ${operation}`);
   // Fix 3: validate required non-fence args before any state write
   if (!plugin || typeof plugin !== 'string' || !plugin.length) throw new Error('EPISODE_INPUT_INVALID: plugin');
@@ -100,7 +102,7 @@ function createEpisode(root, runId, { plugin, role, kind, point, workstream = nu
   let id, requestPath, requestRel, dir;
   const safePlugin = slugify(plugin) || 'plugin';
   appendAnchored(root, runId, { type: 'episode-new', data: {
-    plugin, role, kind, point,
+    plugin, role, kind, point, ...(retryOf !== undefined ? { retry_of: retryOf } : {}),
     ...(initialStatus === 'blocked' ? { status: initialStatus, block_reason: blockReason } : {}),
     ...(reviewerResolution ? { reviewer_resolution: reviewerResolution } : {}),
     ...(frozenRouting !== undefined ? { routing: frozenRouting } : {}),
@@ -116,6 +118,7 @@ function createEpisode(root, runId, { plugin, role, kind, point, workstream = nu
       verification: { checker_episode_required: role === 'maker', checker_plugin: 'deep-review', review_point: point, proof_required: expectedArtifacts },
     };
     if (targetMaker && typeof targetMaker === 'string' && targetMaker.length) epObj.target_maker = targetMaker;
+    if (retryOf !== undefined) epObj.retry_of = retryOf;
     if (role === 'checker') epObj.requires_independent_session = true;
     if (reviewerResolution) epObj.reviewer_resolution = reviewerResolution;
     if (initialStatus === 'blocked') {
@@ -162,6 +165,17 @@ function createEpisode(root, runId, { plugin, role, kind, point, workstream = nu
       }
     }
     if (frozenRouting !== undefined) assertRoutingDigest(loop, frozenRouting);
+    if (isGoalDriven(loop) && role === 'maker' && kind === 'fix' && retryOf === undefined) throw new Error('EPISODE_RETRY_SOURCE_REQUIRED');
+    if (retryOf !== undefined) {
+      if (!isGoalDriven(loop) || role !== 'maker' || kind !== 'fix' || typeof retryOf !== 'string') throw new Error('EPISODE_RETRY_INVALID');
+      const source = loop.episodes.find(item => item.id === retryOf);
+      const latestReview = loop.episodes.filter(item => item.role === 'checker' && item.target_maker === retryOf && ['approved', 'rejected'].includes(item.status)).sort((a, b) => epOrder(a.id, b.id)).at(-1);
+      const newerMaker = loop.episodes.some(item => item.role === 'maker' && item.status === 'done'
+        && item.workstream_id === workstream && item.point === point && epOrder(item.id, retryOf) > 0);
+      const activeRetry = loop.episodes.some(item => item.retry_of === retryOf && !ALL_TERMINAL.includes(item.status));
+      if (source?.role !== 'maker' || source.status !== 'done' || source.workstream_id !== workstream
+        || source.point !== point || latestReview?.status !== 'rejected' || newerMaker || activeRetry) throw new Error('EPISODE_RETRY_SOURCE_INVALID');
+    }
   }, { floor: MUTATION_TURN_FLOOR });
   // Assert containment before FS writes
   const base = resolve(runDir(root, runId), 'episodes');
@@ -172,8 +186,8 @@ function createEpisode(root, runId, { plugin, role, kind, point, workstream = nu
   return { id, requestPath, requestRel };
 }
 
-export function newEpisode(root, runId, { plugin, role, kind, point, workstream = null, expectedArtifacts = [], targetMaker, reviewerResolution, evidence, contract, expectedReviewConfig, routing, fence, now = Date.now() } = {}) {
-  return createEpisode(root, runId, { plugin, role, kind, point, workstream, expectedArtifacts, targetMaker, reviewerResolution, evidence, contract, expectedReviewConfig, routing, fence, operation: 'newEpisode', now });
+export function newEpisode(root, runId, { plugin, role, kind, point, workstream = null, expectedArtifacts = [], targetMaker, reviewerResolution, evidence, contract, expectedReviewConfig, routing, retryOf, fence, now = Date.now() } = {}) {
+  return createEpisode(root, runId, { plugin, role, kind, point, workstream, expectedArtifacts, targetMaker, reviewerResolution, evidence, contract, expectedReviewConfig, routing, retryOf, fence, operation: 'newEpisode', now });
 }
 
 // Fail-closed compatibility path only: a checker with no independent dispatch capability is born blocked.
@@ -235,6 +249,50 @@ export function abandonEpisode(root, runId, episodeId, {
   return { observation: observeTerminalEpisode(root, runId, committed) };
 }
 
+export function applyMakerCompletion(loop, ep, artifacts) {
+  const c = loop.comprehension || (loop.comprehension = {});
+  if (ep.human_reviewed) { ep.human_reviewed = false; c.episodes_human_reviewed = Math.max(0, (c.episodes_human_reviewed || 0) - 1); }
+  if (ep.agent_reviewed) { ep.agent_reviewed = false; c.episodes_agent_reviewed = Math.max(0, (c.episodes_agent_reviewed || 0) - 1); }
+  ep.status = 'done';
+  ep.artifacts = [...artifacts];
+}
+
+export function validateMakerCompletion(root, loop, ep, artifacts) {
+  const episodeId = ep.id;
+  const scopeTarget = ep.workstream_id;
+  const expected = (ep.expected_artifacts || []);
+  const rootResolved = realpathSync(resolve(root));
+  for (const artifact of artifacts) {
+    const normalized = normalizePortableRelativePath(artifact);
+    if (!normalized) throw artifactError('EPISODE_ARTIFACT_ESCAPE', artifact, loop, scopeTarget);
+    const full = resolve(root, normalized);
+    if (existsSync(full)) {
+      let canonical;
+      try { canonical = realpathSync(full); }
+      catch { throw artifactError('EPISODE_ARTIFACT_ESCAPE', artifact, loop, scopeTarget); }
+      if (!pathWithin(rootResolved, canonical)) {
+        throw artifactError('EPISODE_ARTIFACT_ESCAPE', artifact, loop, scopeTarget);
+      }
+    }
+  }
+  for (const artifact of expected) {
+    if (!normalizePortableRelativePath(artifact)) {
+      throw artifactError('EPISODE_ARTIFACT_ESCAPE', artifact, loop, scopeTarget);
+    }
+  }
+  const missing = expected.filter(artifact => {
+    const normalized = normalizePortableRelativePath(artifact);
+    return !normalized || !existsSync(resolve(root, normalized));
+  });
+  if (expected.length === 0 || missing.length) {
+    throw new Error(`EPISODE_TERMINAL_NO_PROOF: ${episodeId} done requires existing artifacts (missing: ${missing.join(',') || 'none-declared'})`);
+  }
+  // Codex r2 🟡: 제출된 artifacts 가 expected_artifacts 를 모두 커버하는지 확인.
+  const submitted = new Set(artifacts);
+  const uncovered = expected.filter(a => !submitted.has(a));
+  if (uncovered.length) throw new Error('EPISODE_ARTIFACTS_INCOMPLETE: ' + uncovered.join(','));
+}
+
 export function recordEpisode(root, runId, episodeId, {
   status, artifacts = [], proof = {}, routing, fence, now = Date.now(),
 } = {}) {
@@ -269,11 +327,7 @@ export function recordEpisode(root, runId, episodeId, {
     // as the episode-record event (invariant 3) and no new lock (invariant 7) — mirrors abandonEpisode's counter
     // adjustment. Math.max keeps the counters non-negative; `done` cannot be re-recorded (see the preCheck), so
     // this can never double-decrement.
-    if (status === 'done' && ep.role === 'maker') {
-      const c = loop.comprehension || (loop.comprehension = {});
-      if (ep.human_reviewed) { ep.human_reviewed = false; c.episodes_human_reviewed = Math.max(0, (c.episodes_human_reviewed || 0) - 1); }
-      if (ep.agent_reviewed) { ep.agent_reviewed = false; c.episodes_agent_reviewed = Math.max(0, (c.episodes_agent_reviewed || 0) - 1); }
-    }
+    if (status === 'done' && ep.role === 'maker') applyMakerCompletion(loop, ep, artifacts);
     ep.status = status;
     if (artifacts.length) ep.artifacts = artifacts;
     if (frozenRouting !== undefined) ep.routing = structuredClone(frozenRouting);
@@ -295,6 +349,7 @@ export function recordEpisode(root, runId, episodeId, {
     if (ep.role === 'checker' && status === 'done') {
       throw new Error(`EPISODE_CHECKER_DONE_FORBIDDEN: ${episodeId} checker terminal is written only by review record / review import / episode abandon`);
     }
+    if (isGoalDriven(loop) && ['in_progress', 'done'].includes(status)) throw new Error('EPISODE_EXECUTION_REQUIRED: v0.5 transitions use execution prepare/return');
     if (frozenRouting !== undefined) {
       if (status !== 'in_progress') throw new Error('EPISODE_ROUTING_STATUS_INVALID');
       if (ep.role !== 'maker') throw new Error('EPISODE_ROUTING_ROLE_INVALID');
@@ -325,37 +380,7 @@ export function recordEpisode(root, runId, episodeId, {
     // 터미널은 커널이 proof에서 파생 — 검증 후에만 (spec §4)
     if (TERMINAL.includes(status)) {
       if (status === 'done') {
-        const expected = (ep.expected_artifacts || []);
-        const rootResolved = realpathSync(resolve(root));
-        for (const artifact of artifacts) {
-          const normalized = normalizePortableRelativePath(artifact);
-          if (!normalized) throw artifactError('EPISODE_ARTIFACT_ESCAPE', artifact, loop, scopeTarget);
-          const full = resolve(root, normalized);
-          if (existsSync(full)) {
-            let canonical;
-            try { canonical = realpathSync(full); }
-            catch { throw artifactError('EPISODE_ARTIFACT_ESCAPE', artifact, loop, scopeTarget); }
-            if (!pathWithin(rootResolved, canonical)) {
-              throw artifactError('EPISODE_ARTIFACT_ESCAPE', artifact, loop, scopeTarget);
-            }
-          }
-        }
-        for (const artifact of expected) {
-          if (!normalizePortableRelativePath(artifact)) {
-            throw artifactError('EPISODE_ARTIFACT_ESCAPE', artifact, loop, scopeTarget);
-          }
-        }
-        const missing = expected.filter(artifact => {
-          const normalized = normalizePortableRelativePath(artifact);
-          return !normalized || !existsSync(resolve(root, normalized));
-        });
-        if (expected.length === 0 || missing.length) {
-          throw new Error(`EPISODE_TERMINAL_NO_PROOF: ${episodeId} done requires existing artifacts (missing: ${missing.join(',') || 'none-declared'})`);
-        }
-        // Codex r2 🟡: 제출된 artifacts 가 expected_artifacts 를 모두 커버하는지 확인.
-        const submitted = new Set(artifacts);
-        const uncovered = expected.filter(a => !submitted.has(a));
-        if (uncovered.length) throw new Error('EPISODE_ARTIFACTS_INCOMPLETE: ' + uncovered.join(','));
+        validateMakerCompletion(root, loop, ep, artifacts);
       }
     }
   }, { floor: MUTATION_TURN_FLOOR });

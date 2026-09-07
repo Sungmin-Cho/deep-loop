@@ -75,12 +75,15 @@ function parseLegacyHeadlessResult(entry, out) {
 }
 
 function compactHeadlessResult(out) {
+  const evidence = out?.process_group ? { process_group: out.process_group, termination: out.termination, ...(out.providerThreadId ? { providerThreadId: out.providerThreadId } : {}), ...(out.rawJsonl ? { rawJsonl: out.rawJsonl, rawJsonlTruncated: out.rawJsonlTruncated } : {}) } : {};
   if (out == null || typeof out !== 'object' || typeof out.then === 'function') {
     return { ok: false, reason: 'sync-worker-required' };
   }
   if (out.ok === false) {
     return {
       ok: false,
+      ...evidence,
+      ...(out.usage ? {usage:out.usage} : {}),
       reason: typeof out.reason === 'string' ? out.reason : 'worker-protocol-invalid',
       ...(typeof out.stderr === 'string' && out.stderr.length > 0 ? { stderr: out.stderr } : {}),
       ...(out.stderrTruncated === true ? { stderrTruncated: true } : {}),
@@ -91,6 +94,7 @@ function compactHeadlessResult(out) {
   }
   return {
     ok: true,
+    ...evidence,
     usage: out.usage,
     ...(out.usageReceipt != null ? { usageReceipt: out.usageReceipt } : {}),
     ...(typeof out.stderr === 'string' && out.stderr.length > 0 ? { stderr: out.stderr } : {}),
@@ -103,6 +107,8 @@ export function headlessSpawn(entry, {
   run,
   runSync = runStreamingProcessSync,
   usageReceipt = null,
+  processGroup = 'direct',
+  captureRawJsonl = false,
 } = {}) {
   const invalid = validateWindowsSpawnEntry(entry);
   if (invalid) return { ok: false, reason: invalid };
@@ -112,7 +118,7 @@ export function headlessSpawn(entry, {
       out = run(entry.bin, entry.argv, { timeoutMs, cwd: entry.cwd, shell: false });
       return parseLegacyHeadlessResult(entry, out);
     }
-    out = runSync(entry, { timeoutMs, ...(usageReceipt == null ? {} : { usageReceipt }) });
+    out = runSync(entry, { timeoutMs, ...(processGroup === 'direct' ? {} : {processGroup}), ...(captureRawJsonl ? {captureRawJsonl:true} : {}), ...(usageReceipt == null ? {} : { usageReceipt }) });
   } catch (e) {
     return { ok: false, reason: `spawn-error: ${e.message || e}` };
   }

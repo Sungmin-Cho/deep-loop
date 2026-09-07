@@ -1,3 +1,5 @@
+import { startExecution, returnExecution } from './execution.mjs';
+import { isGoalDriven } from './goal-contract.mjs';
 import { fileURLToPath } from 'node:url';
 import {
   closeSync,
@@ -15,6 +17,7 @@ import {
 } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
+import { sameResolvedPath } from './path-portable.mjs';
 import {
   captureReconciledRunSnapshot,
   findRoot,
@@ -83,8 +86,12 @@ function inspectDirectoryNode(path) {
   const before = lstatSync(lexical, { bigint: true });
   if (before.isSymbolicLink() || !before.isDirectory()) throw new Error('directory must be non-symlink');
   const canonical = (realpathSync.native || realpathSync)(lexical);
-  if (resolve(canonical) !== lexical) throw new Error('directory must already be canonical');
   const after = lstatSync(canonical, { bigint: true });
+  const spellingOk = resolve(canonical) === lexical || sameResolvedPath(resolve(canonical), lexical);
+  const windowsAlias = process.platform === 'win32'
+    && before.dev === after.dev && before.ino === after.ino && before.ino !== 0n
+    && before.mode === after.mode;
+  if (!spellingOk && !windowsAlias) throw new Error('directory must already be canonical');
   if (after.isSymbolicLink() || !after.isDirectory()
     || before.dev !== after.dev || before.ino !== after.ino || before.mode !== after.mode) {
     throw new Error('directory identity changed');
@@ -106,7 +113,10 @@ function inspectRegularFileIdentity(path, { maxBytes = RESUME_SKILL_MAX_BYTES } 
   }
   const canonical = (realpathSync.native || realpathSync)(lexical);
   const canonicalStat = lstatSync(canonical, { bigint: true });
-  if (resolve(canonical) !== lexical || canonicalStat.isSymbolicLink() || !canonicalStat.isFile()
+  const spellingOk = resolve(canonical) === lexical || sameResolvedPath(resolve(canonical), lexical);
+  const windowsAlias = process.platform === 'win32'
+    && sameFileIdentity(before, canonicalStat) && before.ino !== 0n;
+  if ((!spellingOk && !windowsAlias) || canonicalStat.isSymbolicLink() || !canonicalStat.isFile()
     || !sameFileIdentity(before, canonicalStat)) {
     throw new Error('file identity changed during canonicalization');
   }
@@ -573,6 +583,7 @@ function driveIndependentChecker({
       model: initialLoop.autonomy?.session_model ?? null,
       effort: initialLoop.autonomy?.session_effort ?? null,
       timeoutMs,
+      goalDriven: isGoalDriven(initialLoop),
       revalidateExecutable,
       resolveCodexHome,
       settleAccountingReceipt: receipt => {
@@ -816,7 +827,10 @@ function driveIndependentChecker({
   }
 
   let checkerResult;
+  const goalHandle = `codex-checker:${claimed.attemptId}`;
   try {
+    if (isGoalDriven(initialLoop)) startExecution(projectRoot, runId, { episodeId: pending.id, attemptId: claimed.attemptId,
+      handle: goalHandle, fence: parentFence, now: clock() });
     checkerResult = checkerRunFn({
       executable: executable.canonical_path,
       projectRoot,
@@ -840,6 +854,7 @@ function driveIndependentChecker({
       effort: initialLoop.autonomy?.session_effort ?? null,
       timeoutMs,
       usageReceipt: checkerUsageReceiptDescriptor,
+      goalDriven: isGoalDriven(initialLoop),
     });
   } catch {
     checkerResult = { ok: false, reason: 'checker-process-error' };
@@ -869,6 +884,20 @@ function driveIndependentChecker({
 
   let imported;
   try {
+    if (isGoalDriven(initialLoop)) {
+      if (checkerResult.termination?.confirmed !== true || checkerResult.process_group?.quiescence_confirmed !== true) {
+        return settleMeasuredFailure('checker-termination-unconfirmed', checkerResult.usage, checkerResult.usageReceipt ?? null);
+      }
+      const rel = `.deep-loop/runs/${runId}/host-checkers/${claimed.attemptId}`;
+      const directory = join(projectRoot, rel);
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      const outputHash = createHash('sha256').update(checkerResult.finalMessage).digest('hex');
+      writeFileSync(join(directory, 'stdout.json'), checkerResult.finalMessage, { flag: 'wx', mode: 0o600 });
+      writeFileSync(join(directory, 'receipt.json'), JSON.stringify({attempt_id:claimed.attemptId,
+        result:{state:'SUCCEEDED',exit_status:0,termination_confirmed:true,stdout_path:`${rel}/stdout.json`,output_sha256:outputHash}}), {flag:'wx',mode:0o600});
+      returnExecution(projectRoot, runId, {episodeId:pending.id,attemptId:claimed.attemptId,artifacts:[],fence:parentFence,now:clock(),
+        observation:{source:'supervisor-receipt',state:'succeeded',handle:goalHandle,reference:`${rel}/receipt.json`,output_sha256:outputHash}});
+    }
     imported = checkerImportFn({
       processExecutable: process.execPath,
       kernelPath,
@@ -1278,6 +1307,7 @@ function driveHeadlessRunLocked({
         model: initialLoop.autonomy?.session_model ?? null,
         effort: initialLoop.autonomy?.session_effort ?? null,
         timeoutMs,
+        goalDriven: isGoalDriven(initialLoop),
         revalidateExecutable,
         resolveCodexHome,
         settleAccountingReceipt: receipt => {
@@ -1349,6 +1379,7 @@ function driveHeadlessRunLocked({
   let makerUsageReceiptDescriptor = null;
   let spawnCalls = 0;
   const capturedDiagnostic = () => ({
+    ...(isGoalDriven(initialLoop) && captured ? { providerThreadId: captured.providerThreadId, process_group: captured.process_group, termination: captured.termination, rawJsonl: captured.rawJsonl, rawJsonlTruncated: captured.rawJsonlTruncated } : {}),
     ...(typeof captured?.stderr === 'string'
       && Buffer.byteLength(captured.stderr, 'utf8') <= STREAM_LIMITS.stderrBytes
       ? { stderr: captured.stderr }
@@ -1419,6 +1450,7 @@ function driveHeadlessRunLocked({
           platform: freshExecutable.platform,
           runtimeExecutableIdentity: freshExecutable,
           deepLoopRoot,
+          goalDriven: isGoalDriven(initialLoop),
         }).headless;
         if (!sameValue(entry, expectedEntry)) return { ok: false, reason: 'post-cas-entry-mismatch' };
         let freshResumeSkill;
@@ -1456,6 +1488,7 @@ function driveHeadlessRunLocked({
     try {
       captured = spawnFn(enriched, {
         timeoutMs,
+        ...(isGoalDriven(initialLoop) ? {processGroup: 'required', captureRawJsonl: true} : {}),
         ...(makerUsageReceiptDescriptor == null
           ? {} : { usageReceipt: makerUsageReceiptDescriptor }),
       });
@@ -1493,6 +1526,7 @@ function driveHeadlessRunLocked({
     launchCommandBuilder,
     expect: parentFence,
     expectedMode: 'headless',
+    revalidateRuntimeExecutable: revalidateExecutable,
   });
   const freshLoop = captureFreshLoop(projectRoot, runId);
   const childAcquired = exactChildAcquired(freshLoop, childRunId);
@@ -1669,6 +1703,24 @@ export function driveHeadlessRun(options = {}) {
   } finally {
     lock.release();
   }
+}
+
+// The goal controller holds the same run-wide host lock while it alternates
+// owner turns and the existing checker/handoff service. The service closure is
+// valid only during this callback; no public option can bypass lock acquisition.
+export async function withHeadlessHostService(options, callback) {
+  const lock = acquireHeadlessHostLock(options.root, options.runId, {
+    timeoutMs: options.timeoutMs,
+    wallNow: options.lockWallNow,
+  });
+  if (!lock) return { ok: false, action: 'already-driving', reason: 'already-driving' };
+  let active = true;
+  const service = overrides => {
+    if (!active) throw new Error('HOST_SERVICE_EXPIRED');
+    return driveHeadlessRunLocked({ ...options, ...overrides, root: options.root, runId: options.runId });
+  };
+  try { return await callback(service); }
+  finally { active = false; lock.release(); }
 }
 
 export function driveHeadless({

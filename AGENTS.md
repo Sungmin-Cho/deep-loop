@@ -50,16 +50,36 @@ headless path. There is no cross-runtime fallback. Grok compact is unsupported
 model-router cache records grok-host `verified: true` for a read-only reviewer
 seat. Native Grok `spawn_subagent` isolation is not independence.
 
-New runs use `workstream-session` with interactive same-conversation affinity until
+Legacy v0.4 and explicit v0.5 handoff mode use `workstream-session` with interactive same-conversation affinity until
 the bound Workstream's first terminal event. Attended launch requires explicit
 durable authorization; unattended invocations use the measured headless path and
 never respawn mid-Workstream. `compact-in-place` and `rotate-per-unit` remain
 migrated compatibility policies only.
 
+Goal-driven initialization (`--goal-contract`) opts into schema `0.5.0`; without it,
+released `0.4.0` behavior stays unchanged. V0.5 defaults to delegated supervision,
+continue mode and implementation review. Model judgment owns decomposition, useful
+next work and justified strategy changes. Completion additionally requires a fresh
+whole-goal snapshot/result covering every requirement and resolved obligations.
+Delegated debt never fabricates human credit or blocks fan-out. `workstream select`
+changes only the current authoritative scope and advances its epoch; history is not
+an alternative authority. Unknown external attempts remain unresolved.
+
+The experimental Codex `goal drive` uses persistent same-owner provider threads;
+its exact pre-spawn host receipt permits one measured owner-turn cost settlement,
+including a matching kernel-finished initial or resumed owner. This never widens
+`leaseCheck` or generic terminal writes. POSIX group teardown and usage must be
+confirmed. Profile effort passthrough is not proof of model availability. Real-agent
+smoke and transport fixtures must not be described as statistical efficacy evidence.
+
 ## Repo map
 
 - `DEEP_LOOP_ROOT/scripts/deep-loop.mjs` — CLI dispatcher and the **only** state-change boundary:
   validation, run lifecycle, fenced recovery, executable approval, review, accounting.
+- `DEEP_LOOP_ROOT/scripts/lib/goal-actions.mjs`, `DEEP_LOOP_ROOT/scripts/lib/goal-review.mjs` and
+  `DEEP_LOOP_ROOT/scripts/lib/goal-snapshot.mjs` — goal actions and current completion proof.
+  `DEEP_LOOP_ROOT/scripts/lib/goal-host.mjs` and `DEEP_LOOP_ROOT/scripts/lib/goal-owner-receipt.mjs`
+  own the measured goal controller and host-only owner receipt; skills never fabricate these receipts.
 - `DEEP_LOOP_ROOT/scripts/lib/*.mjs` — deterministic kernel, portable path/write helpers, runtime
   descriptors, executable trust, isolated Codex transport, review import, durable
   receipts. `DEEP_LOOP_ROOT/scripts/lib/route-flags.mjs` owns `ROUTE_FLAGS` (help and
@@ -143,8 +163,12 @@ Enforced by code and by review. Each is load-bearing; none is a summary of anoth
    kernel-finishes before its measured process result returns, only the host-internal,
    handoff/finish-bound, idempotent one-turn settlement may append that terminal cost;
    generic `leaseCheck`, `appendAnchored`, `budget record` and all CLI mutations remain
-   terminal-rejected. That receipt is completion bookkeeping, so pre-finish insights
+   terminal-rejected. That acquired-child receipt is completion bookkeeping, so pre-finish insights
    remain a valid snapshot that intentionally excludes the final process measurement.
+   V0.5 additionally permits the fixed `goal-owner-receipt.mjs` capability: issued before
+   spawn, bound to exact owner/profile/thread/process usage, and matched to the anchored
+   finish before terminal settlement. It covers initial and resumed owners without
+   inventing an acquired-child handoff or accepting serialized capability claims.
 7. **`withLock` is non-reentrant** — never take a lock inside a locked callback.
    Kernel durable writes are confined to `<root>/.deep-loop/`; `/deep-loop-finish` may
    delegate to deep-memory's and deep-wiki's own skills. The entry skill's suitability
@@ -163,7 +187,8 @@ Enforced by code and by review. Each is load-bearing; none is a summary of anoth
 8. **Circuit breaker latches** — human reset via lease-fenced `breaker reset --confirm`.
    Comprehension debt blocks only new maker fan-out (`discover`, and dispatching a new
    non-fix pending maker), and only while a settled (`done`) unreviewed maker exists.
-   It never blocks fix, review, handoff or finish.
+   It never blocks fix, review, handoff or finish. V0.5 delegated supervision also
+   leaves fan-out unblocked while preserving measured debt and actual human-review counts.
 
 Terminal detection evaluates `$TMUX` **before** the native-Windows branch, deliberately:
 the unrealistic `win32` + `$TMUX` combination then fails closed at the POSIX tmux
