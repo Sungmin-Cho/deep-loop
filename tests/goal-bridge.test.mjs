@@ -7,6 +7,9 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { reviewedGoalWork } from './helpers/reviewed-goal.mjs';
 import { GOAL_NOW } from './helpers/goal-fixture.mjs';
+import { runtimeCapability } from '../scripts/lib/runtime.mjs';
+const grokHost = runtimeCapability('grok', 'supported_platforms').includes(process.platform);
+const grokSkip = grokHost ? {} : { skip: `UNSUPPORTED_RUNTIME_PLATFORM: grok on ${process.platform}` };
 import * as bridge from '../scripts/lib/checker-bridge.mjs';
 import { createFileSymlinkOrSkip } from './helpers/fs-fixtures.mjs';
 const sha=x=>createHash('sha256').update(x).digest('hex');
@@ -43,7 +46,7 @@ async function preparedBridge(t) {
  writeFileSync(receiptPath,JSON.stringify(receipt));
  return {f,installed,review,descriptor,input,bound,stdout,receiptPath,receipt,result,raw,options:{receiptPath,attemptId,cwdFlag:f.root,sidecarPath:bound.sidecar,goalSubject:descriptor.subject,...installed}};
 }
-test('probed goal bridge binds exact raw subject, materializes without mutation and records only through kernel',async t=>{
+test('probed goal bridge binds exact raw subject, materializes without mutation and records only through kernel', grokSkip, async t=>{
  const b=await preparedBridge(t),before=b.f.state();
  const proof=bridge.verifyGoalBridgeReceipt(b.options);assert.equal(proof.raw,b.raw);
  const dest=b.descriptor.finalize.argv[b.descriptor.finalize.argv.indexOf('--dest')+1];
@@ -52,7 +55,7 @@ test('probed goal bridge binds exact raw subject, materializes without mutation 
  recordGoalBridgeReview(b.f.root,b.f.runId,{id:b.review.id,attemptId:b.review.execution.attempt_id,receiptPath:b.receiptPath,sidecarPath:b.bound.sidecar,fence:b.f.fence,...b.installed});
  assert.equal(b.f.state().goal_reviews[0].status,'approved');
 });
-test('goal bridge refuses supervisor-only success, active claim, forged identity, stale probe and FIFO before ingestion',async t=>{
+test('goal bridge refuses supervisor-only success, active claim, forged identity, stale probe and FIFO before ingestion', grokSkip, async t=>{
  const b=await preparedBridge(t);
  for(const mutate of [r=>r.result.exit_status=1,r=>r.result.termination_confirmed=false,r=>r.output_schema='review',r=>r.argv=['invented'],r=>r.model_id='other']) {
   const changed=structuredClone(b.receipt);mutate(changed);writeFileSync(b.receiptPath,JSON.stringify(changed));assert.throws(()=>bridge.verifyGoalBridgeReceipt(b.options),/GOAL_BRIDGE_/);

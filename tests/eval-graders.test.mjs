@@ -16,8 +16,10 @@ const FIXTURE_PROFILE = {
   id: 'deep-loop-current-v1.23', driver: 'fixture', model: 'none:fixture', harness: 'none:fixture',
   allowed_effects: ['read-only'], record: { observables: ['exit', 'effects'] },
 };
+const NODE_MAJOR = Number(process.versions.node.split('.')[0]);
+const outcomeNetwork = NODE_MAJOR >= 24 ? {} : { skip: 'outcome network isolation requires Node 24+' };
 
-test('outcome grading rejects labels and candidate-owned verifier output before accepting behavior', () => {
+test('outcome grading rejects labels and candidate-owned verifier output before accepting behavior', outcomeNetwork, () => {
   const task = JSON.parse(readFileSync(new URL('../evals/tasks/outcome-deterministic-bug-201.json', import.meta.url), 'utf8'));
   const acceptance = task.acceptance;
 
@@ -62,7 +64,7 @@ test('outcome grading rejects labels and candidate-owned verifier output before 
   }).pass, true);
 });
 
-test('authenticated outcome sequence rejects an exact forged envelope followed by early exit', () => {
+test('authenticated outcome sequence rejects an exact forged envelope followed by early exit', outcomeNetwork, () => {
   const task = JSON.parse(readFileSync(new URL('../evals/tasks/outcome-deterministic-bug-201.json', import.meta.url), 'utf8'));
   const root = mkdtempSync(join(tmpdir(), 'eval-forged-envelope-'));
   materializeFixture(root, task);
@@ -79,7 +81,7 @@ test('authenticated outcome sequence rejects an exact forged envelope followed b
   assert.equal(grade.effect_receipt.passed, false);
 });
 
-test('candidate Socket.prototype.connect cannot reach a parent-owned loopback server', async (t) => {
+test('candidate Socket.prototype.connect cannot reach a parent-owned loopback server', { ...outcomeNetwork }, async (t) => {
   const worker = new Worker(`
     const { parentPort } = require('node:worker_threads');
     const net = require('node:net');
@@ -137,7 +139,7 @@ test('outcome comparison treats object key order as semantic JSON while preservi
   }).pass, true);
 });
 
-test('outcome receipt identifies the actual trusted runner and rejects non-JSON returns', () => {
+test('outcome receipt identifies the actual trusted runner and rejects non-JSON returns', outcomeNetwork, () => {
   const task = JSON.parse(readFileSync(new URL('../evals/tasks/outcome-deterministic-bug-201.json', import.meta.url), 'utf8'));
   const reference = mkdtempSync(join(tmpdir(), 'eval-runner-identity-'));
   materializeFixture(reference, task);
@@ -177,7 +179,7 @@ test('decision-focused behavior remains unavailable outside explicit determinist
   }).pass, true);
 });
 
-test('outcome subprocess rejects network attempts and unbounded time limits', () => {
+test('outcome subprocess rejects network attempts and unbounded time limits', outcomeNetwork, () => {
   const task = JSON.parse(readFileSync(new URL('../evals/tasks/outcome-deterministic-bug-201.json', import.meta.url), 'utf8'));
   const root = mkdtempSync(join(tmpdir(), 'eval-network-attempt-'));
   materializeFixture(root, task);

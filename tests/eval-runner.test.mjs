@@ -184,7 +184,9 @@ test('outcome trials execute cleanly, task 211 uses two distinct references, and
   assert.deepEqual(result.reference_replay.trials[0].isolation_receipt.declared_command, task.acceptance[0].command);
 });
 
-test('every miniature outcome fixture has real failing behavior and an executable reference', async () => {
+test('every miniature outcome fixture has real failing behavior and an executable reference', {
+  skip: NETWORK_BOUNDARY_AVAILABLE ? false : 'network-write isolation requires Node 24+',
+}, async () => {
   const { gradeEndState } = await import('../evals/graders/end-state.grader.mjs');
   const taskDir = join(process.cwd(), 'evals', 'tasks');
   const tasks = readdirSync(taskDir).filter(file => file.startsWith('outcome-')).sort()
@@ -477,7 +479,9 @@ test('fixture evaluation executes 26 kernel acceptance paths and every declared 
   }, 'invariant families are manifest-bound');
 });
 
-test('safe outcome execution rejects command escapes before spawn and binds effects to the fixture profile', async () => {
+test('safe outcome execution rejects command escapes before spawn and binds effects to the fixture profile', {
+  skip: NETWORK_BOUNDARY_AVAILABLE ? false : 'network-write isolation requires Node 24+',
+}, async () => {
   const { gradeEndState } = await import('../evals/graders/end-state.grader.mjs');
   const profile = loadFixtureProfile();
   const root = mkdtempSync(join(tmpdir(), 'eval-safe-command-'));
