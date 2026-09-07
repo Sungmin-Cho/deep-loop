@@ -844,7 +844,6 @@ export function ensureCodexPreflight({
         identityVerifierContract: fileContract('runtime-executable', runtimeExecutablePath),
         preflightVerifierContract: preflightVerifierContract
           ?? fileContract('codex-preflight', preflightVerifierPath),
-        timeout_ms: timeoutMs,
       },
       normalize: { projectRoot: workspace, prompt: writePrompt },
     });

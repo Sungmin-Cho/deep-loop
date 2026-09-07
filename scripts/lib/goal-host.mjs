@@ -173,7 +173,6 @@ export async function driveGoalRun({root,runId,expect=null,timeoutMs,maxTurns,to
       if(['completed','stopped'].includes(loop.status))return {ok:loop.status==='completed',status:loop.status,invocations,providerThreadId:thread};
       if(loop.status==='paused')return {ok:false,status:'paused',reason:loop.pause_reason || 'run-paused',invocations,providerThreadId:thread};
       if(wallNow()-started>=timeoutMs)return fail('goal-host-deadline');
-      if(tokensUsed()>tokenLimit)return fail('goal-host-token-limit');
       const emittedHandoff=loop.session_chain.lease.handoff_phase==='emitted';
       if(!leaseCheck(loop,{...ownerFence,intent:emittedHandoff?'lease':'business'}).ok)return fail('goal-owner-fenced');
       const pendingChecker=loop.episodes.some(x=>x.role==='checker'&&['pending','in_progress'].includes(x.status));

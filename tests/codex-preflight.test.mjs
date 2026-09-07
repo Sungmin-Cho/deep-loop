@@ -233,6 +233,19 @@ test('schema upgrades invalidate preflight cache and a legacy run can re-probe w
   assert.deepEqual(readFileSync(h.statePath), before, 'preflight does not migrate or erase the existing state');
 });
 
+test('a later shorter host deadline does not invalidate a proved preflight cache', () => {
+  const h = harness();
+  const first = h.call({ timeoutMs: 5000 });
+  assert.equal(first.ok, true, JSON.stringify(first));
+  assert.equal(first.cache_hit, false);
+  assert.equal(h.runner.calls.length, 2);
+  const second = h.call({ timeoutMs: 1000 });
+  assert.equal(second.ok, true, JSON.stringify(second));
+  assert.equal(second.cache_hit, true);
+  assert.equal(second.cache_key, first.cache_key);
+  assert.equal(h.runner.calls.length, 2, 'deadline leftover is not runtime identity');
+});
+
 test('codexPreflightCacheKey is pure and normalizes only probe root and prompt churn', () => {
   const first = codexPreflightCacheKey(cacheKeyInput('/tmp/probe-a', 'write nonce-a'));
   const second = codexPreflightCacheKey(cacheKeyInput('/tmp/probe-b', 'write nonce-b'));

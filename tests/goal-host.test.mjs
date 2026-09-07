@@ -82,6 +82,14 @@ test('a measured turn at the exact token cap may finish without another model ca
  assert.equal(result.ok,true,JSON.stringify(result));assert.equal(f.state().status,'completed');assert.equal(calls,0);
 });
 
+test('a measured turn over the token cap may finish without another model call',async(t)=>{
+ const f=reviewedGoalWork(t,{runtime:'codex',model:'gpt-6-astra',effort:'high'});let calls=0;
+ const result=await driveGoalRun({...options(f),timeoutMs:30000,tokenLimit:10,
+  preflight:params=>{approveScenarioGoal(f);params.onInvocation({kind:'synthetic-preflight',result:measured()});return options(f).preflight();},
+  runProcess:()=>{calls++;return measured();}});
+ assert.equal(result.ok,true,JSON.stringify(result));assert.equal(f.state().status,'completed');assert.equal(calls,0);
+});
+
 test('minimal profile rejects handoff mode explicitly before any runtime call',async()=>{
  const f=makeGoalFixture({runtime:'codex',model:'gpt-6-astra',effort:'high',boundaryMode:'handoff'});let calls=0;
  try {

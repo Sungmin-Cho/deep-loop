@@ -27,6 +27,14 @@ All notable changes to deep-loop are documented in this file.
 - Goal-mode Codex profile metadata preserves native `max`/`ultra` effort requests.
   Actual model/account availability still requires runtime verification.
 
+### Fixed
+
+- A host token cap no longer pauses kernel-only `finish` after a measured turn has
+  already crossed the cap. Further model calls remain blocked.
+- Codex runtime-preflight cache identity no longer includes the caller's remaining
+  deadline, so a later checker probe can reuse a proved executable instead of
+  spending another two measured smokes.
+
 ### Validation boundary
 
 - Release, full preflight and live smoke receipts are pending. Fixture and transport-seam
