@@ -269,7 +269,7 @@ export function captureGoalSnapshot(rootInput, loop, options = {}) {
     const sources = [source('project', root, projectGit)];
     for (const ws of workstreams) {
       const directory = resolve(root, ws.worktree), state = gitIdentity(directory);
-      if (state && (!projectGit || state.common_dir !== projectGit.common_dir)) fail('foreign workstream Git repository');
+      if (state && (!projectGit || !sameFsPath(state.common_dir, projectGit.common_dir))) fail('foreign workstream Git repository');
       sources.push(source(ws.id, directory, state));
     }
     const makers = (loop.episodes ?? []).filter(ep => ep.role === 'maker' && ep.status === 'done').map(ep => {

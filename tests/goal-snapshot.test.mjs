@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, rmSync, chmodSync, readFileSync, copyFileSync, appendFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, rmSync, chmodSync, readFileSync, copyFileSync, appendFileSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { captureGoalSnapshot, snapshotEvidenceRefs } from '../scripts/lib/goal-snapshot.mjs';
+import { sameResolvedPath } from '../scripts/lib/path-portable.mjs';
 import { createDirectoryJunction, createFileSymlink } from './helpers/fs-fixtures.mjs';
 
 function fixture(t) {
@@ -58,7 +59,17 @@ test('bounded file count and bytes return unavailable rather than incomplete man
 test('actual linked Git worktrees bind HEAD, index, tracked and untracked bytes', t => {
   const f = gitFixture(t), first = f.snap();
   assert.equal(first.sources[0].kind, 'git'); assert.equal(first.sources[1].kind, 'git');
-  assert.equal(first.sources[0].git.common_dir, first.sources[1].git.common_dir);
+  const projectCommon = first.sources[0].git.common_dir;
+  const worktreeCommon = first.sources[1].git.common_dir;
+  const sameCommon = projectCommon === worktreeCommon || sameResolvedPath(projectCommon, worktreeCommon)
+    || (() => {
+      try {
+        const left = lstatSync(projectCommon, { bigint: true });
+        const right = lstatSync(worktreeCommon, { bigint: true });
+        return left.dev === right.dev && left.ino === right.ino && left.ino !== 0n;
+      } catch { return false; }
+    })();
+  assert.equal(sameCommon, true);
   assert.notEqual(first.sources[0].git.git_dir, first.sources[1].git.git_dir);
   const indexBefore = readFileSync(join(f.root, '.git/index'));
   assert.equal(f.snap().sha256, first.sha256); assert.deepEqual(readFileSync(join(f.root, '.git/index')), indexBefore);

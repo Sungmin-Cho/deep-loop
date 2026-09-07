@@ -35,7 +35,8 @@ All notable changes to deep-loop are documented in this file.
   deadline, so a later checker probe can reuse a proved executable instead of
   spending another two measured smokes.
 - Windows Git worktree and trusted-checker path identity now folds `\\?\` prefixes,
-  separators and case, and accepts the same NTFS node when 8.3 and long names differ.
+  separators and case, and accepts the same NTFS node when 8.3 and long names differ,
+  including linked-worktree `common_dir` comparison.
 - Windows Codex headless continuation threads the host's already-proved executable
   revalidator into respawn instead of independently probing `--version`.
 
