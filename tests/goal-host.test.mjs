@@ -172,3 +172,39 @@ test('cost-only owner churn receives one diagnostic turn then pauses without exh
   assert.equal(calls,4,JSON.stringify(result));assert.equal(result.reason,'goal-host-no-progress');assert.match(prompts.at(-1),/Diagnostic allowance/);assert.equal(f.state().status,'paused');
  }finally{f.cleanup();}
 });
+
+import { goalOk } from './helpers/reviewed-goal.mjs';
+test('default progress windows admit dependency replanning and an invoked fix through the real host and kernel',async t=>{
+ const f=makeGoalFixture({runtime:'codex',model:'gpt-6-astra',effort:'high',contract:{version:1,requirements:[
+  {id:'REQ-A',statement:'Deliver dependent A',acceptance:'A is implemented after B.'},
+  {id:'REQ-B',statement:'Deliver prerequisite B',acceptance:'B is implemented and checked.'},
+ ],non_goals:[]}});t.after(f.cleanup);
+ const actions=[];let a,b,originalAttempt,rejected=false;
+ // Injected fixture makers/reviewers isolate host liveness from model quality.
+ // Their durable transitions still use the existing fenced public kernel.
+ const result=await driveGoalRun(options(f,{maxTurns:20,timeoutMs:30000,
+  goalService:()=>{approveScenarioGoal(f);return {ok:true};},
+  runProcess:()=>{
+   const action=goalOk(f.cli(['next-action','--json'])).action;actions.push(action.type);
+   if(!a){
+    a=f.workstream('dependent-a',['REQ-A']);const maker=createScenarioMaker(f,a);
+    originalAttempt=goalOk(f.cli(['execution','prepare','--episode',maker.id,'--mode','inline','--stage','primary','--task','Implement dependent A'])).execution.attempt_id;
+    b=f.workstream('prerequisite-b',['REQ-B']);
+    goalOk(f.cli(['state','patch','--field','workstreams.0.depends_on','--value',JSON.stringify([b.id]),'--owner',f.fence.owner,'--generation','1']));
+    goalOk(f.cli(['episode','record','--id',maker.id,'--status','blocked']));
+   }else if(action.type==='select_workstream')goalOk(f.select(action.workstream_id,action.expected_scope));
+   else if(action.type==='plan_next_work')createScenarioMaker(f,f.state().workstreams.find(w=>w.id===action.workstream_id),action.point);
+   else if(['dispatch_maker','resume_maker'].includes(action.type)){
+    const maker=f.state().episodes.find(e=>e.id===action.episode_id);produceScenarioMaker(f,maker,[],{stage:action.stage??'primary',task:maker.execution?.task??'Implement work'});
+    const verdict=maker.workstream_id===a.id&&!rejected?'REQUEST_CHANGES':'APPROVE';rejected ||= verdict==='REQUEST_CHANGES';reviewScenarioMaker(f,maker.id,verdict);
+   }else if(action.type==='fix_episode'){
+    const checker=f.state().episodes.find(e=>e.id===action.episode_id);createScenarioMaker(f,f.state().workstreams.find(w=>w.id===action.workstream_id),action.point,{kind:'fix',retryOf:checker.target_maker});
+   }else if(action.type==='finish')writeFileSync(join(f.root,'.deep-loop','runs',f.runId,'final-report.md'),'# Controlled dependency scenario\n');
+   else assert.fail(`Unexpected owner action: ${JSON.stringify(action)}`);
+   return measured();
+  }}));
+ assert.equal(result.ok,true,JSON.stringify(result));const loop=f.state();assert.equal(loop.status,'completed');
+ assert.equal(loop.workstreams.length,2);assert.ok(actions.includes('resume_maker'));assert.ok(actions.includes('fix_episode'));
+ assert.ok(loop.episodes.some(e=>e.execution?.attempt_id===originalAttempt&&e.status==='done'));
+ assert.equal(loop.comprehension.episodes_human_reviewed,0);assert.ok(result.invocations.length<20);
+});
