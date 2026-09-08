@@ -15,7 +15,7 @@ Marketplace sync remains proposal-only even when every source and preflight gate
 
 The pinned-path checker fetches the deep-loop repository at the proposed SHA. A local-only or unpushed SHA cannot satisfy that gate.
 
-The v1.23.0 entry is a release draft until source validation, merge and the separate
+The v1.24.0 entry is a release draft until source validation, merge and the separate
 distribution gates complete. Goal-contract discoverability is not evidence of model
 efficacy or of a verified Grok reviewer bridge.
 

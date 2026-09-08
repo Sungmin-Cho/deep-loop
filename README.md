@@ -10,6 +10,8 @@ deep-loop is a standalone Claude Code / Codex / Grok CLI plugin that runs durabl
 
 **Proposal-only** means push, PR, merge, publish, delete, and marketplace/deep-suite sync all require separate **human approval** before execution. Installation does not imply that this repository has been released or synchronized to either marketplace.
 
+Measured candidate trials did not establish efficient end-to-end completion; see [validation limitations](evals/goal-execution-hardening-evidence.md).
+
 ## Goal contracts (v1.23.0)
 
 Use a goal contract when completion needs to survive long-running work and changes of approach. `init-run --goal-contract '<JSON>'` opts into durable schema `0.5.0`; calls without it and existing runs retain the `0.4.0` contract. The entry skill compiles the user's goal into explicit requirement IDs and acceptance criteria before creating the goal-driven run. A minimal contract is:

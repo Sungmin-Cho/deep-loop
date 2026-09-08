@@ -10,6 +10,8 @@ deep-loop는 독립 실행 가능한(standalone/독립) Claude Code / Codex / Gr
 
 **Proposal-only** 범위는 push, PR, merge, publish, delete, marketplace/deep-suite sync를 모두 포함하며, 실행 전 각각 **별도 사람 승인(human approval)**이 필요합니다. 설치 안내는 이 저장소가 이미 릴리스·마켓플레이스 동기화되었다는 뜻이 아닙니다.
 
+실제 후보 버전 실험에서 효율적인 전체 목표 완료는 입증되지 않았습니다. [검증 한계](evals/goal-execution-hardening-evidence.md)를 확인하세요.
+
 ## 목표 계약 (v1.23.0)
 
 장기 작업과 접근 방식 변경 뒤에도 완료 조건을 유지하려면 목표 계약을 사용합니다. `init-run --goal-contract '<JSON>'`으로 durable schema `0.5.0`에 명시적으로 진입합니다. 해당 옵션이 없는 호출과 기존 run은 `0.4.0` 계약을 유지합니다. 진입 스킬은 사용자의 목표를 명시적인 요구사항 ID와 수락 조건으로 정리한 뒤 목표 기반 run을 만듭니다. 최소 계약 예시는 다음과 같습니다.

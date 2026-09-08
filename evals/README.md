@@ -168,3 +168,6 @@ v2 cohorts only when source manifests, Git HEAD/status and execution profiles
 match. It rejects v1 and mixed-source inputs and returns separate cohort summaries.
 Review mismatch counts requested-profile evidence mismatches, not semantic
 review quality. Controlled host-loss tests are a safety lane, not efficacy trials.
+
+Measured limitations of the 1.24.0 candidate are recorded in
+[goal execution hardening evidence](goal-execution-hardening-evidence.md).
