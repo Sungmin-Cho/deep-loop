@@ -45,7 +45,7 @@ function normalizedBarrierEvidence(evidence = {}) {
 export function assertFullBankGate(payload, bank) {
   const checked = validatePublishedSchema('result', payload);
   if (!checked.ok) throw new Error(`FULL_BANK_RESULT_INVALID:${checked.code}`);
-  if (!Array.isArray(bank) || bank.length !== 42) throw new Error('FULL_BANK_SHAPE');
+  if (!Array.isArray(bank) || bank.length !== 45) throw new Error('FULL_BANK_SHAPE');
   const taskBound = validateResult(payload, bank);
   if (!taskBound.ok) throw new Error(`FULL_BANK_RESULT_INVALID:${taskBound.code}`);
   const actualIds = payload.results.map(row => row.id).sort();

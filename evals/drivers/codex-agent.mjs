@@ -1,3 +1,4 @@
+import { validateAgentProfileV2, validateAgentTrialV2, scheduleAgentTrials, summarizeAgentTrialsV2 } from '../lib/agent-report-v2.mjs';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -31,7 +32,7 @@ function cli(argv,root,input) {
 export function initializeAgentGoal(root,task,{model,effort,executable,approveExecutable=true}={}) {
  const {runId}=initRun(root,{runtime:'codex',goal:task.prompt,protocol:'standalone',model,effort,supervision:'delegated',boundaryMode:'continue',
   goalContract:{version:1,requirements:[{id:'REQ-OUTCOME',statement:task.prompt,acceptance:'The integrated project root passes independent held-out behavior tests for the requested function.'}],non_goals:['External network, publication and unrelated project changes.']},
-  review:{points:['implementation'],reviewer:'deep-review-loop',mode:'same-model',flags:[],converge:true,max_review_rounds:5,require_human_ack:false}});
+  review:{points:['implementation'],reviewer:'subagent-checker',mode:'same-model',flags:[],converge:true,max_review_rounds:5,require_human_ack:false}});
  if(approveExecutable) {
   const diagnosed=cli(['runtime-executable','diagnose','--runtime','codex','--path',executable],root);
   cli(['runtime-executable','approve','--runtime','codex','--path',executable,'--canonical-path',diagnosed.identity.canonical_path,
@@ -78,7 +79,7 @@ export function copyStableAgentCandidate(source,target) {
 }
 
 
-export function captureAgentSourceProvenance(repoRoot=REPO_ROOT) {
+export function captureAgentSourceProvenance(repoRoot=REPO_ROOT,taskIds=DEFAULT.tasks) {
  const files=[];
  function collect(dir,filter) {
   for(const entry of readdirSync(join(repoRoot,dir),{withFileTypes:true})) {
@@ -93,7 +94,8 @@ export function captureAgentSourceProvenance(repoRoot=REPO_ROOT) {
  collect('evals/drivers',path=>path.endsWith('.mjs'));
  collect('evals/fixtures/_support',()=>true);
  collect('schemas',path=>path.endsWith('.json'));
- for(const id of DEFAULT.tasks){files.push(`evals/tasks/${id}.json`);collect(`evals/fixtures/${id}`,()=>true);}
+ collect('evals/profiles/agent',path=>path.endsWith('.json'));
+ for(const id of taskIds){files.push(`evals/tasks/${id}.json`);collect(`evals/fixtures/${id}`,()=>true);}
  files.push('.claude-plugin/plugin.json','.codex-plugin/plugin.json','package.json','evals/profiles/agent/goal-agent.json');
  const manifest=[...new Set(files)].sort().map(path=>{
   const absolute=join(repoRoot,path),before=lstatSync(absolute,{bigint:true});
@@ -114,23 +116,35 @@ export function captureAgentSourceProvenance(repoRoot=REPO_ROOT) {
   manifest,manifest_sha256:agentDigest(JSON.stringify(manifest))};
 }
 
+
+function unavailableTrial(row,profile,reason) {
+ return {...finalizeAgentTrial({profile:row.profile,taskId:row.task_id,requestedModel:profile.model,requestedEffort:profile.effort,invocations:[],hostResult:{ok:false,reason},elapsedMs:0,tokenLimit:profile.token_limit,timeoutMs:profile.timeout_ms,paths:{candidate:null,evidence:null,run_id:null}}),...row,schema_version:2,started:false,served_model_status:'unavailable',requested_profile_evidence:false,reviewer_profile:profile.reviewer};
+}
+
 export async function runAgentEvaluation({profile=DEFAULT,outDir,executable,codexHome,env=process.env,
- runProcess=runStreamingProcessSync,platform=process.platform,preflight,approveExecutable=true,clock=nowMs}={}) {
- if(!validateAgentProfile(profile))throw new Error('AGENT_PROFILE_INVALID');
- if(!POSIX.has(platform))return {schema_version:1,mode:'real-agent',attempts:[],stopped:true,reason:'process-group-unavailable'};
+ runProcess=runStreamingProcessSync,platform=process.platform,preflight,approveExecutable=true,clock=nowMs,resolveCheckerSkill,revalidateExecutable}={}) {
+ const v2=profile.schema_version===2;
+ if(!(v2?validateAgentProfileV2(profile):validateAgentProfile(profile)))throw new Error('AGENT_PROFILE_INVALID');
+ if(!POSIX.has(platform)){
+  if(!v2)return {schema_version:1,mode:'real-agent',attempts:[],stopped:true,reason:'process-group-unavailable'};
+  const scheduled=scheduleAgentTrials(profile),attempts=scheduled.map(row=>unavailableTrial(row,profile,'process-group-unavailable'));
+  return {schema_version:2,mode:'real-agent',scheduled,attempts,summary:summarizeAgentTrialsV2(scheduled,attempts),stopped:true,passed:false,reason:'process-group-unavailable'};
+ }
  if(typeof executable!=='string'||!isAbsolute(executable)||typeof codexHome!=='string'||!isAbsolute(codexHome))throw new Error('AGENT_RUNTIME_PATHS_REQUIRED');
+ const scheduled=v2?scheduleAgentTrials(profile):profile.tasks.flatMap(task_id=>profile.profiles.map(variant=>({task_id,profile:variant,trial:1,id:`${task_id}-${variant}`})));
  const measuredProcess=(entry,options)=>runProcess(entry,{...options,captureRawJsonl:true});
  const output=resolve(outDir || mkdtempSync(join(tmpdir(),'deep-loop-agent-evidence-')));mkdirSync(output,{recursive:true,mode:0o700});
  const sessionDir=mkdtempSync(join(output,'agent-'));const attempts=[];let stopped=false,stopReason=null;
  json(join(sessionDir,'profile.json'),profile);
- const provenanceBefore=captureAgentSourceProvenance();json(join(sessionDir,'source-before.json'),provenanceBefore);
- for(const taskId of profile.tasks) {
-  for(const variant of profile.profiles) {
-   if(stopped)break;
+ if(v2)json(join(sessionDir,'scheduled.json'),scheduled);
+ const provenanceBefore=captureAgentSourceProvenance(REPO_ROOT,profile.tasks);json(join(sessionDir,'source-before.json'),provenanceBefore);
+ for(const scheduledTrial of scheduled) {
+   const {task_id:taskId,profile:variant}=scheduledTrial;
+   if(stopped){if(v2)attempts.push(unavailableTrial(scheduledTrial,profile,stopReason));continue;}
    const task=JSON.parse(readFileSync(join(REPO_ROOT,'evals','tasks',`${taskId}.json`),'utf8'));
    const candidate=realpathSync(mkdtempSync(join(tmpdir(),'deep-loop-agent-candidate-')));
    const rel=relative(candidate,sessionDir);if(!rel.startsWith('..')&&!isAbsolute(rel))throw new Error('AGENT_RECEIPTS_INSIDE_CANDIDATE');
-   const evidence=join(sessionDir,`${taskId}-${variant}`);mkdirSync(evidence,{mode:0o700});
+   const evidence=join(sessionDir,scheduledTrial.id);mkdirSync(evidence,{mode:0o700});
    materializeFixture(candidate,task);gitInit(candidate);
    const taskContext=`${task.prompt}\nTrial budget: ${profile.timeout_ms / 1000} seconds and ${profile.token_limit} measured tokens, including cached input.\nDeliver the final working function in the integrated project root ${candidate}. The behavioral oracle will evaluate that root. Any correct implementation strategy is valid. Do not access reference solutions, hidden tests, evaluator code or unrelated directories. External network and publication are outside this task.`;
    json(join(evidence,'task.json'),{id:task.id,prompt:task.prompt,prompt_sha256:agentDigest(task.prompt),task_sha256:agentDigest(JSON.stringify(task))});
@@ -145,11 +159,11 @@ export async function runAgentEvaluation({profile=DEFAULT,outDir,executable,code
     if(variant==='native') {
      const entry=buildCodexGoalOwnerEntry({executable,projectRoot:candidate,prompt:taskContext,model:profile.model,effort:profile.effort});
      Object.assign(entry,{cwd:candidate,env:nativeEnv(env,codexHome,candidate),usageOutputKind:'codex-jsonl',captureFinalMessage:true});
-     const result=await measuredProcess(entry,{timeoutMs:profile.timeout_ms,processGroup:'required'});capture({kind:'native',entry,result});hostResult=result;
+     const result=await measuredProcess(entry,{timeoutMs:v2?Math.min(profile.timeout_ms,profile.call_timeout_ms):profile.timeout_ms,processGroup:'required'});capture({kind:'native',entry,result});hostResult=result;
     } else {
      const initialized=initializeAgentGoal(candidate,task,{model:profile.model,effort:profile.effort,executable,approveExecutable});runId=initialized.runId;
      hostResult=await driveGoalRun({root:candidate,runId,expect:initialized.expect,timeoutMs:Math.max(1,profile.timeout_ms-(clock()-started)),tokenLimit:profile.token_limit,
-      env,profile:variant,task:taskContext,runProcess:measuredProcess,onInvocation:capture,...(preflight?{preflight}:{})});
+      env,profile:variant,task:taskContext,runProcess:measuredProcess,onInvocation:capture,...(preflight?{preflight}:{}),...(resolveCheckerSkill?{resolveCheckerSkill}:{}),...(revalidateExecutable?{revalidateExecutable}:{}),...(v2?{callTimeoutMs:profile.call_timeout_ms,noProgressTurns:profile.no_progress_turns}:{})});
      kernelStatus=captureReconciledRunSnapshot(candidate,runId).data.status;
     }
    } catch(error) {hostResult={ok:false,reason:`agent-driver:${error.message}`};}
@@ -162,13 +176,16 @@ export async function runAgentEvaluation({profile=DEFAULT,outDir,executable,code
    }
    const trial=finalizeAgentTrial({profile:variant,taskId,requestedModel:profile.model,requestedEffort:profile.effort,invocations,hostResult,kernelStatus,outcome,
     elapsedMs:clock()-started,tokenLimit:profile.token_limit,timeoutMs:profile.timeout_ms,paths:{candidate,evidence,run_id:runId},rawTraceAvailable:rawAvailable&&invocations.length>0});
+   if(v2){
+    const requestedProfileEvidence=invocations.length>0&&invocations.every(({entry})=>entry?.argv?.filter(x=>x==='--model').length===1&&entry.argv[entry.argv.indexOf('--model')+1]===profile.model&&entry.argv.filter(x=>x.startsWith('model_reasoning_effort=')).length===1&&entry.argv.includes(`model_reasoning_effort=${JSON.stringify(profile.effort)}`));
+    Object.assign(trial,scheduledTrial,{schema_version:2,started:true,served_model_status:'unavailable',requested_profile_evidence:requestedProfileEvidence,reviewer_profile:profile.reviewer,statistical_claim:'Repeated pilot with fixed scheduled denominator; no served-model identity claim.'});
+    if(!requestedProfileEvidence){trial.status='unavailable';trial.reason='requested-profile-evidence-unavailable';}
+   }
    json(join(evidence,'result.json'),trial);attempts.push(trial);
    if(!measured.usage_complete||!measured.termination_confirmed){stopped=true;stopReason=trial.reason;}
-  }
-  if(stopped)break;
  }
  let provenanceAfter=null,provenanceError=null;
- try {provenanceAfter=captureAgentSourceProvenance();}catch(error){provenanceError=error.message;}
+ try {provenanceAfter=captureAgentSourceProvenance(REPO_ROOT,profile.tasks);}catch(error){provenanceError=error.message;}
  const provenanceStable=provenanceAfter!==null&&sameAgentSourceProvenance(provenanceBefore,provenanceAfter);
  json(join(sessionDir,'source-after.json'),provenanceAfter||{error:provenanceError});
  const provenance={version:1,plugin_version:provenanceBefore.plugin_version,git_head:provenanceBefore.git_head,working_tree_dirty:provenanceBefore.working_tree_dirty,
@@ -176,8 +193,9 @@ export async function runAgentEvaluation({profile=DEFAULT,outDir,executable,code
   before_path:join(sessionDir,'source-before.json'),after_path:join(sessionDir,'source-after.json')};
  if(!provenanceStable){stopped=true;stopReason='agent-source-provenance-drift';}
  for(const trial of attempts){trial.provenance=provenance;if(!provenanceStable){trial.status='unavailable';trial.reason=stopReason;}
-  writeFileSync(join(trial.paths.evidence,'result.json'),`${JSON.stringify(trial,null,2)}\n`,{mode:0o600});}
- const report={schema_version:1,mode:'real-agent',profile,provenance,attempts,stopped,reason:stopReason,output_dir:sessionDir,
-  passed:attempts.length===profile.tasks.length*profile.profiles.length&&attempts.every(x=>x.status==='passed'),comparison_claim:'No statistical efficacy or uplift conclusion from this single-trial smoke.'};
+  if(v2&&!validateAgentTrialV2(trial))throw new Error('AGENT_RESULT_V2_INVALID');
+  if(trial.paths.evidence)writeFileSync(join(trial.paths.evidence,'result.json'),`${JSON.stringify(trial,null,2)}\n`,{mode:0o600});}
+ const report={schema_version:v2?2:1,mode:'real-agent',...(v2?{scheduled,summary:summarizeAgentTrialsV2(scheduled,attempts)}:{}),profile,provenance,attempts,stopped,reason:stopReason,output_dir:sessionDir,
+  passed:attempts.length===scheduled.length&&attempts.every(x=>x.status==='passed'),comparison_claim:v2?'Fixed repeated pilot; report all scheduled failures and unavailable trials. No general reliability guarantee.':'No statistical efficacy or uplift conclusion from this single-trial smoke.'};
  json(join(sessionDir,'result.json'),report);return report;
 }

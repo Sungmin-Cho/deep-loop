@@ -104,7 +104,7 @@ test('family 3 requires both executed named barrier results and the full-bank ga
   for (const evidence of [undefined, eventPass]) {
     const report = buildReport([cli, staticRow], { bank: [{ id: 'x' }], barrierEvidence: evidence });
     assert.equal(Object.hasOwn(report.payload.summary.by_invariant_family, '3'), false);
-    const fullBank = Array.from({ length: 42 }, (_, index) => ({ id: `task-${index}` }));
+    const fullBank = Array.from({ length: 45 }, (_, index) => ({ id: `task-${index}` }));
     assert.throws(() => assertFullBankGate(report.payload, fullBank), /FULL_BANK_/);
   }
 });
@@ -121,7 +121,7 @@ test('bypass and theater survive report accounting and failed full-bank reports 
     { id: 'reachable-theater', layer: 'kernel-invariant', class: 'breaker', verdict: 'theater', observation_class: 'expected_gate', invariant_family: [8], acceptance_executed: true, evidence },
   ];
   const out = mkdtempSync(join(tmpdir(), 'eval-negative-report-'));
-  const bank = Array.from({ length: 42 }, (_, index) => ({ id: `task-${index}`, layer: 'kernel-invariant', trials: 1 }));
+  const bank = Array.from({ length: 45 }, (_, index) => ({ id: `task-${index}`, layer: 'kernel-invariant', trials: 1 }));
   assert.throws(() => buildReport(rows, {
     out, bank, enforceFullBank: true,
     kernelFindings: [{ task_id: 'reachable-bypass', kind: 'kernel-invariant-contradiction', verdict: 'bypass', observation_class: 'expected_success' }],
@@ -367,9 +367,9 @@ test('fixture evaluation executes 26 kernel acceptance paths and every declared 
   const report = runFullWithAmbientForceColor(out);
   const report2 = runFullWithAmbientForceColor(out2);
   const payload = report.payload;
-  assert.equal(payload.results.length, 42);
+  assert.equal(payload.results.length, 45);
   assert.equal(payload.summary.accounting.kernel_acceptance_executed, 26);
-  assert.equal(payload.summary.accounting.outcome_reference_replays, 17);
+  assert.equal(payload.summary.accounting.outcome_reference_replays, 20);
   assert.equal(payload.summary.accounting.host_acceptance_verified, 1);
   assert.deepEqual(Object.keys(payload.summary.by_invariant_family), ['1','2','3','4','5','6','7','8']);
   assert.equal(payload.summary.by_invariant_family['3'].source, 'named-barriers:event:appended+state:written');
@@ -551,7 +551,7 @@ test('result consumer rejects static contradictions and every known kernel verdi
   staticRow.evidence.passed = false;
   staticRow.evidence.violations = [{ path: 'scripts/deep-loop.mjs', line: 10, route: 'git push' }];
   assert.equal(validateResult(contradiction).ok, false);
-  assert.throws(() => assertFullBankGate(contradiction, Array.from({ length: 42 }, (_, index) => ({ id: `task-${index}` }))), /RESULT_INVALID/);
+  assert.throws(() => assertFullBankGate(contradiction, Array.from({ length: 45 }, (_, index) => ({ id: `task-${index}` }))), /RESULT_INVALID/);
 
   for (const id of ['gate-lease-stale-owner-001', 'allow-state-patch-allowed-110', 'static-proposal-only-013']) {
     const payload = runFixtureEvaluation({ taskId: id }).payload;
@@ -636,7 +636,7 @@ test('static violations remain structured, reportable, and finding-bound before 
     },
   };
   const out = mkdtempSync(join(tmpdir(), 'eval-static-finding-'));
-  const bank = Array.from({ length: 42 }, (_, index) => ({ id: `task-${index}`, layer: 'kernel-invariant', trials: 1 }));
+  const bank = Array.from({ length: 45 }, (_, index) => ({ id: `task-${index}`, layer: 'kernel-invariant', trials: 1 }));
   assert.throws(() => buildReport([row], { out, bank, enforceFullBank: true }), /FULL_BANK_/);
   const payload = JSON.parse(readFileSync(join(out, 'eval-result.json'), 'utf8')).payload;
   assert.equal(payload.summary.by_verdict.bypass, 1);

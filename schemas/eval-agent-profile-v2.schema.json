@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Deep-loop repeated real-agent evaluation profile v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "mode",
+    "profiles",
+    "tasks",
+    "trials",
+    "model",
+    "effort",
+    "timeout_ms",
+    "token_limit",
+    "allowed_effects",
+    "seed",
+    "reviewer",
+    "call_timeout_ms",
+    "no_progress_turns"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "mode": {
+      "const": "real-agent"
+    },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "native",
+          "current",
+          "minimal"
+        ]
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "outcome-deterministic-bug-201",
+          "outcome-valid-alternative-211",
+          "outcome-dependent-integration-217",
+          "outcome-replan-evidence-218",
+          "outcome-diagnostic-repair-219"
+        ]
+      }
+    },
+    "trials": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 20
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "effort": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 600000
+    },
+    "token_limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500000
+    },
+    "allowed_effects": {
+      "const": [
+        "isolated-workspace-write"
+      ]
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "reviewer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reviewer",
+        "mode",
+        "flags"
+      ],
+      "properties": {
+        "reviewer": {
+          "const": "subagent-checker"
+        },
+        "mode": {
+          "const": "same-model"
+        },
+        "flags": {
+          "type": "array",
+          "maxItems": 0
+        }
+      }
+    },
+    "call_timeout_ms": {
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 600000
+    },
+    "no_progress_turns": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 20
+    }
+  }
+}

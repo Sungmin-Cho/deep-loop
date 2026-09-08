@@ -108,7 +108,7 @@ invocation arguments are classified. Reflective calls and runtime-generated sour
 remain outside this deterministic source oracle; production proposal-only enforcement
 remains authoritative.
 
-Full-bank result validation is bound to the canonical 42-task manifest hash. Each CLI
+Full-bank result validation is bound to the canonical 45-task manifest hash. Each CLI
 row preserves a normalized classifier projection plus timeout, stdin, argv, state,
 event, and postcondition observations; the consumer recomputes observation class and
 verdict from the task's exact expectation and rejects layer, class, invariant-family,
@@ -124,3 +124,31 @@ limits that JSON Schema cannot express exactly.
 
 Task 111 reads topology through the public `state get` CLI; dispatch, claim, and mutation
 remain inside their fixed kernel boundaries.
+
+
+## Repeated real-agent pilot v2
+
+The strict v1 single-trial profile/result formats remain available. V2 uses
+`evals/profiles/agent/goal-agent-pilot-v2.json`: three repetitions of five
+behavioral tasks under native/current/minimal, with a deterministic seeded
+schedule written before dispatch. Every scheduled trial remains in the report,
+including unstarted trials after quota or missing process evidence. Requested
+model/effort argv, source/fixture/oracle manifests, raw traces, measured usage,
+teardown, kernel completion and independent behavior results are separate fields.
+A requested profile is not served-model identity evidence.
+
+```sh
+node scripts/eval-deep-loop.mjs --mode agent --profile evals/profiles/agent/goal-agent-pilot-v2.json --executable /absolute/codex --codex-home /absolute/authenticated-home --out /absolute/evidence
+```
+
+The pilot schedules 45 trials, each with a 500,000-token admission limit and
+10-minute trial horizon, plus a 120-second cap per call. Those sums are 22.5M
+admission tokens and 7.5 hours of trial horizons, not guaranteed actual spending
+or a hard in-flight token cap. Run only within the authorized evaluation scope.
+Do not combine results across different source provenance or omit unavailable
+rows. Fixture transport success is not real-agent effectiveness.
+
+Recovery controls are reported separately from the efficacy denominator.
+`tests/goal-host-loss.test.mjs` kills an owned host process during an injected
+provider call and verifies restart refuses before dispatch. It proves the host
+loss boundary, not live provider recovery or task completion.

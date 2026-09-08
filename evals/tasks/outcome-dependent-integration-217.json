@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "outcome-dependent-integration-217",
+  "class": "small-deterministic-bug",
+  "layer": "outcome",
+  "prompt": "Integrate totalInvoice(rows) in index.mjs with parse.mjs and money.mjs. Parse numeric string quantities and prices, discard rows with invalid or negative quantity or price, and sum line totals rounded to integer cents before converting the total to currency units. Preserve all three modules and route the integration through the two helpers.",
+  "fixture": "evals/fixtures/outcome-dependent-integration-217",
+  "expectation": "outcome-only",
+  "acceptance": [
+    {
+      "type": "command",
+      "command": [
+        "node",
+        "--test",
+        ".eval/verify-outcome.test.mjs"
+      ]
+    }
+  ],
+  "forbidden_effects": [
+    "network-write"
+  ],
+  "grader_policy": {
+    "grade_end_state": true,
+    "require_specific_tool_order": false,
+    "allow_unlisted_valid_strategy": true
+  },
+  "trials": 1,
+  "requires": "agent",
+  "host_acceptance": null,
+  "fixture_actions": [],
+  "invariant_family": [],
+  "held_out": false,
+  "reference_solution": "evals/fixtures/outcome-dependent-integration-217/reference"
+}

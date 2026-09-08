@@ -96,3 +96,7 @@ export function validatePublishedSchema(kind, value) {
   const semantic = runtime[kind](value);
   return semantic.ok ? { ok: true, value } : { ...semantic, errors: [semantic.code] };
 }
+
+export function validateSchemaValue(schema,value) {
+ const errors=[];return {ok:check(schema,value,schema,'#',errors),errors};
+}

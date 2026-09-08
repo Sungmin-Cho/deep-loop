@@ -1,0 +1,32 @@
+{
+  "schema_version": 2,
+  "mode": "real-agent",
+  "profiles": [
+    "native",
+    "current",
+    "minimal"
+  ],
+  "tasks": [
+    "outcome-deterministic-bug-201",
+    "outcome-valid-alternative-211",
+    "outcome-dependent-integration-217",
+    "outcome-replan-evidence-218",
+    "outcome-diagnostic-repair-219"
+  ],
+  "trials": 3,
+  "model": "gpt-6-astra",
+  "effort": "high",
+  "timeout_ms": 600000,
+  "token_limit": 500000,
+  "allowed_effects": [
+    "isolated-workspace-write"
+  ],
+  "seed": 20260908,
+  "reviewer": {
+    "reviewer": "subagent-checker",
+    "mode": "same-model",
+    "flags": []
+  },
+  "call_timeout_ms": 120000,
+  "no_progress_turns": 3
+}

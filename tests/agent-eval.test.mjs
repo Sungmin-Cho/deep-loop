@@ -37,7 +37,7 @@ test('current and minimal invoke the production goal kernel and fail closed on u
  for(const variant of ['current','minimal']) {
   const out=base(t);let calls=0;let seenEntry;
   const r=await runAgentEvaluation({profile:{...profile,profiles:[variant],tasks:[profile.tasks[0]]},outDir:out,executable:process.execPath,codexHome:out,platform:'linux',approveExecutable:false,
-   preflight:()=>({ok:true,executable:{canonical_path:process.execPath},codexHome:{canonical_path:out}}),runProcess:entry=>{calls++;seenEntry=entry;return {...result,usage:null};}});
+   resolveCheckerSkill:()=>({skill:{canonical_path:'/trusted/fixture/SKILL.md'}}),revalidateExecutable:()=>({canonical_path:process.execPath}),preflight:()=>({ok:true,executable:{canonical_path:process.execPath},codexHome:{canonical_path:out}}),runProcess:entry=>{calls++;seenEntry=entry;return {...result,usage:null};}});
   t.after(()=>rmSync(r.attempts[0].paths.candidate,{recursive:true,force:true}));
   assert.match(seenEntry.stdin,/"kernel_path"/);
   assert.equal(calls,1);assert.equal(r.attempts[0].kernel_status,'paused');assert.equal(r.attempts[0].status,'unavailable');

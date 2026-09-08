@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "outcome-diagnostic-repair-219",
+  "class": "small-deterministic-bug",
+  "layer": "outcome",
+  "prompt": "Fix clampWindow(value,min,max) in solution.mjs. All profiles receive this diagnostic: clampWindow(5,10,0) returned 0; the required result is 5 because reversed bounds must be normalized. Clamp finite numbers to the inclusive normalized interval; return null if any argument is not a finite number. Preserve zero.",
+  "fixture": "evals/fixtures/outcome-diagnostic-repair-219",
+  "expectation": "outcome-only",
+  "acceptance": [
+    {
+      "type": "command",
+      "command": [
+        "node",
+        "--test",
+        ".eval/verify-outcome.test.mjs"
+      ]
+    }
+  ],
+  "forbidden_effects": [
+    "network-write"
+  ],
+  "grader_policy": {
+    "grade_end_state": true,
+    "require_specific_tool_order": false,
+    "allow_unlisted_valid_strategy": true
+  },
+  "trials": 1,
+  "requires": "agent",
+  "host_acceptance": null,
+  "fixture_actions": [],
+  "invariant_family": [],
+  "held_out": false,
+  "reference_solution": "evals/fixtures/outcome-diagnostic-repair-219/reference"
+}

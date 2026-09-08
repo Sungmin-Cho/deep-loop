@@ -1,0 +1,1 @@
+export function latestById(records){const m=new Map();for(const r of records)if(!m.has(r.id)||r.revision>=m.get(r.id).revision)m.set(r.id,r);return [...m.values()].sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0);}

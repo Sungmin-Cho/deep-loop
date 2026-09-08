@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "outcome-replan-evidence-218",
+  "class": "small-deterministic-bug",
+  "layer": "outcome",
+  "prompt": "Fix latestById(records) in solution.mjs. The draft assumes the last array entry is newest, but incident evidence shows records arrive out of order. Return one record per id, selecting greatest numeric revision, retaining the later array entry on equal revision, and sorting the final records by id lexically. Use that evidence to replace the invalid assumption; do not mutate inputs.",
+  "fixture": "evals/fixtures/outcome-replan-evidence-218",
+  "expectation": "outcome-only",
+  "acceptance": [
+    {
+      "type": "command",
+      "command": [
+        "node",
+        "--test",
+        ".eval/verify-outcome.test.mjs"
+      ]
+    }
+  ],
+  "forbidden_effects": [
+    "network-write"
+  ],
+  "grader_policy": {
+    "grade_end_state": true,
+    "require_specific_tool_order": false,
+    "allow_unlisted_valid_strategy": true
+  },
+  "trials": 1,
+  "requires": "agent",
+  "host_acceptance": null,
+  "fixture_actions": [],
+  "invariant_family": [],
+  "held_out": false,
+  "reference_solution": "evals/fixtures/outcome-replan-evidence-218/reference"
+}
