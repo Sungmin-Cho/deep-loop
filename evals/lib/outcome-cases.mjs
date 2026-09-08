@@ -16,6 +16,10 @@ const RESULT_PROTOCOL = 'authenticated-start-terminal-v1';
 const executableIdentities = new Map();
 
 const CASES = Object.freeze({
+  'outcome-dependent-integration-217': {module:'index.mjs',export:'totalInvoice',required_files:['index.mjs','parse.mjs','money.mjs'],inputs:[[[{quantity:'2',price:'1.25'},{quantity:3,price:0.1}]],[[{quantity:-1,price:9},{quantity:'bad',price:3},{quantity:1,price:0.333}]], [[]]],expected:[2.8,0.33,0]},
+  'outcome-replan-evidence-218': {module:'solution.mjs',export:'latestById',inputs:[[[{id:'b',revision:3,value:'new'},{id:'a',revision:2},{id:'b',revision:1,value:'old'}]],[[{id:'a',revision:2,value:1},{id:'a',revision:2,value:2}]], [[]]],expected:[[{id:'a',revision:2},{id:'b',revision:3,value:'new'}],[{id:'a',revision:2,value:2}],[]]},
+  'outcome-diagnostic-repair-219': {module:'solution.mjs',export:'clampWindow',inputs:[[5,10,0],[0,-1,1],[-10,4,-2],[20,0,10],['5',0,10]],expected:[5,0,-2,10,null]},
+
   'outcome-deterministic-bug-201': {
     module: 'solution.mjs', export: 'sumNumbers',
     inputs: [[[2, 5, 11]], [[-4, 9, 0, 3]], [[0.25, 0.5, 1.25]]],

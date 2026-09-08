@@ -1,3 +1,4 @@
+import { createGoalPlanController, issueGoalExecutionPlan, expireGoalPlanController } from '../scripts/lib/goal-execution-plan.mjs';
 import { prepareExecution, returnExecution } from '../scripts/lib/execution.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -35,11 +36,11 @@ function events(root, runId) {
   return readFileSync(path, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
 }
 
-function seed({ reviewer = 'deep-review', newPolicy = false, observation = false, goalDriven = false } = {}) {
+function seed({ reviewer = 'deep-review', newPolicy = false, observation = false, goalDriven = false, review, model, effort } = {}) {
   const root = canonicalRealpath(mkdtempSync(join(tmpdir(), 'dl-checker-int-')));
   const detected = reviewer === 'deep-review' ? { 'deep-review': true } : { 'deep-review': false };
   const { runId } = initRun(root, {
-    runtime: 'codex', goal: 'g', detected, now: new Date('2026-07-11T00:00:00Z'),
+    runtime: 'codex', goal: 'g', detected, review, model, effort, now: new Date('2026-07-11T00:00:00Z'),
     env: {}, platform: 'linux', run: () => ({ code: 1 }),
     ...(goalDriven ? {goalContract:{version:1,requirements:[{id:'REQ-A',statement:'Deliver A',acceptance:'Artifact is correct'}],non_goals:[]}} : {}),
   });
@@ -861,4 +862,59 @@ test('v0.5 import rejects report bytes differing from the observed checker proce
   checkerImportFn:(_options,bytes)=>{const changed=JSON.parse(bytes);changed.report_body='A different report';return {ok:true,value:importReviewOutcome(f.root,f.runId,{raw:JSON.stringify(changed),fence:f.fence,now:FIXED_NOW})};}});
  assert.equal(result.ok,false);
  assert.notEqual(readState(f.root,f.runId).data.episodes.find(x=>x.id===f.checkerId).status,'approved');
+});
+
+const PLAN_REVIEW={points:['implementation'],reviewer:'subagent-checker',mode:'same-model',flags:[],converge:true,max_review_rounds:5,require_human_ack:false};
+const OWNER_THREAD='019c7714-3b77-74d1-9866-e1f484aae2ab';
+const CHECKER_THREAD='019c7714-3b77-74d1-9866-e1f484aae2ac';
+for(const veto of [null,'same-session','missing-session','termination','doctrine','config']) {
+ test(`issued goal plan supervises actual subagent import boundary: ${veto??'success'}`,()=>{
+  const f=seed({goalDriven:true,reviewer:'subagent-checker',review:PLAN_REVIEW,model:'gpt-6-astra',effort:'high'}),deps=hostDeps(f);
+  const controller=createGoalPlanController();
+  const plan=issueGoalExecutionPlan(controller,{loop:readState(f.root,f.runId).data,doctrine:deps.resolveCheckerSkill()});
+  let imports=0,changed=false;const tokensBefore=readState(f.root,f.runId).data.budget.tokens_spent;
+  try {
+   const result=driveHeadlessRun({root:f.root,runId:f.runId,now:Date.parse(FIXED_NOW),...deps,goalExecutionPlan:plan,goalOwnerThreads:[OWNER_THREAD],
+    resolveCheckerSkill:()=>changed&&veto==='doctrine'?{...deps.resolveCheckerSkill(),plugin_version:'changed'}:deps.resolveCheckerSkill(),
+    checkerRunFn:options=>{
+     assert.equal(options.model,'gpt-6-astra');assert.equal(options.effort,'high');changed=true;
+     if(veto==='config'){const state=readState(f.root,f.runId).data;state.review.mode='cross-model';writeState(f.root,f.runId,state);}
+     return {...deps.checkerRunFn(options),providerThreadId:veto==='same-session'?OWNER_THREAD:veto==='missing-session'?null:CHECKER_THREAD,
+      process_group:{mode:'required',group_id:12345,quiescence_confirmed:veto!=='termination'},termination:{confirmed:veto!=='termination'}};
+    },checkerImportFn:(...args)=>{imports++;return deps.checkerImportFn(...args);}});
+   const after=readState(f.root,f.runId).data,checker=after.episodes.find(e=>e.id===f.checkerId);
+   assert.equal(after.budget.tokens_spent-tokensBefore,veto==='termination'?0:12);
+   if(veto===null){assert.equal(result.ok,true,JSON.stringify(result));assert.equal(imports,1);assert.equal(checker.review_source,'imported-stdin');assert.equal(checker.status,'approved');}
+   else {assert.equal(result.ok,false,JSON.stringify(result));assert.equal(imports,0);assert.notEqual(checker.status,'approved');assert.equal(existsSync(join(runDir(f.root,f.runId),'host-checkers','attempt-host','receipt.json')),false);}
+  } finally {expireGoalPlanController(controller);}
+ });
+}
+test('forged plan is a caller error and stale issued configuration pauses before any checker claim',()=>{
+ const f=seed({goalDriven:true,reviewer:'subagent-checker',review:PLAN_REVIEW,model:'gpt-6-astra',effort:'high'}),deps=hostDeps(f);
+ const controller=createGoalPlanController(),plan=issueGoalExecutionPlan(controller,{loop:readState(f.root,f.runId).data,doctrine:deps.resolveCheckerSkill()});
+ try {
+  const before=readFileSync(join(runDir(f.root,f.runId),'loop.json'));
+  assert.throws(()=>driveHeadlessRun({root:f.root,runId:f.runId,...deps,goalExecutionPlan:structuredClone(plan)}),/GOAL_PLAN_NOT_ISSUED/);
+  assert.deepEqual(readFileSync(join(runDir(f.root,f.runId),'loop.json')),before);
+  const state=readState(f.root,f.runId).data;state.review.mode='cross-model';writeState(f.root,f.runId,state);
+  let calls=0;const result=driveHeadlessRun({root:f.root,runId:f.runId,now:Date.parse(FIXED_NOW),...deps,goalExecutionPlan:plan,goalOwnerThreads:[OWNER_THREAD],checkerRunFn:()=>{calls++;throw Error('must not run');}});
+  assert.equal(result.reason,'goal-execution-plan-stale');assert.equal(calls,0);
+  const after=readState(f.root,f.runId).data,checker=after.episodes.find(e=>e.id===f.checkerId);
+  assert.equal(after.status,'paused');assert.equal(checker.status,'pending');assert.equal(checker.attempt_id,undefined);assert.equal(checker.execution,undefined);
+ }finally{expireGoalPlanController(controller);}
+});
+
+import { createGoalCallBudget } from '../scripts/lib/goal-call-budget.mjs';
+for(const timing of ['preflight','before-claim','after-claim'])test(`host admission refusal preserves checker authority: ${timing}`,()=>{
+ const f=seed({goalDriven:true,reviewer:'subagent-checker',review:PLAN_REVIEW,model:'gpt-6-astra',effort:'high'}),deps=hostDeps(f);
+ const controller=createGoalPlanController(),plan=issueGoalExecutionPlan(controller,{loop:readState(f.root,f.runId).data,doctrine:deps.resolveCheckerSkill()});
+ const b=createGoalCallBudget({readLoop:()=>readState(f.root,f.runId).data,tokenLimit:100,remaining:()=>0,callTimeoutMs:1000,now:()=>Date.parse(FIXED_NOW),runProcess:()=>{throw Error('must not spawn');}});
+ let invoked=0;
+ try {
+  const result=driveHeadlessRun({root:f.root,runId:f.runId,now:Date.parse(FIXED_NOW),...deps,goalExecutionPlan:plan,goalOwnerThreads:[OWNER_THREAD],preflightFn:options=>{if(timing==='preflight')b.admit();return deps.preflightFn(options);},goalCallAdmission:()=>{if(timing==='before-claim')b.admit();},checkerRunFn:()=>{invoked++;b.admit();}});
+  assert.equal(result.reason,'goal-host-deadline');assert.equal(result.spawn_state,'not-started');assert.equal(invoked,timing==='after-claim'?1:0);
+  const after=readState(f.root,f.runId).data,checker=after.episodes.find(e=>e.id===f.checkerId);
+  assert.equal(after.status,'paused');assert.notEqual(checker.status,'blocked');assert.notEqual(checker.status,'approved');
+  if(timing!=='after-claim'){assert.equal(checker.status,'pending');assert.equal(checker.attempt_id,undefined);}else{assert.equal(checker.attempt_id,result.attemptId);assert.equal(checker.execution.phase,'running');}
+ }finally{expireGoalPlanController(controller);}
 });

@@ -48,7 +48,7 @@ Each comparison row has exactly `task_id`, `profile`, `outcome_pass`,
 `agency_loss_incident`, `harness_block_incident`, `hard_safety_invariant_violated`,
 and `attribution`. The same
 task ID is compared across `host-native`, `deep-loop-kernel-minimal`,
-`deep-loop-current-v1.23`, and `deep-loop-experimental`. Output roots are never
+`deep-loop-current-v1.24`, and `deep-loop-experimental`. Output roots are never
 recorded in reports, so equal inputs produce raw byte-identical reports.
 
 ## Agency-loss taxonomy
@@ -57,7 +57,7 @@ Attribution is exactly one of `not-applicable`, `harness-constraint`,
 `procedural-rigidity`, `model-error`, `task-error`, or `environment-error`.
 
 `agency_loss_incident` is true only for a cross-profile comparison where all four
-conditions hold: `host-native` or `deep-loop-current-v1.23` produces a valid solution
+conditions hold: `host-native` or `deep-loop-current-v1.24` produces a valid solution
 for the same task; `deep-loop-experimental` fails to produce a valid solution; the
 failure attribution is `harness-constraint` or `procedural-rigidity`; and no hard safety invariant
 is violated. It is false when any conjunct is absent. Passing rows
@@ -108,7 +108,7 @@ invocation arguments are classified. Reflective calls and runtime-generated sour
 remain outside this deterministic source oracle; production proposal-only enforcement
 remains authoritative.
 
-Full-bank result validation is bound to the canonical 42-task manifest hash. Each CLI
+Full-bank result validation is bound to the canonical 45-task manifest hash. Each CLI
 row preserves a normalized classifier projection plus timeout, stdin, argv, state,
 event, and postcondition observations; the consumer recomputes observation class and
 verdict from the task's exact expectation and rejects layer, class, invariant-family,
@@ -124,3 +124,50 @@ limits that JSON Schema cannot express exactly.
 
 Task 111 reads topology through the public `state get` CLI; dispatch, claim, and mutation
 remain inside their fixed kernel boundaries.
+
+
+## Repeated real-agent pilot v2
+
+The strict v1 single-trial profile/result formats remain available. V2 uses
+`evals/profiles/agent/goal-agent-pilot-v2.json`: three repetitions of five
+behavioral tasks under native/current/minimal, with a deterministic seeded
+schedule written before dispatch. Every scheduled trial remains in the report,
+including unstarted trials after quota or missing process evidence. Requested
+model/effort argv, source/fixture/oracle manifests, raw traces, measured usage,
+teardown, kernel completion and independent behavior results are separate fields.
+A requested profile is not served-model identity evidence.
+
+```sh
+node scripts/eval-deep-loop.mjs --mode agent --profile evals/profiles/agent/goal-agent-pilot-v2.json --executable /absolute/codex --codex-home /absolute/authenticated-home --out /absolute/evidence
+```
+
+The pilot schedules 45 trials, each with a 500,000-token admission limit and
+10-minute trial horizon, plus a 120-second cap per call. Those sums are 22.5M
+admission tokens and 7.5 hours of trial horizons, not guaranteed actual spending
+or a hard in-flight token cap. Run only within the authorized evaluation scope.
+Do not combine results across different source provenance or omit unavailable
+rows. Fixture transport success is not real-agent effectiveness.
+
+Recovery controls are reported separately from the efficacy denominator.
+`tests/goal-host-loss.test.mjs` kills an owned host process during an injected
+provider call and verifies restart refuses before dispatch. It proves the host
+loss boundary, not live provider recovery or task completion.
+
+### Repeated agent v2 evidence
+
+The v2 pilot records every scheduled row, including unstarted unavailable trials.
+Each native trial gets one call with the full trial time limit. Harness profiles
+share that total horizon across probes, owners and checkers; each harness call
+also has the configured call timeout. Reports disclose both effective limits.
+This comparison measures total task completion including harness overhead, with
+unequal call segmentation. Token caps are measured next-call admission limits;
+an in-flight call can overshoot. Served-model identity remains unavailable.
+
+`loadAgentComparisonV2(paths)` in `evals/lib/agent-report-v2.mjs` compares complete
+v2 cohorts only when source manifests, Git HEAD/status and execution profiles
+match. It rejects v1 and mixed-source inputs and returns separate cohort summaries.
+Review mismatch counts requested-profile evidence mismatches, not semantic
+review quality. Controlled host-loss tests are a safety lane, not efficacy trials.
+
+Measured limitations of the 1.24.0 candidate are recorded in
+[goal execution hardening evidence](goal-execution-hardening-evidence.md).

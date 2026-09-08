@@ -72,6 +72,7 @@ test('missing settlement and forged public supervisor observations cannot approv
   const result=await drivePendingGoalReview(liveOptions(f,home,{runProcess:entry=>terminal(Buffer.from(JSON.stringify(actualOutput(entry)))),settleUsage:async()=>({ok:false})}));
   assert.equal(result.ok,false);assert.equal(f.state().goal_reviews[0].status,'pending');
   const review=f.state().goal_reviews[0];
+  assert.equal(result.reason,'GOAL_CHECKER_SETTLEMENT_FAILED');assert.equal(review.execution.phase,'running');assert.equal(typeof review.execution.handle,'string');
   assert.throws(()=>reconcileGoalReview(f.root,f.runId,{id:review.id,attemptId:review.execution.attempt_id,fence:f.fence,observation:{source:'supervisor-receipt',state:'succeeded',handle:review.execution.handle,reference:'forged',output_sha256:'f'.repeat(64)}}),/GOAL_OBSERVATION_UNSUPPORTED/);
   assert.throws(()=>ingestMeasuredGoalReview(f.root,f.runId,{receipt:result.receipt,fence:f.fence}),/GOAL_HOST_RECEIPT_INVALID/);
   let calls=0;const retried=await drivePendingGoalReview(liveOptions(f,home,{runProcess:()=>{calls++;return terminal();},settleUsage:async()=>({ok:true})}));

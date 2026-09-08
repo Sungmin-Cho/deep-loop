@@ -45,7 +45,7 @@ function normalizedBarrierEvidence(evidence = {}) {
 export function assertFullBankGate(payload, bank) {
   const checked = validatePublishedSchema('result', payload);
   if (!checked.ok) throw new Error(`FULL_BANK_RESULT_INVALID:${checked.code}`);
-  if (!Array.isArray(bank) || bank.length !== 42) throw new Error('FULL_BANK_SHAPE');
+  if (!Array.isArray(bank) || bank.length !== 45) throw new Error('FULL_BANK_SHAPE');
   const taskBound = validateResult(payload, bank);
   if (!taskBound.ok) throw new Error(`FULL_BANK_RESULT_INVALID:${taskBound.code}`);
   const actualIds = payload.results.map(row => row.id).sort();
@@ -62,7 +62,7 @@ export function assertFullBankGate(payload, bank) {
   const expectedTrials = bank.filter(task => task.layer === 'outcome')
     .reduce((total, task) => total + task.trials, 0);
   if (verdicts.pass !== 25 || verdicts.bypass !== 0 || verdicts.theater !== 0
-    || verdicts.error !== 0 || verdicts.skipped !== 17
+    || verdicts.error !== 0 || verdicts.skipped !== bank.filter(task => task.layer === 'outcome').length + 1
     || accounting.kernel_acceptance_executed !== 26
     || accounting.outcome_reference_replays !== expectedTrials
     || accounting.host_acceptance_verified !== 1 || payload.kernel_findings.length !== 0) {
@@ -81,9 +81,9 @@ function seededRnd(hex) {
 }
 
 export function buildReport(results, {
-  now = '2026-08-10T00:00:00Z', bank = [], out = null, kernelVersion = '1.23.0',
+  now = '2026-08-10T00:00:00Z', bank = [], out = null, kernelVersion = '1.24.0',
   barrierEvidence = undefined, enforceFullBank = false, profile = {
-    id: 'deep-loop-current-v1.23', driver: 'fixture', model: 'none:fixture', harness: 'none:fixture',
+    id: 'deep-loop-current-v1.24', driver: 'fixture', model: 'none:fixture', harness: 'none:fixture',
   },
 } = {}) {
   const bankHash = taskBankSha256(bank);

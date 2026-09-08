@@ -1,12 +1,15 @@
 import test from 'node:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { reviewedGoalWork } from './helpers/reviewed-goal.mjs';
+import { reviewedGoalWork as baseReviewedGoalWork } from './helpers/reviewed-goal.mjs';
 import { approveScenarioGoal, createScenarioMaker, produceScenarioMaker, reviewScenarioMaker } from './helpers/goal-scenario.mjs';
 import assert from 'node:assert/strict';
-import { makeGoalFixture } from './helpers/goal-fixture.mjs';
+import { makeGoalFixture as baseGoalFixture } from './helpers/goal-fixture.mjs';
 import { driveGoalRun } from '../scripts/lib/goal-host.mjs';
 
+const supportedReview = {points:['implementation'],reviewer:'subagent-checker',mode:'same-model',flags:[],converge:true,max_review_rounds:5,require_human_ack:false};
+const makeGoalFixture = options => baseGoalFixture({review:supportedReview,...options});
+const reviewedGoalWork = (t,options) => baseReviewedGoalWork(t,{review:supportedReview,...options});
 // These transport seams exercise the real kernel and host accounting, not a
 // synthetic completion oracle. Live model effectiveness is a separate gate.
 const THREAD = '019c7714-3b77-74d1-9866-e1f484aae2ab';
@@ -15,7 +18,7 @@ function measured(extra={}) { return {ok:true,exitCode:0,usage,providerThreadId:
   process_group:{mode:'required',group_id:12345,termination_scope:'owned-posix-process-group',quiescence_confirmed:true},
   termination:{confirmed:true},...extra}; }
 function options(f, extra={}) { return {root:f.root,runId:f.runId,expect:{owner:f.runId,generation:1},maxTurns:2,
-  timeoutMs:5000,wallNow:()=>0,now:"2026-09-06T00:00:00Z",preflight:()=>({ok:true,executable:{canonical_path:'/usr/bin/codex',platform:process.platform},
+  revalidateExecutable:()=>({canonical_path:'/usr/bin/codex',platform:process.platform}),resolveCheckerSkill:()=>({skill:{canonical_path:'/trusted/fixture/SKILL.md'}}),timeoutMs:5000,wallNow:()=>0,now:"2026-09-06T00:00:00Z",preflight:()=>({ok:true,executable:{canonical_path:'/usr/bin/codex',platform:process.platform},
     codexHome:{canonical_path:'/tmp/codex-test'},measured_usage:[]}),...extra}; }
 
 test('goal host starts persistent owner then resumes exact provider thread and settles each call',async()=>{
@@ -33,6 +36,7 @@ test('goal host starts persistent owner then resumes exact provider thread and s
     assert.equal(result.reason,'owner-turn-limit');
     assert.equal(result.invocations.length,2);
     assert.equal(result.invocations.every(x=>x.accounting?.ok===true),true);
+    for(const event of result.invocations){assert.match(event.audit.plan_sha256,/^[0-9a-f]{64}$/);assert.match(event.audit.doctrine_sha256,/^[0-9a-f]{64}$/);assert.match(event.audit.argv_sha256,/^[0-9a-f]{64}$/);assert.equal(event.audit.requested_model,'gpt-6-astra');assert.equal(event.audit.native_effort,'high');assert.equal(event.audit.served_model_status,'unavailable');assert.equal(event.invocation_class,'model-call');}
   } finally {f.cleanup();}
 });
 
@@ -143,15 +147,15 @@ test('the owner may pause for genuinely missing input without being forced into 
  }finally{f.cleanup();}
 });
 
-test('host registers the configured checker with exact maker binding without an owner bookkeeping turn',async()=>{
+test('host rejects an unsupported sibling review workflow before registering or executing a checker',async()=>{
  const f=makeGoalFixture({runtime:'codex',model:'gpt-6-astra',effort:'high',review:{points:['implementation'],reviewer:'deep-review-loop',mode:'same-model',flags:[],converge:true,max_review_rounds:5,require_human_ack:false}});let calls=0;
  try {
   const ws=f.workstream('registration'),maker=createScenarioMaker(f,ws);produceScenarioMaker(f,maker);
   const result=await driveGoalRun(options(f,{resolveCheckerSkill:()=>({skill:{canonical_path:'/trusted/fixture/SKILL.md'}}),runProcess:()=>{calls++;return measured();}}));
   assert.equal(calls,0);assert.equal(result.ok,false);
   const checkers=f.state().episodes.filter(x=>x.role==='checker');
-  assert.equal(checkers.length,1);assert.equal(checkers[0].target_maker,maker.id);
-  assert.equal(checkers[0].status,'pending');assert.equal(checkers[0].requires_independent_session,true);
+  assert.equal(result.reason,'configured-review-workflow-unavailable');
+  assert.equal(checkers.length,0);
  }finally{f.cleanup();}
 });
 
@@ -159,4 +163,48 @@ test('a goal-service precondition exception becomes a structured pause',async(t)
  const f=reviewedGoalWork(t,{runtime:'codex',model:'gpt-6-astra',effort:'high'});
  const result=await driveGoalRun(options(f,{goalService:()=>{throw new Error('goal-transport-unavailable');}}));
  assert.equal(result.ok,false);assert.equal(result.reason,'goal-transport-unavailable');assert.equal(f.state().status,'paused');
+});
+
+test('cost-only owner churn receives one diagnostic turn then pauses without exhausting the run budget',async()=>{
+ const f=makeGoalFixture({runtime:'codex',model:'gpt-6-astra',effort:'high'});let calls=0;const prompts=[];
+ try {
+  const result=await driveGoalRun(options(f,{maxTurns:20,runProcess:entry=>{calls++;prompts.push(entry.stdin);return measured();}}));
+  assert.equal(calls,4,JSON.stringify(result));assert.equal(result.reason,'goal-host-no-progress');assert.match(prompts.at(-1),/Diagnostic allowance/);assert.equal(f.state().status,'paused');
+ }finally{f.cleanup();}
+});
+
+import { goalOk } from './helpers/reviewed-goal.mjs';
+test('default progress windows admit dependency replanning and an invoked fix through the real host and kernel',async t=>{
+ const f=makeGoalFixture({runtime:'codex',model:'gpt-6-astra',effort:'high',contract:{version:1,requirements:[
+  {id:'REQ-A',statement:'Deliver dependent A',acceptance:'A is implemented after B.'},
+  {id:'REQ-B',statement:'Deliver prerequisite B',acceptance:'B is implemented and checked.'},
+ ],non_goals:[]}});t.after(f.cleanup);
+ const actions=[];let a,b,originalAttempt,rejected=false;
+ // Injected fixture makers/reviewers isolate host liveness from model quality.
+ // Their durable transitions still use the existing fenced public kernel.
+ const result=await driveGoalRun(options(f,{maxTurns:20,timeoutMs:30000,
+  goalService:()=>{approveScenarioGoal(f);return {ok:true};},
+  runProcess:()=>{
+   const action=goalOk(f.cli(['next-action','--json'])).action;actions.push(action.type);
+   if(!a){
+    a=f.workstream('dependent-a',['REQ-A']);const maker=createScenarioMaker(f,a);
+    originalAttempt=goalOk(f.cli(['execution','prepare','--episode',maker.id,'--mode','inline','--stage','primary','--task','Implement dependent A'])).execution.attempt_id;
+    b=f.workstream('prerequisite-b',['REQ-B']);
+    goalOk(f.cli(['state','patch','--field','workstreams.0.depends_on','--value',JSON.stringify([b.id]),'--owner',f.fence.owner,'--generation','1']));
+    goalOk(f.cli(['episode','record','--id',maker.id,'--status','blocked']));
+   }else if(action.type==='select_workstream')goalOk(f.select(action.workstream_id,action.expected_scope));
+   else if(action.type==='plan_next_work')createScenarioMaker(f,f.state().workstreams.find(w=>w.id===action.workstream_id),action.point);
+   else if(['dispatch_maker','resume_maker'].includes(action.type)){
+    const maker=f.state().episodes.find(e=>e.id===action.episode_id);produceScenarioMaker(f,maker,[],{stage:action.stage??'primary',task:maker.execution?.task??'Implement work'});
+    const verdict=maker.workstream_id===a.id&&!rejected?'REQUEST_CHANGES':'APPROVE';rejected ||= verdict==='REQUEST_CHANGES';reviewScenarioMaker(f,maker.id,verdict);
+   }else if(action.type==='fix_episode'){
+    const checker=f.state().episodes.find(e=>e.id===action.episode_id);createScenarioMaker(f,f.state().workstreams.find(w=>w.id===action.workstream_id),action.point,{kind:'fix',retryOf:checker.target_maker});
+   }else if(action.type==='finish')writeFileSync(join(f.root,'.deep-loop','runs',f.runId,'final-report.md'),'# Controlled dependency scenario\n');
+   else assert.fail(`Unexpected owner action: ${JSON.stringify(action)}`);
+   return measured();
+  }}));
+ assert.equal(result.ok,true,JSON.stringify(result));const loop=f.state();assert.equal(loop.status,'completed');
+ assert.equal(loop.workstreams.length,2);assert.ok(actions.includes('resume_maker'));assert.ok(actions.includes('fix_episode'));
+ assert.ok(loop.episodes.some(e=>e.execution?.attempt_id===originalAttempt&&e.status==='done'));
+ assert.equal(loop.comprehension.episodes_human_reviewed,0);assert.ok(result.invocations.length<20);
 });

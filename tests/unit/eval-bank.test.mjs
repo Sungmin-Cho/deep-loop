@@ -5,16 +5,16 @@ import { join } from 'node:path';
 import { validateProfile, validateTask, STEP_VOCAB } from '../../evals/lib/validate.mjs';
 import { OUTCOME_CASE_IDS, describeOutcomeCase } from '../../evals/lib/outcome-cases.mjs';
 
-test('task bank has the exact 42-row two-layer contract', () => {
+test('task bank has the exact 45-row two-layer contract', () => {
   const dir = join(process.cwd(), 'evals', 'tasks');
   const files = readdirSync(dir).filter(x => x.endsWith('.json')).sort();
-  assert.equal(files.length, 42);
+  assert.equal(files.length, 45);
   const tasks = files.map(f => JSON.parse(readFileSync(join(dir, f), 'utf8')));
   tasks.forEach(t => assert.equal(validateTask(t).ok, true, t.id));
   assert.equal(tasks.filter(t => t.layer === 'kernel-invariant' && t.acceptance?.[0]?.type !== 'static-assertion').length, 25);
   assert.equal(tasks.filter(t => t.acceptance?.[0]?.type !== 'static-assertion' && (t.expectation === 'must-block' || t.expectation === 'must-escalate')).length, 13);
-  assert.equal(tasks.filter(t => t.layer === 'outcome').length, 16);
-  assert.equal(new Set(tasks.map(t => t.id)).size, 42);
+  assert.equal(tasks.filter(t => t.layer === 'outcome').length, 19);
+  assert.equal(new Set(tasks.map(t => t.id)).size, 45);
   assert.deepEqual(new Set(tasks.filter(t => t.layer === 'outcome').map(t => t.class)), new Set(['small-deterministic-bug','ambiguous-bug','multi-file-refactor','docs-config','architecture-decision','security-auth','schema-migration','lease-recovery','external-tool-failure','prompt-injection','valid-alternative-path','no-op-task','should-review','should-not-review','should-replan','should-not-replan']));
   for (const task of tasks.filter(t => t.layer === 'outcome')) {
     assert.ok(task.acceptance.some(item => item.type === 'command'), `${task.id}: command outcome proof`);
@@ -91,7 +91,7 @@ test('profiles, taxonomy, result schema, and the 12-row synthetic sample match r
   assert.equal(profiles.length, 4);
   profiles.forEach(profile => assert.equal(validateProfile(profile).ok, true, profile.id));
   assert.deepEqual(new Set(profiles.map(profile => profile.id)), new Set([
-    'host-native', 'deep-loop-kernel-minimal', 'deep-loop-current-v1.23', 'deep-loop-experimental',
+    'host-native', 'deep-loop-kernel-minimal', 'deep-loop-current-v1.24', 'deep-loop-experimental',
   ]));
 
   const resultSchema = JSON.parse(readFileSync(join(process.cwd(), 'schemas', 'eval-result.schema.json'), 'utf8'));
@@ -99,7 +99,7 @@ test('profiles, taxonomy, result schema, and the 12-row synthetic sample match r
     'not-applicable', 'harness-constraint', 'procedural-rigidity', 'model-error', 'task-error', 'environment-error',
   ]);
   const readme = readFileSync(join(process.cwd(), 'evals', 'README.md'), 'utf8');
-  assert.match(readme, /agency_loss_incident.*host-native.*deep-loop-current-v1\.23.*valid solution.*deep-loop-experimental.*fails.*harness-constraint.*procedural-rigidity.*hard safety invariant/is);
+  assert.match(readme, /agency_loss_incident.*host-native.*deep-loop-current-v1\.24.*valid solution.*deep-loop-experimental.*fails.*harness-constraint.*procedural-rigidity.*hard safety invariant/is);
   assert.match(readme, /harness_block_incident.*valid solution.*harness.*prevented.*outcome/is);
   assert.match(readme, /`not-applicable`/);
   assert.match(readme, /without (?:a|the) manifest bank[^.]*structural validation only[^.]*does not recompute task-bound evidence/i);

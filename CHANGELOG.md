@@ -5,6 +5,34 @@ All notable changes to deep-loop are documented in this file.
 > Note: the `[1.1.0]`/`[1.2.0]` entries pre-date this changelog file (a known lag between
 > `plugin.json.version` and the changelog); this release does not retro-fill them.
 
+## [1.24.0] — 2026-09-08
+
+### Added
+
+- Read-only `goal drive --check` with typed support/remediation results and
+  host-local execution plans bound to the active controller, fence, profile,
+  review configuration and trusted checker doctrine.
+- Supervised same-requested-model `subagent-checker` execution with fresh CLI
+  session/process evidence and exact existing maker-claim/import provenance.
+- Per-call time limits, fresh run/host budget admission, exactly-once host call
+  charges, bounded per-workstream/episode progress monitoring and explicit
+  recovery diagnostics. Unknown usage or termination cannot become success.
+- Versioned repeated real-agent evaluation with fixed scheduled denominators,
+  three additional behavior tasks, source/argv/raw-trace evidence and a separate
+  controlled host-loss safety lane. V1 result/profile formats remain available.
+
+### Compatibility and evidence boundary
+
+- Experimental `goal drive` supports explicit `subagent-checker`, `same-model`
+  and empty review flags. Unsupported default/cross-model/sibling-loop policies
+  refuse before maker execution. Installed deep-review provides criteria only;
+  served-model identity and automatic lost-host reattachment remain unavailable.
+- V0.4/v0.5 durable schemas, lease fences, proof-derived completion and the exact
+  owner-only terminal-cost exception remain unchanged.
+- Token caps govern admission after measured calls and may be overshot in flight.
+  Fixture success, safe refusal and model availability are not efficacy evidence.
+- Real-agent completion remains experimental; no reliability or efficacy promotion is claimed.
+
 ## [1.23.0] — 2026-09-07
 
 ### Added

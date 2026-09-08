@@ -75,7 +75,7 @@ export const ROUTE_FLAGS = Object.freeze({
   'review claim': route(['episode', ...F, ...L]),
   'goal bridge-descriptor': route(['id','attempt','direction','model','effort', ...F, ...L]),
   'goal bridge-record': route(['id','attempt','receipt','sidecar', ...F, ...L]),
-  'goal drive': route(['timeout-ms', 'max-turns', 'token-limit', 'profile', ...F, ...L]),
+  'goal drive': route(['check', 'call-timeout-ms', 'no-progress-turns', 'timeout-ms', 'max-turns', 'token-limit', 'profile', ...F, ...L]),
   'goal dispatch': route(['transport', ...F, ...L]),
   'goal capabilities': route(['runtime', ...L]),
   'goal start': route(['id', 'attempt', 'handle', ...F, ...L]),

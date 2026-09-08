@@ -75,7 +75,7 @@ test('goal host reaches emitted handoff and adopts only the acquired child provi
     review: {
       points: ['implementation'],
       reviewer: 'subagent-checker',
-      mode: 'cross-model',
+      mode: 'same-model',
       flags: [],
       converge: true,
       max_review_rounds: 5,
@@ -253,13 +253,14 @@ test('goal host reaches emitted handoff and adopts only the acquired child provi
       codexHome: { canonical_path: codexHome },
       measured_usage: [],
     }),
+    resolveCheckerSkill: () => ({skill:{canonical_path:'/trusted/handoff-fixture/SKILL.md'}}),
     goalService: () => ({ ok: false, reason: 'test-stop-after-handoff' }),
     runProcess,
     revalidateExecutable: identity => identity,
     resolveCodexHome: () => ({ canonical_path: codexHome }),
   });
 
-  assert.equal(ownerEmitted, true);
+  assert.equal(ownerEmitted, true, JSON.stringify(result));
   assert.equal(typeof acquiredChild, 'string', JSON.stringify({
     result,
     calls: calls.map(call => ({

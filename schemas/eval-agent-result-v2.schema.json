@@ -1,0 +1,368 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Deep-loop repeated real-agent trial result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "mode",
+    "profile",
+    "task_id",
+    "trial",
+    "requested_model",
+    "requested_effort",
+    "observed_models",
+    "status",
+    "reason",
+    "kernel_status",
+    "kernel_completed",
+    "outcome_pass",
+    "outcome",
+    "measurement",
+    "elapsed_ms",
+    "raw_trace_available",
+    "paths",
+    "termination_scope",
+    "containment_limit",
+    "provider_state_effect",
+    "statistical_claim",
+    "id",
+    "lane",
+    "started",
+    "served_model_status",
+    "requested_profile_evidence",
+    "reviewer_profile"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "mode": {
+      "const": "real-agent"
+    },
+    "profile": {
+      "enum": [
+        "native",
+        "current",
+        "minimal"
+      ]
+    },
+    "task_id": {
+      "enum": [
+        "outcome-deterministic-bug-201",
+        "outcome-valid-alternative-211",
+        "outcome-dependent-integration-217",
+        "outcome-replan-evidence-218",
+        "outcome-diagnostic-repair-219"
+      ]
+    },
+    "trial": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20
+    },
+    "requested_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requested_effort": {
+      "type": "string",
+      "minLength": 1
+    },
+    "observed_models": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string"
+      }
+    },
+    "status": {
+      "enum": [
+        "passed",
+        "failed",
+        "unavailable",
+        "budget_exceeded"
+      ]
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kernel_status": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kernel_completed": {
+      "type": "boolean"
+    },
+    "outcome_pass": {
+      "type": "boolean"
+    },
+    "outcome": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "measurement": {
+      "type": "object",
+      "required": [
+        "tokens",
+        "turns",
+        "usage_complete",
+        "termination_confirmed",
+        "missing_usage_invocations",
+        "unconfirmed_termination_invocations",
+        "observed_models"
+      ],
+      "properties": {
+        "tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "turns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "usage_complete": {
+          "type": "boolean"
+        },
+        "termination_confirmed": {
+          "type": "boolean"
+        },
+        "missing_usage_invocations": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "unconfirmed_termination_invocations": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "observed_models": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "elapsed_ms": {
+      "type": "number",
+      "minimum": 0
+    },
+    "raw_trace_available": {
+      "type": "boolean"
+    },
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate",
+        "evidence",
+        "run_id"
+      ],
+      "properties": {
+        "candidate": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "termination_scope": {
+      "const": "owned-posix-process-group"
+    },
+    "containment_limit": {
+      "type": "string"
+    },
+    "provider_state_effect": {
+      "type": "string"
+    },
+    "statistical_claim": {
+      "type": "string"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "plugin_version",
+        "git_head",
+        "working_tree_dirty",
+        "before_manifest_sha256",
+        "after_manifest_sha256",
+        "source_stable",
+        "before_path",
+        "after_path"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "plugin_version": {
+          "type": "string"
+        },
+        "git_head": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "working_tree_dirty": {
+          "type": "boolean"
+        },
+        "before_manifest_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "after_manifest_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_stable": {
+          "type": "boolean"
+        },
+        "before_path": {
+          "type": "string"
+        },
+        "after_path": {
+          "type": "string"
+        },
+        "git_status_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "lane": {
+      "enum": [
+        "efficacy",
+        "safety"
+      ]
+    },
+    "started": {
+      "type": "boolean"
+    },
+    "served_model_status": {
+      "const": "unavailable"
+    },
+    "requested_profile_evidence": {
+      "type": "boolean"
+    },
+    "reviewer_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reviewer",
+        "mode",
+        "flags"
+      ],
+      "properties": {
+        "reviewer": {
+          "const": "subagent-checker"
+        },
+        "mode": {
+          "const": "same-model"
+        },
+        "flags": {
+          "type": "array",
+          "maxItems": 0
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "passed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "outcome_pass": {
+            "const": true
+          },
+          "measurement": {
+            "properties": {
+              "usage_complete": {
+                "const": true
+              },
+              "termination_confirmed": {
+                "const": true
+              }
+            }
+          },
+          "raw_trace_available": {
+            "const": true
+          },
+          "provenance": {
+            "properties": {
+              "source_stable": {
+                "const": true
+              }
+            }
+          },
+          "started": {
+            "const": true
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "passed"
+          },
+          "profile": {
+            "enum": [
+              "current",
+              "minimal"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "kernel_completed": {
+            "const": true
+          },
+          "kernel_status": {
+            "const": "completed"
+          }
+        }
+      }
+    }
+  ]
+}

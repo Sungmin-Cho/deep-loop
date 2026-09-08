@@ -15,6 +15,7 @@ test('buildCodexExecEntry returns the exact isolated stdin-only descriptor', () 
 
   assert.deepEqual(entry, {
     bin: BIN,
+    dispatch_kind: 'codex-model-call-v1',
     argv: [
       'exec', '--ephemeral', '--json', '--strict-config',
       '--ignore-user-config', '--ignore-rules',

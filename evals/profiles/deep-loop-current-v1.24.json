@@ -1,0 +1,1 @@
+{"id":"deep-loop-current-v1.24","driver":"fixture","model":"none:fixture","harness":"none:fixture","allowed_effects":["read-only"],"record":{"transcript":false,"observables":["exit","effects"]}}

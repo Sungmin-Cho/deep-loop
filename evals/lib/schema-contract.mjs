@@ -19,6 +19,7 @@ function typeMatches(value, type) {
   if (type === 'array') return Array.isArray(value);
   if (type === 'object') return value !== null && typeof value === 'object' && !Array.isArray(value);
   if (type === 'integer') return Number.isInteger(value);
+  if (type === 'number') return typeof value === 'number' && Number.isFinite(value);
   return typeof value === type;
 }
 
@@ -95,4 +96,8 @@ export function validatePublishedSchema(kind, value) {
   if (!schemaOnly.ok) return schemaOnly;
   const semantic = runtime[kind](value);
   return semantic.ok ? { ok: true, value } : { ...semantic, errors: [semantic.code] };
+}
+
+export function validateSchemaValue(schema,value) {
+ const errors=[];return {ok:check(schema,value,schema,'#',errors),errors};
 }
