@@ -32,6 +32,18 @@ For an explicitly authorized, isolated Codex run, `goal drive` runs and resumes 
 node "<absolute-deep-loop-root>/scripts/deep-loop.mjs" goal drive --project-root "<canonical_project_root>" --run-id <run_id> --owner <owner_run_id> --generation <generation> --timeout-ms 600000 --token-limit 500000 --profile current
 ```
 
+Create the run with an explicit supported review policy:
+
+```text
+--review '{"points":["implementation"],"reviewer":"subagent-checker","mode":"same-model","flags":[],"converge":true,"max_review_rounds":5,"require_human_ack":false}'
+```
+
+`goal drive --check --project-root <root> --run-id <id>` checks configuration, executable approval and installed checker doctrine without taking a lease, spawning a model, reconciling state or probing account availability. Unsupported defaults include a typed **new-run-only** remedy. Existing runs are never silently converted. The driver supports one fresh read-only `subagent-checker` process with the owner's requested model/effort. `deep-review-loop`, nonempty review flags and cross-model mode are rejected before maker execution. The installed deep-review skill supplies review criteria only; this is not its multi-round workflow. Distinct CLI thread and process-group receipts establish session separation; served-model identity remains unavailable.
+
+Every model call, including preflight probes and whole-goal checkers, checks the fresh run budget and host budget. `--call-timeout-ms` defaults to `120000` (range `1000..600000`) and is clipped to remaining host/run time. Token limits control admission after measured usage arrives: a call may overshoot, and its full measured cost is retained before another call is refused. Missing usage never counts as zero.
+
+`--no-progress-turns` defaults to `3` (range `2..20`). Proven kernel stages and requirement progress reset the interval; bookkeeping churn does not. A change to an already-bound regular artifact buys one two-turn extension, followed by at most one diagnostic owner turn. The diagnostic constraint is prompt guidance, not a sandbox restriction. Counters survive in-host handoffs. Lost bindings, unresolved attempts and unknown settlement require inspection and fenced reconciliation; automatic host reattachment is unavailable.
+
 The current host profile embeds the shipped v0.5 owner policy and a fresh action/context frame, including the remaining measured budget. It batches predictable CLI work without removing independent review or proof checks.
 
 Omitted time, token and turn limits inherit the current run budget; the smoke profile explicitly uses 10 minutes and 500,000 measured tokens per trial. The minimal experimental profile supports continue boundaries only.

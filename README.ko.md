@@ -32,6 +32,18 @@ deep-loop는 독립 실행 가능한(standalone/독립) Claude Code / Codex / Gr
 node "<absolute-deep-loop-root>/scripts/deep-loop.mjs" goal drive --project-root "<canonical_project_root>" --run-id <run_id> --owner <owner_run_id> --generation <generation> --timeout-ms 600000 --token-limit 500000 --profile current
 ```
 
+run 생성 시 지원하는 리뷰 정책을 명시합니다.
+
+```text
+--review '{"points":["implementation"],"reviewer":"subagent-checker","mode":"same-model","flags":[],"converge":true,"max_review_rounds":5,"require_human_ack":false}'
+```
+
+`goal drive --check --project-root <root> --run-id <id>`는 lease 획득, 모델 호출, 상태 조정 없이 설정·실행 파일 승인·설치된 checker 지침을 검사합니다. 계정의 모델 가용성은 probe하지 않습니다. 미지원 기본 설정에는 새 run에만 적용할 수 있는 typed 수정 안내를 반환하며 기존 run을 자동 변환하지 않습니다. 지원 경로는 owner가 요청한 모델·effort로 실행하는 별도 읽기 전용 `subagent-checker` 1회 리뷰입니다. `deep-review-loop`, 비어 있지 않은 flags, cross-model은 maker 실행 전에 거부합니다. 설치된 deep-review는 판단 기준만 제공하며 다중 라운드 워크플로우를 실행하지 않습니다. 별도 CLI thread와 프로세스 그룹 증거로 세션 분리를 확인하며 실제 served-model 식별은 미지원입니다.
+
+preflight와 전체 목표 checker를 포함한 모든 모델 호출 직전에 최신 run 예산과 host 예산을 검사합니다. `--call-timeout-ms` 기본값은 `120000`, 허용 범위는 `1000..600000`이며 남은 host/run 시간으로 제한합니다. 토큰 한도는 측정 후 다음 호출의 시작을 제어합니다. 한 호출이 초과할 수 있으며 측정 비용 전액을 남긴 뒤 다음 호출을 거부합니다. 사용량 누락을 0으로 계산하지 않습니다.
+
+`--no-progress-turns` 기본값은 `3`, 허용 범위는 `2..20`입니다. kernel 단계와 요구사항 진전은 구간을 초기화하지만 bookkeeping 반복은 그렇지 않습니다. 이미 연결된 일반 artifact 파일의 실제 변경에는 한 번만 2턴을 추가하고, 이후 진단용 owner 턴을 최대 1회 허용합니다. 진단 행동 제한은 프롬프트 지침이며 sandbox 강제가 아닙니다. 카운터는 host 내부 handoff 동안 유지합니다. binding 상실, 미해결 실행, 정산 불명은 상태 확인과 fenced reconciliation이 필요하며 자동 host 재연결은 지원하지 않습니다.
+
 현재 host 프로필은 배포된 v0.5 소유자 정책과 최신 작업·문맥·남은 측정 예산을 함께 전달합니다. 예측 가능한 CLI 작업을 묶되 독립 리뷰와 증명 검사는 유지합니다.
 
 시간·토큰·턴 한도를 생략하면 현재 run의 예산을 따릅니다. smoke 프로필은 과제별 10분·측정 토큰 50만 개를 명시하며, minimal 실험 프로필은 continue 경계만 지원합니다.
