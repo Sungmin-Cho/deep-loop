@@ -1,3 +1,4 @@
+import { assertGoalPlanIdentity, assertIssuedGoalExecutionPlan, goalPlanHash, validateGoalCheckerSession } from './goal-execution-plan.mjs';
 import { startExecution, returnExecution } from './execution.mjs';
 import { isGoalDriven } from './goal-contract.mjs';
 import { fileURLToPath } from 'node:url';
@@ -406,6 +407,8 @@ function driveIndependentChecker({
   blockReviewFn,
   revalidateClaimFn,
   attemptIdFactory,
+  goalExecutionPlan = null,
+  goalOwnerThreads = [],
 }) {
   let actionNow = now;
   const stranded = inProgressIndependentChecker(initialLoop);
@@ -513,8 +516,15 @@ function driveIndependentChecker({
 
   // A generic subagent descriptor remains valid for attended/manual review, but has no
   // trusted unattended Codex skill. Claim once so future host ticks cannot retry it.
-  if (pending.plugin === 'subagent-checker') return claimAndBlock('checker-capability-unsupported');
-  if (pending.plugin !== 'deep-review') return claimAndBlock('checker-capability-unsupported');
+  if (goalExecutionPlan) {
+    assertIssuedGoalExecutionPlan(goalExecutionPlan, initialLoop);
+    if (pending.plugin !== goalExecutionPlan.maker_checker.reviewer || !goalOwnerThreads.length) {
+      return { ok: false, reason: 'checker-owner-session-evidence-unavailable' };
+    }
+  } else {
+    if (pending.plugin === 'subagent-checker') return claimAndBlock('checker-capability-unsupported');
+    if (pending.plugin !== 'deep-review') return claimAndBlock('checker-capability-unsupported');
+  }
 
   const initialApproval = initialLoop.autonomy?.runtime_executable_approval;
   const outputSchemaPath = join(deepLoopRoot, 'schemas', 'review-import.schema.json');
@@ -580,8 +590,8 @@ function driveIndependentChecker({
       sourceEnv: env,
       owner: parentOwner,
       generation: parentGeneration,
-      model: initialLoop.autonomy?.session_model ?? null,
-      effort: initialLoop.autonomy?.session_effort ?? null,
+      model: goalExecutionPlan?.maker_checker.model ?? initialLoop.autonomy?.session_model ?? null,
+      effort: goalExecutionPlan?.maker_checker.effort ?? initialLoop.autonomy?.session_effort ?? null,
       timeoutMs,
       goalDriven: isGoalDriven(initialLoop),
       revalidateExecutable,
@@ -762,6 +772,7 @@ function driveIndependentChecker({
   const identityFresh = () => {
     try {
       const freshLoop = captureFreshLoop(projectRoot, runId);
+      if (goalExecutionPlan) assertIssuedGoalExecutionPlan(goalExecutionPlan, freshLoop);
       const freshLease = freshLoop.session_chain?.lease || {};
       const freshExecutable = revalidateExecutable(freshLoop.autonomy?.runtime_executable_approval);
       const freshHome = resolveCodexHome({ env, expectedIdentity: codexHome, platform: freshExecutable.platform });
@@ -775,6 +786,7 @@ function driveIndependentChecker({
         generation: parentGeneration,
       });
       const freshCheckerSkill = resolveCheckerSkill({ codexHome: freshHome.canonical_path });
+      if (goalExecutionPlan && goalPlanHash(freshCheckerSkill) !== goalExecutionPlan.doctrine_sha256) return false;
       const freshClaim = revalidateClaimFn(projectRoot, runId, {
         episodeId: pending.id,
         attemptId: claimed.attemptId,
@@ -791,8 +803,8 @@ function driveIndependentChecker({
         && sameValue(freshClaim.claim, claimed.claim)
         && sameValue(freshLoop.autonomy?.runtime_executable_approval, initialApproval)
         && sameValue(freshExecutable, executable)
-        && freshLoop.autonomy?.session_model === initialLoop.autonomy?.session_model
-        && freshLoop.autonomy?.session_effort === initialLoop.autonomy?.session_effort
+        && freshLoop.autonomy?.session_model === (goalExecutionPlan?.maker_checker.model ?? initialLoop.autonomy?.session_model)
+        && freshLoop.autonomy?.session_effort === (goalExecutionPlan?.maker_checker.effort ?? initialLoop.autonomy?.session_effort)
         && sameValue(freshEnv, checkerEnv)
         && sameValue(inspectDirectory(projectRoot), projectDirectorySnapshot)
         && sameValue(inspectDirectory(deepLoopRoot), pluginDirectorySnapshot)
@@ -850,14 +862,21 @@ function driveIndependentChecker({
         ...(claimed.claim.contract !== undefined ? { contract: claimed.claim.contract } : {}),
       },
       env: checkerEnv,
-      model: initialLoop.autonomy?.session_model ?? null,
-      effort: initialLoop.autonomy?.session_effort ?? null,
+      model: goalExecutionPlan?.maker_checker.model ?? initialLoop.autonomy?.session_model ?? null,
+      effort: goalExecutionPlan?.maker_checker.effort ?? initialLoop.autonomy?.session_effort ?? null,
       timeoutMs,
       usageReceipt: checkerUsageReceiptDescriptor,
       goalDriven: isGoalDriven(initialLoop),
     });
   } catch {
     checkerResult = { ok: false, reason: 'checker-process-error' };
+  }
+  if (goalExecutionPlan) {
+    const refusal = validateGoalCheckerSession(checkerResult, { ownerThreads: goalOwnerThreads });
+    if (refusal === 'checker-termination-unconfirmed') return blockClaim(refusal);
+    if (refusal) return isMeasuredOneTurnUsage(checkerResult?.usage)
+      ? settleMeasuredFailure(refusal, checkerResult.usage, checkerResult.usageReceipt ?? null)
+      : blockClaim(refusal);
   }
   if (checkerResult?.reason === 'checker-final-message-invalid'
     && isMeasuredOneTurnUsage(checkerResult.usage)) {
@@ -1069,10 +1088,17 @@ function driveHeadlessRunLocked({
   blockReviewFn = blockIndependentReview,
   revalidateClaimFn = revalidateIndependentReviewClaim,
   attemptIdFactory,
+  goalExecutionPlan = null,
+  goalOwnerThreads = [],
 } = {}) {
   const sampleNow = typeof clock === 'function' ? clock : (now === undefined ? Date.now : () => now);
   const entryNow = now === undefined ? sampleNow() : now;
+  if (goalExecutionPlan) assertGoalPlanIdentity(goalExecutionPlan);
   let initialLoop = captureFreshLoop(root, runId);
+  if (goalExecutionPlan) {
+    try {assertIssuedGoalExecutionPlan(goalExecutionPlan, initialLoop);}
+    catch(error){pauseWithOriginalFence(root,runId,{reason:error.message,expect:{owner:goalExecutionPlan.owner,generation:goalExecutionPlan.generation},now:entryNow});return {ok:false,reason:error.message};}
+  }
   const runtime = sessionRuntime(initialLoop);
   const projectRoot = canonicalProjectRoot(initialLoop.project.root);
   const initialLease = initialLoop.session_chain?.lease || {};
@@ -1174,6 +1200,8 @@ function driveHeadlessRunLocked({
     blockReviewFn,
     revalidateClaimFn,
     attemptIdFactory,
+    goalExecutionPlan,
+    goalOwnerThreads,
   });
   if (checkerResult) return checkerResult;
   if (!pendingHandoff(initialLoop)) {
@@ -1690,6 +1718,7 @@ function driveHeadlessRunLocked({
 }
 
 export function driveHeadlessRun(options = {}) {
+  if(options.goalExecutionPlan)assertGoalPlanIdentity(options.goalExecutionPlan);
   const acquireHostLock = options.acquireHostLock ?? acquireHeadlessHostLock;
   const lock = acquireHostLock(options.root, options.runId, {
     timeoutMs: options.timeoutMs,

@@ -1,3 +1,4 @@
+import { normalizeReviewerAlias } from './reviewer-alias.mjs';
 import { readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
 import { resolve, sep } from 'node:path';
@@ -332,7 +333,7 @@ export function resolveReviewer(loop, detected = {}, { independentSubagent = fal
   if (typeof reviewer !== 'string' || reviewer.length === 0) {
     throw new Error(`REVIEWER_UNRECOGNIZED: review.reviewer is present but not a non-empty string (${JSON.stringify(r.reviewer)}) — omit the field for the default or set a known reviewer`);
   }
-  if (reviewer === 'deep-review:deep-review-loop') reviewer = 'deep-review-loop';
+  reviewer = normalizeReviewerAlias(reviewer);
   let reviewerResolution;
   let blockedReason;
   if (reviewer === 'standalone') {

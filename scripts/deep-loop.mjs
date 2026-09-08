@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { driveGoalRun } from './lib/goal-host.mjs';
+import { driveGoalRun, checkGoalRun } from './lib/goal-host.mjs';
 import { buildGoalBridgeDescriptor } from './lib/goal-checker.mjs';
 import { selectWorkstream } from './lib/scope-selection.mjs';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
@@ -1335,9 +1335,20 @@ const handlers = {
     if (!required[verb]) { error('USAGE: unknown goal verb'); return 2; }
     for (const name of required[verb]) if (!reqStr(f, name)) { error(`USAGE: --${name} requires a value`); return 2; }
     for (const name of Object.keys(f)) {
-      if (flagOccurrences(rest, name) !== 1 || (!['stdin', 'confirm'].includes(name) && (f[name] === true || f[name] === ''))) {
+      if (flagOccurrences(rest, name) !== 1 || (!['stdin', 'confirm', 'check'].includes(name) && (f[name] === true || f[name] === ''))) {
         error(`USAGE: --${name} requires one value`); return 2;
       }
+    }
+    if (verb === 'drive' && f.check !== undefined) {
+      if (f.check !== true) { error('USAGE: --check takes no value'); return 2; }
+      const checkedRunId=exactReadRunId(f);if(!checkedRunId)return exactReadFailureCode(f);
+      const checked = checkGoalRun({ root, runId: checkedRunId,profile:f.profile??'current',
+        ...(f['timeout-ms'] === undefined ? {} : {timeoutMs:intArg(f,'timeout-ms')}),
+        ...(f['max-turns'] === undefined ? {} : {maxTurns:intArg(f,'max-turns')}),
+        ...(f['token-limit'] === undefined ? {} : {tokenLimit:intArg(f,'token-limit')}),
+        ...(f['call-timeout-ms'] === undefined ? {} : {callTimeoutMs:intArg(f,'call-timeout-ms')}),
+        ...(f['no-progress-turns'] === undefined ? {} : {noProgressTurns:intArg(f,'no-progress-turns')}) });
+      json(checked); return checked.ok ? 0 : 1;
     }
     if (verb === 'record' && f.stdin !== true) { error('USAGE: goal record requires --stdin'); return 2; }
     const runId = runIdOf(root, f); requireLease(root, runId, f);
@@ -1349,8 +1360,10 @@ const handlers = {
           ...(f['timeout-ms'] === undefined ? {} : {timeoutMs:intArg(f,'timeout-ms')}),
           ...(f['max-turns'] === undefined ? {} : {maxTurns:intArg(f,'max-turns')}),
           ...(f['token-limit'] === undefined ? {} : {tokenLimit:intArg(f,'token-limit')}),
+          ...(f['call-timeout-ms'] === undefined ? {} : {callTimeoutMs:intArg(f,'call-timeout-ms')}),
+          ...(f['no-progress-turns'] === undefined ? {} : {noProgressTurns:intArg(f,'no-progress-turns')}),
           profile:f.profile ?? 'current'});
-        json({ok:driven.ok,status:driven.status,reason:driven.reason,invocations:driven.invocations?.length ?? 0}); return driven.ok ? 0 : 1;
+        json({ok:driven.ok,status:driven.status,reason:driven.reason,remediation:driven.remediation,budget:driven.budget,recovery:driven.recovery,invocations:driven.invocations?.length ?? 0}); return driven.ok ? 0 : 1;
       }
       if (verb === 'bridge-descriptor') result = buildGoalBridgeDescriptor({root,runId,fence:common.fence,id:f.id,attemptId:f.attempt,direction:f.direction,model:f.model,effort:f.effort});
       if (verb === 'bridge-record') result = recordGoalBridgeReview(root,runId,{...common,id:f.id,attemptId:f.attempt,receiptPath:f.receipt,sidecarPath:f.sidecar});

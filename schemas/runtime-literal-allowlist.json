@@ -9,31 +9,31 @@
     },
     {
       "file": "scripts/lib/headless-host.mjs",
-      "line": 653,
+      "line": 663,
       "literal": "sessionRuntime(postCostLoop) !== 'codex'",
       "reason": "fresh-loop 드리프트 fence — 능력이 아니라 '시작할 때와 같은 런타임인가'를 묻는다"
     },
     {
       "file": "scripts/lib/headless-host.mjs",
-      "line": 784,
+      "line": 796,
       "literal": "sessionRuntime(freshLoop) === 'codex'",
       "reason": "fresh-loop 드리프트 fence (identityFresh)"
     },
     {
       "file": "scripts/lib/headless-host.mjs",
-      "line": 1424,
+      "line": 1452,
       "literal": "sessionRuntime(freshLoop) !== 'codex'",
       "reason": "post-CAS 드리프트 fence — 극성을 바꾸면 드리프트 탐지가 사라진다"
     },
     {
       "file": "scripts/lib/headless-host.mjs",
-      "line": 1645,
+      "line": 1673,
       "literal": "runtime === 'codex' && terminal(freshLoop) && childAcquired",
       "reason": "settleTerminalCodexMakerCost의 호출부. 불변식 6이 결제를 codex에 바인딩하므로 피호출부와 함께 정체성으로 남긴다"
     },
     {
       "file": "scripts/lib/headless-host.mjs",
-      "line": 1675,
+      "line": 1703,
       "literal": "runtime === 'codex' && terminal(freshLoop) && childAcquired",
       "reason": "위와 같은 결제 경로의 오류 처리"
     },
@@ -75,7 +75,7 @@
     },
     {
       "file": "scripts/lib/goal-checker.mjs",
-      "line": 98,
+      "line": 102,
       "literal": "if(transport==='codex') {",
       "reason": "Goal transport discriminator codex versus native or bridge; not a host runtime fallback."
     },

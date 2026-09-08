@@ -1,3 +1,5 @@
+import { assertIssuedGoalExecutionPlan, goalPlanHash } from './goal-execution-plan.mjs';
+import { validateGoalCheckerSession } from './goal-execution-plan.mjs';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { attestGoalBridge, goalBridgeSubject } from './checker-bridge.mjs';
@@ -60,7 +62,7 @@ function groupQuiescent(result) {
   return result?.process_group?.mode==='required' && Number.isInteger(result.process_group.group_id) && result.process_group.group_id>0
     && result.process_group.termination_scope==='owned-posix-process-group' && result.process_group.quiescence_confirmed===true && result.termination?.confirmed===true;
 }
-export function runGoalChecker({executable,projectRoot,codexHome,contract,env={},model=null,effort=null,timeoutMs,processGroup='required',usageReceipt=null,runProcess=runStreamingProcessSync}={}) {
+export function runGoalChecker({executable,projectRoot,codexHome,contract,env={},model=null,effort=null,timeoutMs,processGroup='required',usageReceipt=null,ownerThreads=null,runProcess=runStreamingProcessSync}={}) {
   if(processGroup!=='required'||!Number.isSafeInteger(timeoutMs)||timeoutMs<1)throw new Error('GOAL_CHECKER_PROCESS_POLICY_INVALID');
   const root=realpathSync(projectRoot),home=realpathSync(codexHome),rel=relative(root,home);
   if(rel===''||(rel!=='..'&&!rel.startsWith(`..${sep}`)&&!isAbsolute(rel)))throw new Error('GOAL_CHECKER_HOME_UNTRUSTED');
@@ -73,7 +75,7 @@ export function runGoalChecker({executable,projectRoot,codexHome,contract,env={}
     const entry=buildCodexExecEntry({executable,projectRoot:root,prompt,model,effort,sandbox:'read-only',goalDriven:true});
     entry.argv.splice(entry.argv.indexOf('-C'),0,'--output-schema',schema);
     entry.cwd=root;entry.env=buildMinimalCodexEnv({sourceEnv:env,codexHome:home,projectRoot:root,runId:contract.run_id,owner:contract.review_id,generation:contract.generation});
-    entry.usageOutputKind='codex-jsonl';entry.captureFinalMessage=true;entry.captureRawJsonl=true;
+    entry.usageOutputKind='codex-jsonl';entry.captureFinalMessage=true;if(ownerThreads!==null)entry.captureProviderThreadId=true;entry.captureRawJsonl=true;
     try { captured=runProcess(entry,{timeoutMs,processGroup:'required',captureRawJsonl:true,...(usageReceipt?{usageReceipt}: {})}); }
     catch(error) { captured={ok:false,reason:`goal-checker-process-error:${String(error.message).slice(0,512)}`}; }
   } finally {rmSync(directory,{recursive:true,force:true});}
@@ -81,6 +83,7 @@ export function runGoalChecker({executable,projectRoot,codexHome,contract,env={}
   let raw=null,reason=null;
   if(!terminal)reason='goal-checker-termination-unconfirmed';
   else if(!measured)reason='goal-checker-usage-unavailable';
+  else if(ownerThreads!==null && validateGoalCheckerSession(captured,{ownerThreads})!==null)reason=validateGoalCheckerSession(captured,{ownerThreads});
   else if(captured.ok!==true)reason=captured.reason || 'goal-checker-process-failed';
   else try {
     if(!Buffer.isBuffer(captured.finalMessage))throw new Error('GOAL_RESULT_INVALID: missing final bytes');
@@ -91,8 +94,9 @@ export function runGoalChecker({executable,projectRoot,codexHome,contract,env={}
   receipts.set(receipt,{root,contract:structuredClone(contract),raw,settled:false,state:reason===null?'succeeded':terminal?'failed':'unknown',reference:`goal-process:${randomUUID()}`});
   return {...captured,ok:reason===null,...(reason?{reason}:{}),receipt,checker_identity:identity,prompt_sha256:contentHash(prompt)};
 }
-export async function drivePendingGoalReview({root,runId,expect,executable,codexHome,env={},model=null,effort=null,timeoutMs,transport='codex',direction,home=homedir(),deepLoopRoot,settleUsage,usageReceipt=null,runProcess=runStreamingProcessSync,revalidateExecutable=revalidateTrustedRuntimeExecutable,now=Date.now()}={}) {
+export async function drivePendingGoalReview({root,runId,expect,executable,codexHome,env={},model=null,effort=null,timeoutMs,transport='codex',direction,home=homedir(),deepLoopRoot,settleUsage,usageReceipt=null,ownerThreads=null,goalExecutionPlan=null,runProcess=runStreamingProcessSync,revalidateExecutable=revalidateTrustedRuntimeExecutable,now=Date.now()}={}) {
   const initial=captureReconciledRunSnapshot(root,runId).data;
+  if(goalExecutionPlan){assertIssuedGoalExecutionPlan(goalExecutionPlan,initial);if(!ownerThreads?.length)return {ok:false,reason:'checker-owner-session-evidence-unavailable'};}
   if(!runtimeCapability(sessionRuntime(initial),'goal_checker_transports').includes(transport))return {ok:false,reason:'GOAL_TRANSPORT_UNAVAILABLE'};
   let approved;
   if(transport==='codex') {
@@ -115,13 +119,19 @@ export async function drivePendingGoalReview({root,runId,expect,executable,codex
   const checked=leaseCheck(fresh,expect), current=fresh.goal_reviews.find(item=>item.id===review.id);
   if(!checked.ok || current?.execution.attempt_id!==review.execution.attempt_id || current.execution.handle!==handle || current.execution.phase!=='running')throw new Error('GOAL_CHECKER_FENCED');
   if(JSON.stringify(revalidateExecutable(fresh.autonomy.runtime_executable_approval))!==JSON.stringify(approved))throw new Error('GOAL_CHECKER_EXECUTABLE_DRIFT');
-  const result=runGoalChecker({executable,projectRoot:root,codexHome,contract:{...contract,handle},env,model,effort,timeoutMs,processGroup:'required',usageReceipt,runProcess});
+  if(goalExecutionPlan)assertIssuedGoalExecutionPlan(goalExecutionPlan,fresh);
+  const result=runGoalChecker({executable,projectRoot:root,codexHome,contract:{...contract,handle},env,model,effort,timeoutMs,processGroup:'required',usageReceipt,ownerThreads,runProcess});
   if(isMeasuredOneTurnUsage(result.usage)) {
     let settlement;
     try { settlement=await settleUsage(result); }
     catch(error) { return {...result,ok:false,reason:'GOAL_CHECKER_SETTLEMENT_FAILED',settlement_error:String(error.message).slice(0,512)}; }
     if(settlement?.ok!==true)return {...result,ok:false,reason:'GOAL_CHECKER_SETTLEMENT_FAILED'};
     receipts.get(result.receipt).settled=true;
+  }
+  if(goalExecutionPlan) {
+    try {assertIssuedGoalExecutionPlan(goalExecutionPlan,captureReconciledRunSnapshot(root,runId).data);
+      if(goalPlanHash(result.checker_identity)!==goalExecutionPlan.doctrine_sha256)throw new Error('checker-identity-drift');
+    } catch(error){return {...result,ok:false,reason:error.message};}
   }
   const ingestion=ingestMeasuredGoalReview(root,runId,{receipt:result.receipt,fence:expect,now});
   return {...result,ok:result.ok&&ingestion.ok,...(!ingestion.ok ? {reason:ingestion.reason || result.reason} : {}),ingestion};

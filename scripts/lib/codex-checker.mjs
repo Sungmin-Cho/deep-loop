@@ -262,6 +262,7 @@ export function runIndependentCodexChecker({
   entry.env = env;
   entry.usageOutputKind = 'codex-jsonl';
   entry.captureFinalMessage = true;
+  if (goalDriven) entry.captureProviderThreadId = true;
   const result = runProcess(entry, {
     timeoutMs,
     ...(goalDriven ? { processGroup: 'required', captureRawJsonl: true } : {}),
@@ -274,13 +275,14 @@ export function runIndependentCodexChecker({
     return {
       ok: false,
       reason: 'checker-final-message-invalid',
+      ...(goalDriven ? { providerThreadId: result.providerThreadId, process_group: result.process_group, termination: result.termination } : {}),
       usage: result.usage,
       ...(result.usageReceipt != null ? { usageReceipt: result.usageReceipt } : {}),
     };
   }
   return {
     ok: true,
-    ...(goalDriven ? { process_group: result.process_group, termination: result.termination, rawJsonl: result.rawJsonl, rawJsonlTruncated: result.rawJsonlTruncated } : {}),
+    ...(goalDriven ? { providerThreadId: result.providerThreadId, process_group: result.process_group, termination: result.termination, rawJsonl: result.rawJsonl, rawJsonlTruncated: result.rawJsonlTruncated } : {}),
     usage: result.usage,
     finalMessage: Buffer.from(result.finalMessage),
     ...(result.usageReceipt != null ? { usageReceipt: result.usageReceipt } : {}),

@@ -1,3 +1,9 @@
+import { probeGoalChecker } from './goal-checker-probe.mjs';
+import { createGoalProgressWatchdog, goalProgressKey, goalRecoveryDiagnostic, boundArtifactActivity, changedBoundArtifact } from './goal-progress.mjs';
+import { compileGoalExecutionPlan, createGoalPlanController, issueGoalExecutionPlan, assertIssuedGoalExecutionPlan, expireGoalPlanController, assertGoalReviewDescriptor, goalPlanHash } from './goal-execution-plan.mjs';
+import { createGoalCallBudget } from './goal-call-budget.mjs';
+import { issueCallCharge, settleCallCharge } from './goal-call-accounting.mjs';
+import { captureVerifiedRunSnapshot } from './integrity.mjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, lstatSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -91,9 +97,10 @@ export function buildGoalOwnerPrompt(options) { return buildGoalOwnerPacket(opti
 export function preflightGoalOwner({root,runId,loop,expect,env,deepLoopRoot,timeoutMs,runProcess=runStreamingProcessSync,onInvocation=()=>{},wallNow=Date.now}) {
   const executable=revalidateTrustedRuntimeExecutable(loop.autonomy.runtime_executable_approval);
   const codexHome=resolveAuthenticatedCodexHome({env,platform:executable.platform});
-  resolveTrustedCheckerSkill({codexHome:codexHome.canonical_path});
+  const checkerDoctrine=resolveTrustedCheckerSkill({codexHome:codexHome.canonical_path});
+  const emitProbe=event=>onInvocation({...event,doctrine_sha256:goalPlanHash(checkerDoctrine)});
   const probeDeadline=wallNow()+timeoutMs;
-  const runProbe=(entry,options)=>{const available=probeDeadline-wallNow();if(available<=0)return {ok:false,reason:'goal-host-deadline'};const result=runProcess(entry,{...options,timeoutMs:Math.min(options.timeoutMs,available),processGroup:'required',captureRawJsonl:true});onInvocation({kind:'runtime-preflight',entry,result});return result;};
+  const runProbe=(entry,options)=>{const available=probeDeadline-wallNow();if(available<=0)return {ok:false,reason:'goal-host-deadline'};const result=runProcess(entry,{...options,timeoutMs:Math.min(options.timeoutMs,available),processGroup:'required',captureRawJsonl:true});emitProbe({kind:'runtime-preflight',entry,result});return result;};
   const settle=receipt=>settleCodexPreflightCost(root,runId,{receipt,fence:{...expect,intent:'accounting'}});
   const proof=ensureCodexPreflight({projectRoot:root,runId,executableIdentity:executable,codexHomeIdentity:codexHome,
     deepLoopRoot,resumeSkillPath:join(deepLoopRoot,'skills/deep-loop-resume/SKILL.md'),sourceEnv:env,
@@ -112,23 +119,30 @@ export function preflightGoalOwner({root,runId,loop,expect,env,deepLoopRoot,time
         :`Read-only continuity probe. Attempt exactly one shell command to create the file ${JSON.stringify(deniedPath)} with the bytes probe. The read-only sandbox must reject the write; do not retry or request permission. Then return exactly the nonce from the previous turn, with no other text.`});
     Object.assign(entry,{env:childEnv,cwd:root,usageOutputKind:'codex-jsonl',captureFinalMessage:true});
     const available=probeDeadline-wallNow();if(available<=0)return {ok:false,reason:'goal-host-deadline',probes};
+    const charge=issueCallCharge({root,runId,fence:expect,kind:'owner-probe'});
     const result=runProcess(entry,{timeoutMs:available,processGroup:'required',captureRawJsonl:true});
-    probes.push(result);onInvocation({kind:'owner-preflight',entry,result});
-    if(isMeasuredOneTurnUsage(result?.usage)) recordCost(root,runId,{turns:result.usage.num_turns,tokens:result.usage.tokens,fence:{...expect,intent:'accounting'}});
+    probes.push(result);emitProbe({kind:'owner-preflight',entry,result});
+    if(measured(result)) settleCallCharge(charge,result);
     if(!result?.ok || !measured(result) || !UUID.test(result.providerThreadId || '')
       || (thread!==null && thread!==result.providerThreadId)) return {ok:false,reason:'owner-continuity-unavailable',probes};
     thread=result.providerThreadId;
     if(i===1 && (existsSync(deniedPath) || result.finalMessage?.toString().trim()!==nonce)) return {ok:false,reason:'owner-continuity-mismatch',probes};
   }
+  const checkerCharge=issueCallCharge({root,runId,fence:expect,kind:'checker-probe'});
+  const checker=probeGoalChecker({executable:executable.canonical_path,root,model:loop.autonomy.session_model,effort:loop.autonomy.session_effort,env:childEnv,ownerThreads:[thread],timeoutMs:probeDeadline-wallNow(),runProcess,onInvocation:emitProbe});
+  if(measured(checker.result))settleCallCharge(checkerCharge,checker.result);
+  if(!checker.ok)return {ok:false,reason:checker.reason,probes};
   return {ok:true,executable,codexHome,probes,measured_usage:proof.measured_usage};
 }
 
 export async function driveGoalRun({root,runId,expect=null,timeoutMs,maxTurns,tokenLimit,
   env=process.env,deepLoopRoot=ROOT,profile='current',task=null,now=Date.now,runProcess=runStreamingProcessSync,
-  preflight=preflightGoalOwner,goalService=drivePendingGoalReview,onInvocation=()=>{},wallNow=Date.now,resolveCheckerSkill=resolveTrustedCheckerSkill,...serviceOptions}={}) {
+  preflight=preflightGoalOwner,goalService=drivePendingGoalReview,onInvocation=()=>{},wallNow=Date.now,resolveCheckerSkill=resolveTrustedCheckerSkill,callTimeoutMs=120000,noProgressTurns=3,...serviceOptions}={}) {
   const invocations=[]; const started=wallNow();
   const sampleNow=typeof now==='function'?now:()=>now;
-  const initial=fresh(root,runId); const expected=expect || fenceOf(initial);
+  if(Object.hasOwn(serviceOptions,'goalExecutionPlan')||Object.hasOwn(serviceOptions,'goalOwnerThreads')||Object.hasOwn(serviceOptions,'goalPlanController'))return {ok:false,reason:'GOAL_PLAN_RESERVED_OPTION',invocations};
+  let initial;try{initial=fresh(root,runId);}catch(error){return {ok:false,reason:error.message,invocations,recovery:readGoalRecovery(root,runId,error.message)};}
+  const expected=expect || fenceOf(initial);
   timeoutMs ??= Math.max(1,initial.budget.max_wallclock_sec * 1000 - (new Date(sampleNow()).getTime()-Date.parse(initial.created_at)));
   maxTurns ??= Math.max(1,initial.budget.total-initial.budget.spent);
   tokenLimit ??= Math.max(1,initial.budget.tokens_total-initial.budget.tokens_spent);
@@ -138,16 +152,40 @@ export async function driveGoalRun({root,runId,expect=null,timeoutMs,maxTurns,to
   if(!initial.autonomy.session_model||!initial.autonomy.session_effort)return {ok:false,reason:'goal-owner-profile-required',invocations};
   if(profile === 'minimal' && initial.orchestration.boundary_mode !== 'continue')return {ok:false,reason:'minimal-profile-requires-continue-boundary',invocations};
   if(!leaseCheck(initial,{...expected,intent:'lease'}).ok) return {ok:false,reason:'goal-owner-fenced',invocations};
-  let evidenceFailure=null;
-  const emit=event=>{invocations.push(event);try {onInvocation(event);} catch(error){evidenceFailure=String(error.message || error);}};
-  const observedProcess=kind=>(entry,options)=>{const available=remaining();if(available<=0)return {ok:false,reason:'goal-host-deadline'};const result=runProcess(entry,{...options,timeoutMs:Math.min(options.timeoutMs,available),processGroup:'required',captureRawJsonl:true});emit({kind,entry,result});return result;};
+  const compiled=compileGoalExecutionPlan({loop:initial,options:{callTimeoutMs,noProgressTurns}});
+  if(!compiled.ok)return {...compiled,invocations};
+  let evidenceFailure=null,activePlan=null;
+  const emit=event=>{
+    const entry=event.entry,result=event.result,context=event.binding_context??{};
+    const {doctrine,...planFields}=activePlan??compiled.plan;
+    const record={...event,...callBudget.observation(result),audit:{version:1,
+      plan_sha256:goalPlanHash(planFields),doctrine_sha256:event.doctrine_sha256??activePlan?.doctrine_sha256??null,
+      requested_model:initial.autonomy.session_model,native_effort:initial.autonomy.session_effort,
+      observed_model:null,served_model_status:'unavailable',evidence_class:compiled.plan.evidence_class,
+      session_id:result?.providerThreadId??null,attempt_id:context.attempt_id??null,target_maker:context.target_maker??null,episode_id:context.episode_id??null,
+      argv_sha256:entry?digest(JSON.stringify(entry.argv)):null,prompt_sha256:entry?digest(entry.stdin??''):null,
+      usage:result?.usage??null,termination:result?.termination??null,process_group:result?.process_group??null}};
+    invocations.push(record);try{onInvocation(record);}catch(error){evidenceFailure=String(error.message||error);}
+  };
   const remaining=()=>timeoutMs-(wallNow()-started);
-  const tokensUsed=()=>invocations.reduce((n,x)=>n+(x.result?.usage?.tokens || 0),0);
-  return withHeadlessHostService({root,runId,timeoutMs,...serviceOptions,resolveCheckerSkill},async service=>{
-    let thread=null,ownerFence=expected,turns=0; const heldOwners=new Set(),loadedPolicies=new Map();
+  let trustedExecutable=null;
+  const callBudget=createGoalCallBudget({readLoop:()=>fresh(root,runId),tokenLimit,remaining,callTimeoutMs,now:sampleNow,runProcess,validateEntry:entry=>{
+    if(trustedExecutable){
+      if(entry.bin!==trustedExecutable.canonical_path)throw new Error('goal-call-executable-mismatch');
+      const observed=(serviceOptions.revalidateExecutable??revalidateTrustedRuntimeExecutable)(fresh(root,runId).autonomy.runtime_executable_approval);
+      if(goalPlanHash(observed)!==goalPlanHash(trustedExecutable))throw new Error('goal-call-executable-drift');
+    }
+  }});
+  const observedProcess=(kind,binding_context={})=>(entry,options)=>{const context=typeof binding_context==='function'?binding_context():binding_context;const result=callBudget.run(entry,options);emit({kind,entry,result,binding_context:context});return result;};
+  const tokensUsed=()=>callBudget.summary().tokens;
+  const controller=createGoalPlanController();
+  try {const hostResult=await withHeadlessHostService({root,runId,timeoutMs,...serviceOptions,resolveCheckerSkill},async service=>{
+    let plan=null,thread=null,ownerFence=expected,turns=0;
+    const watchdog=createGoalProgressWatchdog({limits:compiled.plan.limits,initial});
+    let controlSignature=null,controlRepeats=0; const heldOwners=new Set(),ownerThreads=new Set(),loadedPolicies=new Map();
     const fail=reason=>{
       try {const loop=fresh(root,runId);if(loop.status==='running')pauseRun(root,runId,{reason,expect:ownerFence,now:sampleNow()});} catch { /* preserve newer fence/terminal authority */ }
-      return {ok:false,reason,invocations,providerThreadId:thread};
+      return {ok:false,reason,invocations,providerThreadId:thread,budget:callBudget.summary(),recovery:readGoalRecovery(root,runId,reason,{remainingOwnerTurns:Math.max(0,maxTurns-turns)})};
     };
     const initialDescriptor=nextAction(initial,{now:sampleNow(),unattended:true});
     const initialAction=initialDescriptor.action;
@@ -163,31 +201,42 @@ export async function driveGoalRun({root,runId,expect=null,timeoutMs,maxTurns,to
         && event.data.owner === expected.owner && event.data.generation === expected.generation))return fail('owner-provider-binding-unavailable');
     if(remaining()<=0)return fail('goal-host-deadline');
     let ready;
-    try {ready=preflight({root,runId,loop:initial,expect:ownerFence,env,deepLoopRoot,timeoutMs:remaining(),runProcess,onInvocation:emit,wallNow});}
+    try {ready=preflight({root,runId,loop:initial,expect:ownerFence,env,deepLoopRoot,timeoutMs:remaining(),runProcess:(entry,options)=>callBudget.run(entry,options),onInvocation:emit,wallNow});}
     catch(error){return fail(`goal-owner-preflight:${error.message}`);}
+    if(ready?.ok)trustedExecutable=ready.executable;
     if(!ready?.ok)return fail(ready?.reason || 'goal-owner-preflight-unavailable');
     if(evidenceFailure)return fail(`goal-evidence-write-failed:${evidenceFailure}`);
+    try { plan=activePlan=issueGoalExecutionPlan(controller,{loop:fresh(root,runId),options:{callTimeoutMs,noProgressTurns},doctrine:resolveCheckerSkill({codexHome:ready.codexHome.canonical_path})}); }catch(error){return fail(error.message);}
     for(;;) {
       if(evidenceFailure)return fail(`goal-evidence-write-failed:${evidenceFailure}`);
       let loop=fresh(root,runId);
       if(['completed','stopped'].includes(loop.status))return {ok:loop.status==='completed',status:loop.status,invocations,providerThreadId:thread};
       if(loop.status==='paused')return {ok:false,status:'paused',reason:loop.pause_reason || 'run-paused',invocations,providerThreadId:thread};
       if(wallNow()-started>=timeoutMs)return fail('goal-host-deadline');
+      try {assertIssuedGoalExecutionPlan(plan,loop);} catch(error){return fail(error.message);}
+      const signature=goalPlanHash({episodes:loop.episodes,workstreams:loop.workstreams,reviews:loop.goal_reviews,lease:loop.session_chain.lease});
+      controlRepeats=signature===controlSignature?controlRepeats+1:0;controlSignature=signature;
+      if(controlRepeats>=2)return fail('headless-service-no-progress');
       const emittedHandoff=loop.session_chain.lease.handoff_phase==='emitted';
       if(!leaseCheck(loop,{...ownerFence,intent:emittedHandoff?'lease':'business'}).ok)return fail('goal-owner-fenced');
       const pendingChecker=loop.episodes.some(x=>x.role==='checker'&&['pending','in_progress'].includes(x.status));
       if(pendingChecker||emittedHandoff) {
+        if(pendingChecker&&!thread)return fail('checker-owner-session-evidence-unavailable');
+        try {assertIssuedGoalExecutionPlan(plan,loop);}catch(error){return fail(error.message);}
         if(tokensUsed()>=tokenLimit)return fail('goal-host-token-limit');
         if(remaining()<=0)return fail('goal-host-deadline');
         const result=service({expect:ownerFence,env,deepLoopRoot,timeoutMs:remaining(),clock:sampleNow,
+          ...(pendingChecker?{goalExecutionPlan:plan,goalOwnerThreads:[...ownerThreads]}:{}),
           preflightFn:options=>ensureCodexPreflight({...options,runSync:observedProcess('runtime-preflight')}),
-          checkerRunFn:options=>runIndependentCodexChecker({...options,runProcess:observedProcess('checker')}),
+          checkerRunFn:options=>runIndependentCodexChecker({...options,runProcess:observedProcess('checker',{attempt_id:options.contract.attempt_id,target_maker:options.contract.target_maker,episode_id:options.contract.checker_episode_id})}),
           spawnFn:(entry,options)=>headlessSpawn(entry,{...options,runSync:observedProcess('handoff')})});
         if(!result?.ok)return fail(result?.reason || result?.action || 'headless-service-unavailable');
         const after=fresh(root,runId),nextFence=fenceOf(after);
         if(nextFence.owner!==ownerFence.owner||nextFence.generation!==ownerFence.generation) {
           if(!UUID.test(result.providerThreadId || ''))return fail('handoff-provider-binding-unavailable');
-          ownerFence=nextFence;thread=result.providerThreadId;heldOwners.add(`${ownerFence.owner}:${ownerFence.generation}`);
+          ownerFence=nextFence;thread=result.providerThreadId;ownerThreads.add(thread);
+          try {plan=activePlan=issueGoalExecutionPlan(controller,{loop:after,options:{callTimeoutMs,noProgressTurns},doctrine:resolveCheckerSkill({codexHome:ready.codexHome.canonical_path})});}catch(error){return fail(error.message);}
+          heldOwners.add(`${ownerFence.owner}:${ownerFence.generation}`);
         }
         if(result.action==='no-pending-handoff')return fail('headless-service-no-progress');
         continue;
@@ -207,25 +256,29 @@ export async function driveGoalRun({root,runId,expect=null,timeoutMs,maxTurns,to
       if(remaining()<=0)return fail('goal-host-deadline');
       if(action.type==='dispatch_checker') {
         try {
-          if(!['deep-review-loop','deep-review','deep-review:deep-review-loop'].includes(loop.review.reviewer))return fail('configured-checker-transport-unavailable');
+          assertIssuedGoalExecutionPlan(plan,loop);
+          if(!thread)return fail('checker-owner-session-evidence-unavailable');
           const checkerSkill=resolveCheckerSkill({codexHome:ready.codexHome.canonical_path});
-          if(!checkerSkill?.skill?.canonical_path)throw new Error('checker-capability-unavailable');
-          const registered=dispatchReview(root,runId,{point:action.point,workstreamId:action.workstream_id,detected:{'deep-review':true},fence:ownerFence});
+          if(goalPlanHash(checkerSkill)!==plan.doctrine_sha256)throw new Error('checker-identity-drift');
+          const registered=dispatchReview(root,runId,{point:action.point,workstreamId:action.workstream_id,fence:ownerFence});
           const bound=fresh(root,runId).episodes.find(episode=>episode.id===registered.checkerEpisodeId);
-          if(!bound || bound.role!=='checker' || bound.target_maker!==action.episode_id || bound.status!=='pending')throw new Error('checker-registration-binding-mismatch');
+          assertGoalReviewDescriptor(plan,registered,bound,action);
         }catch(error){return fail(error.message);}
         continue;
       }
       if(['dispatch_goal_checker','reconcile_goal_review'].includes(action.type)) {
         let result;
-        try { result=await goalService({root,runId,expect:ownerFence,executable:ready.executable.canonical_path,
-          codexHome:ready.codexHome.canonical_path,env,model:loop.autonomy.session_model,effort:loop.autonomy.session_effort,
-          timeoutMs:remaining(),runProcess:observedProcess('goal-checker'),settleUsage:result=>{ recordCost(root,runId,{turns:result.usage.num_turns,tokens:result.usage.tokens,fence:{...ownerFence,intent:'accounting'}}); return {ok:true}; },now:sampleNow()}); } catch(error){return fail(error.message);}
-        if(!result?.ok)return fail(result?.reason || 'goal-checker-unavailable');continue;
+        const charge=issueCallCharge({root,runId,fence:ownerFence,kind:'goal-checker'});
+        try {assertIssuedGoalExecutionPlan(plan,loop);result=await goalService({root,runId,expect:ownerFence,executable:ready.executable.canonical_path,
+          codexHome:ready.codexHome.canonical_path,env,model:plan.goal_checker.model,effort:plan.goal_checker.effort,ownerThreads:[...ownerThreads],goalExecutionPlan:plan,
+          timeoutMs:remaining(),runProcess:observedProcess('goal-checker',()=>{const review=fresh(root,runId).goal_reviews.find(r=>r.status==='pending');return {attempt_id:review?.execution.attempt_id??null};}),settleUsage:result=>settleCallCharge(charge,result),now:sampleNow()}); } catch(error){return fail(error.message);}
+        if(!result?.ok)return fail(result?.reason==='GOAL_CHECKER_SETTLEMENT_FAILED'?'goal-review-running-unsettled':result?.reason || 'goal-checker-unavailable');continue;
       }
       if(turns>=maxTurns)return fail('owner-turn-limit');
+      const progressKey=goalProgressKey(loop,action),progress=watchdog.before(progressKey);if(!progress.allowed)return fail(progressKey.startsWith('setup:')?'goal-host-no-progress':'goal-owner-no-progress');
+      const activityBefore=boundArtifactActivity(root,loop);
       const packet=buildGoalOwnerPacket({loop,action,deepLoopRoot,profile,task,loadedPolicySha:loadedPolicies.get(thread),hostBudget:{remaining_tokens:Math.max(0,tokenLimit-tokensUsed()),remaining_time_ms:Math.max(0,remaining()),remaining_owner_turns:maxTurns-turns}});
-      const prompt=packet.prompt;
+      const prompt=packet.prompt+(progress.diagnostic?'\nDiagnostic allowance: the preceding owner calls produced no new kernel stage or completion evidence. Inspect the current action once, correct a concrete blocker if possible, otherwise pause with the precise missing input or recovery requirement. This is the last unproductive owner turn.':'');
       const entry=buildCodexGoalOwnerEntry({executable:ready.executable.canonical_path,projectRoot:root,prompt,
         model:loop.autonomy.session_model,effort:loop.autonomy.session_effort,providerThreadId:thread});
       Object.assign(entry,{env:buildMinimalCodexEnv({sourceEnv:env,codexHome:ready.codexHome.canonical_path,runId,projectRoot:root,...ownerFence}),
@@ -242,18 +295,47 @@ export async function driveGoalRun({root,runId,expect=null,timeoutMs,maxTurns,to
         }
         binding=issueGoalOwnerTurn(root,runId,{fence:ownerFence,profile:processProfile,threadId:thread});
         const available=remaining();if(available<=0)return fail('goal-host-deadline');
-        result=runProcess(entry,{timeoutMs:available,processGroup:'required',captureRawJsonl:true});turns++;
+        result=callBudget.run(entry,{timeoutMs:available,processGroup:'required',captureRawJsonl:true});turns++;
         if(measured(result)&&UUID.test(result.providerThreadId || '')) {
           const receipt=bindGoalOwnerResult(binding,{profile:processProfile,threadId:result.providerThreadId,
             processId:result.process_group.group_id,outputSha256:digest(result.finalMessage || ''),usage:result.usage,
             terminationConfirmed:true,exitCode:result.ok?0:1});
           accounting=settleGoalOwnerCost(root,runId,{receipt,fence:{...ownerFence,intent:'accounting'}});
         }
-      } catch(error){emit({kind:'owner',entry,result,accounting});return fail(`goal-owner-accounting:${error.message}`);}
-      emit({kind:'owner',entry,result,accounting});
+      } catch(error){emit({kind:'owner',entry,result,accounting,binding_context:{attempt_id:action.attempt_id??null,episode_id:action.episode_id??null,target_maker:action.episode_id??null}});return fail(`goal-owner-accounting:${error.message}`);}
+      emit({kind:'owner',entry,result,accounting,binding_context:{attempt_id:action.attempt_id??null,episode_id:action.episode_id??null,target_maker:action.episode_id??null}});
       if(!result?.ok||!measured(result)||!accounting?.ok)return fail(result?.reason || 'goal-owner-evidence-unavailable');
       if(!UUID.test(result.providerThreadId || '')||(thread!==null&&thread!==result.providerThreadId))return fail('goal-owner-thread-mismatch');
-      thread=result.providerThreadId;loadedPolicies.set(thread,packet.policySha);
+      thread=result.providerThreadId;ownerThreads.add(thread);loadedPolicies.set(thread,packet.policySha);
+      const afterOwner=fresh(root,runId);watchdog.after(afterOwner,{key:progressKey,activityChanged:changedBoundArtifact(activityBefore,boundArtifactActivity(root,afterOwner))});
+      controlSignature=null;controlRepeats=0;
     }
   });
+    if(hostResult?.ok===false&&!hostResult.recovery)return {...hostResult,recovery:readGoalRecovery(root,runId,hostResult.reason)};
+    return hostResult;
+  }catch(error){
+    const reason=String(error.message||error);
+    try{const loop=fresh(root,runId);if(loop.status==='running')pauseRun(root,runId,{reason,expect:expected,now:sampleNow()});}catch{}
+    return {ok:false,reason,invocations,budget:callBudget.summary(),recovery:readGoalRecovery(root,runId,reason)};
+  }finally {expireGoalPlanController(controller);}
+}
+
+export function checkGoalRun({root,runId,callTimeoutMs=120000,noProgressTurns=3,profile='current',timeoutMs,maxTurns,tokenLimit,env=process.env,resolveCheckerSkill=resolveTrustedCheckerSkill,revalidateExecutable=revalidateTrustedRuntimeExecutable}={}){
+ try {
+  const captured=captureVerifiedRunSnapshot(root,runId);if(captured?.ok===false)return captured;
+  const loop=(captured.snapshot??captured).data;
+  if(!['current','minimal'].includes(profile)||[timeoutMs,maxTurns,tokenLimit].some(v=>v!==undefined&&(!Number.isSafeInteger(v)||v<1)))return {ok:false,reason:'goal-host-options-invalid',model_availability:'unprobed'};
+  if(profile==='minimal'&&loop.orchestration?.boundary_mode!=='continue')return {ok:false,reason:'minimal-profile-requires-continue-boundary',model_availability:'unprobed'};
+  const compiled=compileGoalExecutionPlan({loop,options:{callTimeoutMs,noProgressTurns}});if(!compiled.ok)return compiled;
+  const executable=revalidateExecutable(loop.autonomy.runtime_executable_approval);
+  const home=resolveAuthenticatedCodexHome({env,platform:executable.platform});
+  const doctrine=resolveCheckerSkill({codexHome:home.canonical_path});
+  return {ok:true,plan:{...compiled.plan,doctrine_sha256:goalPlanHash(doctrine)},model_availability:'unprobed',executable_approval_present:true,recovery:goalRecoveryDiagnostic(loop,'static-check-only')};
+ }catch(error){return {ok:false,reason:error.message,model_availability:'unprobed'};}
+}
+
+function readGoalRecovery(root,runId,reason,options={}) {
+ try {const captured=captureVerifiedRunSnapshot(root,runId);if(!captured.ok)throw new Error(captured.reason??'verified-state-unavailable');
+  return goalRecoveryDiagnostic(captured.snapshot.data,reason,{...options,events:captured.snapshot.logLines});
+ }catch{return {action:'human-required',allowed_next_action:'human-required',reason,run_id:runId,evidence:'unavailable',automatic_reattach:false};}
 }
