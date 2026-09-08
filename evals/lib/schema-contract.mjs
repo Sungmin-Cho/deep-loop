@@ -19,6 +19,7 @@ function typeMatches(value, type) {
   if (type === 'array') return Array.isArray(value);
   if (type === 'object') return value !== null && typeof value === 'object' && !Array.isArray(value);
   if (type === 'integer') return Number.isInteger(value);
+  if (type === 'number') return typeof value === 'number' && Number.isFinite(value);
   return typeof value === type;
 }
 

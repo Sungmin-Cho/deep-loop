@@ -12,7 +12,7 @@ test('missing scheduled trials remain unavailable in the denominator and safety 
 });
 
 import { runAgentEvaluation } from '../evals/drivers/codex-agent.mjs';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 test('v2 executes repeated isolated trials and emits every scheduled unavailable row after a lost measurement',async t=>{
@@ -41,4 +41,12 @@ for(const id of ['outcome-dependent-integration-217','outcome-replan-evidence-21
  cpSync(source,root,{recursive:true,filter:src=>!src.includes('/reference')});
  assert.equal(executeOutcomeCases(root,id).pass,false);
  cpSync(join(source,'reference'),root,{recursive:true});assert.equal(executeOutcomeCases(root,id).pass,true);
+});
+
+test('v2 preserves aggregate and measured cost when a generated row has invalid timing',async t=>{
+ const out=mkdtempSync(join(tmpdir(),'agent-v2-invalid-'));t.after(()=>rmSync(out,{recursive:true,force:true}));
+ const report=await runAgentEvaluation({profile:{...profile,profiles:['native'],trials:2},outDir:out,executable:process.execPath,codexHome:out,platform:'linux',clock:()=>NaN,runProcess:()=>({ok:true,usage:{num_turns:1,input_tokens:1,output_tokens:1,tokens:2},rawJsonl:'{}\n',termination:{confirmed:true},process_group:{mode:'required',quiescence_confirmed:true,group_id:1234}})});
+ for(const trial of report.attempts)if(trial.paths.candidate)t.after(()=>rmSync(trial.paths.candidate,{recursive:true,force:true}));
+ assert.equal(report.passed,false);assert.equal(report.reason,'result-schema-invalid');assert.equal(report.summary.efficacy.unavailable,2);assert.equal(report.summary.efficacy.known_tokens,4);
+ assert.equal(JSON.parse(readFileSync(join(report.output_dir,'result.json'),'utf8')).attempts.length,2);
 });

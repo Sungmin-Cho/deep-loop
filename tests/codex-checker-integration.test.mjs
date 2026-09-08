@@ -905,16 +905,16 @@ test('forged plan is a caller error and stale issued configuration pauses before
 });
 
 import { createGoalCallBudget } from '../scripts/lib/goal-call-budget.mjs';
-for(const timing of ['before-claim','after-claim'])test(`host admission refusal preserves checker authority: ${timing}`,()=>{
+for(const timing of ['preflight','before-claim','after-claim'])test(`host admission refusal preserves checker authority: ${timing}`,()=>{
  const f=seed({goalDriven:true,reviewer:'subagent-checker',review:PLAN_REVIEW,model:'gpt-6-astra',effort:'high'}),deps=hostDeps(f);
  const controller=createGoalPlanController(),plan=issueGoalExecutionPlan(controller,{loop:readState(f.root,f.runId).data,doctrine:deps.resolveCheckerSkill()});
  const b=createGoalCallBudget({readLoop:()=>readState(f.root,f.runId).data,tokenLimit:100,remaining:()=>0,callTimeoutMs:1000,now:()=>Date.parse(FIXED_NOW),runProcess:()=>{throw Error('must not spawn');}});
  let invoked=0;
  try {
-  const result=driveHeadlessRun({root:f.root,runId:f.runId,now:Date.parse(FIXED_NOW),...deps,goalExecutionPlan:plan,goalOwnerThreads:[OWNER_THREAD],goalCallAdmission:()=>{if(timing==='before-claim')b.admit();},checkerRunFn:()=>{invoked++;b.admit();}});
-  assert.equal(result.reason,'goal-host-deadline');assert.equal(result.spawn_state,'not-started');assert.equal(invoked,timing==='before-claim'?0:1);
+  const result=driveHeadlessRun({root:f.root,runId:f.runId,now:Date.parse(FIXED_NOW),...deps,goalExecutionPlan:plan,goalOwnerThreads:[OWNER_THREAD],preflightFn:options=>{if(timing==='preflight')b.admit();return deps.preflightFn(options);},goalCallAdmission:()=>{if(timing==='before-claim')b.admit();},checkerRunFn:()=>{invoked++;b.admit();}});
+  assert.equal(result.reason,'goal-host-deadline');assert.equal(result.spawn_state,'not-started');assert.equal(invoked,timing==='after-claim'?1:0);
   const after=readState(f.root,f.runId).data,checker=after.episodes.find(e=>e.id===f.checkerId);
   assert.equal(after.status,'paused');assert.notEqual(checker.status,'blocked');assert.notEqual(checker.status,'approved');
-  if(timing==='before-claim'){assert.equal(checker.status,'pending');assert.equal(checker.attempt_id,undefined);}else{assert.equal(checker.attempt_id,result.attemptId);assert.equal(checker.execution.phase,'running');}
+  if(timing!=='after-claim'){assert.equal(checker.status,'pending');assert.equal(checker.attempt_id,undefined);}else{assert.equal(checker.attempt_id,result.attemptId);assert.equal(checker.execution.phase,'running');}
  }finally{expireGoalPlanController(controller);}
 });

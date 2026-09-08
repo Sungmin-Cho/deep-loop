@@ -612,7 +612,11 @@ function driveIndependentChecker({
         fence: { owner: parentOwner, generation: parentGeneration, intent: 'accounting' },
       }),
     });
-  } catch {
+  } catch (error) {
+    if(isGoalCallAdmissionError(error)){
+      pauseWithOriginalFence(projectRoot,runId,{reason:error.message,expect:parentFence,now:clock()});
+      return {ok:false,action:'gate-blocked',reason:error.message,spawn_state:'not-started'};
+    }
     preflight = null;
   }
   const accountingMode = preflight != null && typeof preflight === 'object' && !Array.isArray(preflight)

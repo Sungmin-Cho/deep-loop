@@ -8,7 +8,7 @@ export function goalRecoveryDiagnostic(loop,reason,{events=null,remainingOwnerTu
  };
  for(const e of loop.episodes??[])add(e,{episode_id:e.id});
  for(const r of loop.goal_reviews??[])add(r,{goal_review_id:r.id});
- const allowed_next_action=unresolved_attempts.length?'reconcile-exact-attempt':reason==='already-driving'?'inspect-existing-owner':'human-required';
+ const allowed_next_action=['goal-review-running-unsettled','settlement-unknown'].includes(reason)?'human-required':unresolved_attempts.length?'reconcile-exact-attempt':reason==='already-driving'?'inspect-existing-owner':'human-required';
  return {action:'human-required',allowed_next_action,reason,run_id:loop.run_id??null,owner:loop.session_chain?.lease?.owner_run_id??null,generation:loop.session_chain?.lease?.generation??null,
   automatic_reattach:false,remaining_owner_turns:remainingOwnerTurns,unresolved_attempts,
   anchored_cost_present:events===null?null:events.some(e=>e.type==='cost'),anchored_finish_present:events===null?null:events.some(e=>e.type==='finish'),

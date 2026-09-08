@@ -143,7 +143,7 @@ export async function driveGoalRun({root,runId,expect=null,timeoutMs,maxTurns,to
   preflight=preflightGoalOwner,goalService=drivePendingGoalReview,onInvocation=()=>{},wallNow=Date.now,resolveCheckerSkill=resolveTrustedCheckerSkill,callTimeoutMs=120000,noProgressTurns=3,...serviceOptions}={}) {
   const invocations=[]; const started=wallNow();
   const sampleNow=typeof now==='function'?now:()=>now;
-  if(Object.hasOwn(serviceOptions,'goalExecutionPlan')||Object.hasOwn(serviceOptions,'goalOwnerThreads')||Object.hasOwn(serviceOptions,'goalPlanController'))return {ok:false,reason:'GOAL_PLAN_RESERVED_OPTION',invocations};
+  if(Object.hasOwn(serviceOptions,'goalExecutionPlan')||Object.hasOwn(serviceOptions,'goalOwnerThreads')||Object.hasOwn(serviceOptions,'goalPlanController')||Object.hasOwn(serviceOptions,'goalCallAdmission'))return {ok:false,reason:'GOAL_PLAN_RESERVED_OPTION',invocations};
   let initial;try{initial=fresh(root,runId);}catch(error){return {ok:false,reason:error.message,invocations,recovery:readGoalRecovery(root,runId,error.message)};}
   const expected=expect || fenceOf(initial);
   timeoutMs ??= Math.max(1,initial.budget.max_wallclock_sec * 1000 - (new Date(sampleNow()).getTime()-Date.parse(initial.created_at)));

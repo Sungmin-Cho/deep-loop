@@ -193,7 +193,16 @@ export async function runAgentEvaluation({profile=DEFAULT,outDir,executable,code
   before_path:join(sessionDir,'source-before.json'),after_path:join(sessionDir,'source-after.json')};
  if(!provenanceStable){stopped=true;stopReason='agent-source-provenance-drift';}
  for(const trial of attempts){trial.provenance=provenance;if(!provenanceStable){trial.status='unavailable';trial.reason=stopReason;}
-  if(v2&&!validateAgentTrialV2(trial))throw new Error('AGENT_RESULT_V2_INVALID');
+  if(v2&&!validateAgentTrialV2(trial)){
+   const row=scheduled.find(row=>row.id===trial.id);
+   const rawPath=join(sessionDir,`${row.id}-invalid-result.json`);json(rawPath,serializable(trial));
+   const fallback={...unavailableTrial(row,profile,'result-schema-invalid'),provenance,started:trial.started===true,paths:trial.paths};
+   // Retain valid measured usage; invalid proof/timing stays in the raw record.
+   if(validateAgentTrialV2({...fallback,measurement:trial.measurement}))fallback.measurement=trial.measurement;
+   if(Number.isFinite(trial.elapsed_ms)&&trial.elapsed_ms>=0)fallback.elapsed_ms=trial.elapsed_ms;
+   Object.keys(trial).forEach(key=>delete trial[key]);Object.assign(trial,fallback);
+   stopped=true;stopReason='result-schema-invalid';
+  }
   if(trial.paths.evidence)writeFileSync(join(trial.paths.evidence,'result.json'),`${JSON.stringify(trial,null,2)}\n`,{mode:0o600});}
  const report={schema_version:v2?2:1,mode:'real-agent',...(v2?{scheduled,effective_limits:{trial_timeout_ms:profile.timeout_ms,native_call_timeout_ms:profile.timeout_ms,harness_call_timeout_ms:Math.min(profile.timeout_ms,profile.call_timeout_ms),token_limit_kind:'measured-next-call-admission'},summary:summarizeAgentTrialsV2(scheduled,attempts)}:{}),profile,provenance,attempts,stopped,reason:stopReason,output_dir:sessionDir,
   passed:attempts.length===scheduled.length&&attempts.every(x=>x.status==='passed'),comparison_claim:v2?'Fixed repeated pilot; report all scheduled failures and unavailable trials. No general reliability guarantee.':'No statistical efficacy or uplift conclusion from this single-trial smoke.'};

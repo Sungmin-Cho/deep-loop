@@ -25,7 +25,7 @@ test('separate setup keys retain their own allowance across round trips',()=>{
 });
 test('goal-review recovery carries exact execution attempt and verified anchor presence',()=>{
  const r=goalRecoveryDiagnostic({run_id:'R',session_chain:{lease:{owner_run_id:'O',generation:2}},goal_reviews:[{id:'g',execution:{phase:'running',attempt_id:'a',handle:'h'}}]},'goal-review-running-unsettled',{events:[{type:'cost'}],remainingOwnerTurns:4});
- assert.equal(r.unresolved_attempts[0].attempt_id,'a');assert.equal(r.unresolved_attempts[0].handle,'h');assert.equal(r.unresolved_attempts[0].termination,'unknown');assert.equal(r.allowed_next_action,'reconcile-exact-attempt');assert.equal(r.anchored_cost_present,true);assert.equal(r.anchored_finish_present,false);assert.equal(r.generation,2);
+ assert.equal(r.unresolved_attempts[0].attempt_id,'a');assert.equal(r.unresolved_attempts[0].handle,'h');assert.equal(r.unresolved_attempts[0].termination,'unknown');assert.equal(r.allowed_next_action,'human-required');assert.equal(r.anchored_cost_present,true);assert.equal(r.anchored_finish_present,false);assert.equal(r.generation,2);
 });
 
 import { goalProgressKey,boundArtifactActivity,changedBoundArtifact } from '../scripts/lib/goal-progress.mjs';
