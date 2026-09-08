@@ -29,7 +29,7 @@ function outcomeResult() {
       changed_files: ['solution.json'],
       isolation_receipt: {
         schema_version: 1, boundary: 'node-permission-model:permission',
-        covered_effects: ['child-process','file-write','network-write'], profile_id: 'deep-loop-current-v1.23',
+        covered_effects: ['child-process','file-write','network-write'], profile_id: 'deep-loop-current-v1.24',
         allowed_effects: ['read-only'], declared_command: ['node','--test','.eval/verify-outcome.test.mjs'],
         executed_argv: ['--permission','.eval/verify-outcome.test.mjs'], exit: 0, timed_out: false,
         observed_effects: [], passed: true,
@@ -302,7 +302,7 @@ test('fixture report bytes are stable under ambient FORCE_COLOR and NO_COLOR pol
 
 test('selected fixture profile is loaded, validated, and authoritative', () => {
   const profile = loadFixtureProfile();
-  assert.equal(profile.id, 'deep-loop-current-v1.23');
+  assert.equal(profile.id, 'deep-loop-current-v1.24');
   assert.equal(profile.driver, 'fixture');
   assert.deepEqual(profile.record.observables, ['exit', 'effects']);
   const bad = mkdtempSync(join(tmpdir(), 'eval-profile-bad-'));
@@ -498,7 +498,7 @@ test('safe outcome execution rejects command escapes before spawn and binds effe
   });
   assert.equal(grade.pass, true);
   assert.deepEqual(grade.effect_receipt.observed_effects, []);
-  assert.equal(grade.effect_receipt.profile_id, 'deep-loop-current-v1.23');
+  assert.equal(grade.effect_receipt.profile_id, 'deep-loop-current-v1.24');
   assert.match(grade.effect_receipt.boundary, /^node-permission-model:/);
   assert.equal(JSON.stringify(grade.effect_receipt.executed_argv).includes(root), false);
   assert.deepEqual(grade.effect_receipt.executed_argv.slice(-2), [
@@ -646,9 +646,9 @@ test('static violations remain structured, reportable, and finding-bound before 
 test('fixture profile identity, version, and comparison roles are exact', {
   skip: NETWORK_BOUNDARY_AVAILABLE ? false : 'network-write isolation requires Node 24+',
 }, async () => {
-  const source = JSON.parse(readFileSync(join(process.cwd(), 'evals', 'profiles', 'deep-loop-current-v1.23.json'), 'utf8'));
+  const source = JSON.parse(readFileSync(join(process.cwd(), 'evals', 'profiles', 'deep-loop-current-v1.24.json'), 'utf8'));
   const root = mkdtempSync(join(tmpdir(), 'eval-profile-spoof-'));
-  const file = join(root, 'deep-loop-current-v1.23.json');
+  const file = join(root, 'deep-loop-current-v1.24.json');
   writeFileSync(file, JSON.stringify({ ...source, id: 'host-native', model: 'spoof', harness: 'spoof' }));
   assert.throws(() => loadFixtureProfile(file), /PROFILE_INVALID/);
 
@@ -657,7 +657,7 @@ test('fixture profile identity, version, and comparison roles are exact', {
   const payload = buildReport([row], { bank: [task], profile: loadFixtureProfile() }).payload;
   payload.profile_comparison_stub = [
     { task_id: task.id, profile: 'host-native', outcome_pass: false, agency_loss_incident: true, harness_block_incident: false, hard_safety_invariant_violated: false, attribution: 'harness-constraint' },
-    { task_id: task.id, profile: 'deep-loop-current-v1.23', outcome_pass: true, agency_loss_incident: false, harness_block_incident: false, hard_safety_invariant_violated: false, attribution: 'not-applicable' },
+    { task_id: task.id, profile: 'deep-loop-current-v1.24', outcome_pass: true, agency_loss_incident: false, harness_block_incident: false, hard_safety_invariant_violated: false, attribution: 'not-applicable' },
   ];
   assert.equal((await import('../evals/lib/validate.mjs')).validateResult(payload).ok, false);
 });

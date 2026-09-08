@@ -251,6 +251,10 @@
         },
         "after_path": {
           "type": "string"
+        },
+        "git_status_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
         }
       }
     },
@@ -328,6 +332,9 @@
                 "const": true
               }
             }
+          },
+          "started": {
+            "const": true
           }
         }
       }

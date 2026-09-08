@@ -159,7 +159,7 @@ export async function runAgentEvaluation({profile=DEFAULT,outDir,executable,code
     if(variant==='native') {
      const entry=buildCodexGoalOwnerEntry({executable,projectRoot:candidate,prompt:taskContext,model:profile.model,effort:profile.effort});
      Object.assign(entry,{cwd:candidate,env:nativeEnv(env,codexHome,candidate),usageOutputKind:'codex-jsonl',captureFinalMessage:true});
-     const result=await measuredProcess(entry,{timeoutMs:v2?Math.min(profile.timeout_ms,profile.call_timeout_ms):profile.timeout_ms,processGroup:'required'});capture({kind:'native',entry,result});hostResult=result;
+     const result=await measuredProcess(entry,{timeoutMs:profile.timeout_ms,processGroup:'required'});capture({kind:'native',entry,result});hostResult=result;
     } else {
      const initialized=initializeAgentGoal(candidate,task,{model:profile.model,effort:profile.effort,executable,approveExecutable});runId=initialized.runId;
      hostResult=await driveGoalRun({root:candidate,runId,expect:initialized.expect,timeoutMs:Math.max(1,profile.timeout_ms-(clock()-started)),tokenLimit:profile.token_limit,
@@ -189,13 +189,13 @@ export async function runAgentEvaluation({profile=DEFAULT,outDir,executable,code
  const provenanceStable=provenanceAfter!==null&&sameAgentSourceProvenance(provenanceBefore,provenanceAfter);
  json(join(sessionDir,'source-after.json'),provenanceAfter||{error:provenanceError});
  const provenance={version:1,plugin_version:provenanceBefore.plugin_version,git_head:provenanceBefore.git_head,working_tree_dirty:provenanceBefore.working_tree_dirty,
-  before_manifest_sha256:provenanceBefore.manifest_sha256,after_manifest_sha256:provenanceAfter?.manifest_sha256??null,source_stable:provenanceStable,
+  ...(v2?{git_status_sha256:provenanceBefore.git_status_sha256}:{}),before_manifest_sha256:provenanceBefore.manifest_sha256,after_manifest_sha256:provenanceAfter?.manifest_sha256??null,source_stable:provenanceStable,
   before_path:join(sessionDir,'source-before.json'),after_path:join(sessionDir,'source-after.json')};
  if(!provenanceStable){stopped=true;stopReason='agent-source-provenance-drift';}
  for(const trial of attempts){trial.provenance=provenance;if(!provenanceStable){trial.status='unavailable';trial.reason=stopReason;}
   if(v2&&!validateAgentTrialV2(trial))throw new Error('AGENT_RESULT_V2_INVALID');
   if(trial.paths.evidence)writeFileSync(join(trial.paths.evidence,'result.json'),`${JSON.stringify(trial,null,2)}\n`,{mode:0o600});}
- const report={schema_version:v2?2:1,mode:'real-agent',...(v2?{scheduled,summary:summarizeAgentTrialsV2(scheduled,attempts)}:{}),profile,provenance,attempts,stopped,reason:stopReason,output_dir:sessionDir,
+ const report={schema_version:v2?2:1,mode:'real-agent',...(v2?{scheduled,effective_limits:{trial_timeout_ms:profile.timeout_ms,native_call_timeout_ms:profile.timeout_ms,harness_call_timeout_ms:Math.min(profile.timeout_ms,profile.call_timeout_ms),token_limit_kind:'measured-next-call-admission'},summary:summarizeAgentTrialsV2(scheduled,attempts)}:{}),profile,provenance,attempts,stopped,reason:stopReason,output_dir:sessionDir,
   passed:attempts.length===scheduled.length&&attempts.every(x=>x.status==='passed'),comparison_claim:v2?'Fixed repeated pilot; report all scheduled failures and unavailable trials. No general reliability guarantee.':'No statistical efficacy or uplift conclusion from this single-trial smoke.'};
  json(join(sessionDir,'result.json'),report);return report;
 }

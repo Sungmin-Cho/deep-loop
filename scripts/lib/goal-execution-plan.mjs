@@ -19,7 +19,7 @@ export function compileGoalExecutionPlan({loop,options={}}={}) {
  try {
   if(!isGoalDriven(loop)||!runtimeCapability(sessionRuntime(loop),'persistent_goal_owner'))return rejected('goal-owner-runtime-unavailable');
   if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(k=>!['callTimeoutMs','noProgressTurns'].includes(k)))return rejected('goal-execution-options-invalid');
-  const call=options.callTimeoutMs??120000,progress=options.noProgressTurns??3;
+  const call=options.callTimeoutMs===undefined?120000:options.callTimeoutMs,progress=options.noProgressTurns===undefined?3:options.noProgressTurns;
   if(!Number.isSafeInteger(call)||call<1000||call>600000||!Number.isSafeInteger(progress)||progress<2||progress>20)return rejected('goal-execution-options-invalid');
   const review=normalizeGoalReview(loop.review);
   if(!Array.isArray(review.flags)||review.flags.some(x=>typeof x!=='string')||!Array.isArray(review.points)||review.points.length===0||review.points.some(x=>!['design','plan','implementation'].includes(x))||new Set(review.points).size!==review.points.length||typeof review.converge!=='boolean'||!Number.isSafeInteger(review.max_review_rounds)||review.max_review_rounds<1||review.max_review_rounds>GOAL_LIMITS.reviewRounds||typeof review.require_human_ack!=='boolean')return rejected('goal-review-config-invalid');

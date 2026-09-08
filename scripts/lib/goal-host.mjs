@@ -42,6 +42,7 @@ const measured = result => result?.termination?.confirmed === true
 export function buildGoalOwnerContext({loop,action,deepLoopRoot=ROOT,hostBudget=null}) {
   if(!isGoalDriven(loop) || !action || typeof action.type !== 'string')throw new Error('GOAL_OWNER_CONTEXT_INVALID');
   if(hostBudget !== null && (!hostBudget || !['remaining_tokens','remaining_time_ms','remaining_owner_turns'].every(key=>Number.isSafeInteger(hostBudget[key]) && hostBudget[key]>=0)))throw new Error('GOAL_OWNER_CONTEXT_BUDGET_INVALID');
+  if(hostBudget?.remaining_call_time_ms!==undefined&&(!Number.isSafeInteger(hostBudget.remaining_call_time_ms)||hostBudget.remaining_call_time_ms<1))throw new Error('GOAL_OWNER_CONTEXT_BUDGET_INVALID');
   const owner=ownerSession(loop);
   return structuredClone({context_kind:'goal-owner-v1',state_version:loop.schema_version,
     node_path:process.execPath,kernel_path:join(deepLoopRoot,'scripts/deep-loop.mjs'),
@@ -83,6 +84,8 @@ function buildGoalOwnerPacket({loop,action,deepLoopRoot=ROOT,profile='current',t
     task ? `Task context: ${task}` : '',
     'Use the supplied facts and action. Do not rediscover unchanged fields or load legacy/entry workflows. Refresh after the action boundary or stale/fence evidence.',
     'Complete one bounded maker stage, including its necessary planning/setup/selection/registration; batch predictable typed CLI steps in one tool call with actual-result bindings, then yield. Do not start a second maker or retry round.',
+    frame.host_budget?.remaining_call_time_ms ? `This owner invocation has at most ${frame.host_budget.remaining_call_time_ms} milliseconds, separate from the whole-run horizon. Yield with the current exact action before this call deadline; a setup-only or partial inline-stage yield may continue on the same thread. Never wait for the host to kill a productive call.` : '',
+    'Artifact arguments are project-root-relative and worktree-prefixed (for example .worktrees/task/solution.mjs), even when the worktree registration path is absolute. Keep scratch helpers inside the selected worktree.',
     'For dispatch_checker yield: the host registers and runs the already-configured independent checker. Never claim or execute it as the owner. Yield for whole-goal review. At finish populate the supplied M3 report template with the factual report, write it to report_path, then yield before finish.',
     'External push, PR, merge, publish, network and delete actions are outside this isolated execution scope. Report genuinely missing authority or requirements without inventing them.',
   ].filter(Boolean).join('\n');
@@ -129,7 +132,7 @@ export function preflightGoalOwner({root,runId,loop,expect,env,deepLoopRoot,time
     if(i===1 && (existsSync(deniedPath) || result.finalMessage?.toString().trim()!==nonce)) return {ok:false,reason:'owner-continuity-mismatch',probes};
   }
   const checkerCharge=issueCallCharge({root,runId,fence:expect,kind:'checker-probe'});
-  const checker=probeGoalChecker({executable:executable.canonical_path,root,model:loop.autonomy.session_model,effort:loop.autonomy.session_effort,env:childEnv,ownerThreads:[thread],timeoutMs:probeDeadline-wallNow(),runProcess,onInvocation:emitProbe});
+  const checker=probeGoalChecker({executable:executable.canonical_path,root,model:loop.autonomy.session_model,effort:loop.autonomy.session_effort,env:buildMinimalCodexEnv({sourceEnv:env,codexHome:codexHome.canonical_path,runId,projectRoot:root,owner:`checker-probe-${nonce}`,generation:expect.generation}),ownerThreads:[thread],timeoutMs:probeDeadline-wallNow(),runProcess,onInvocation:emitProbe});
   if(measured(checker.result))settleCallCharge(checkerCharge,checker.result);
   if(!checker.ok)return {ok:false,reason:checker.reason,probes};
   return {ok:true,executable,codexHome,probes,measured_usage:proof.measured_usage};
@@ -226,7 +229,7 @@ export async function driveGoalRun({root,runId,expect=null,timeoutMs,maxTurns,to
         if(tokensUsed()>=tokenLimit)return fail('goal-host-token-limit');
         if(remaining()<=0)return fail('goal-host-deadline');
         const result=service({expect:ownerFence,env,deepLoopRoot,timeoutMs:remaining(),clock:sampleNow,
-          ...(pendingChecker?{goalExecutionPlan:plan,goalOwnerThreads:[...ownerThreads]}:{}),
+          ...(pendingChecker?{goalExecutionPlan:plan,goalOwnerThreads:[...ownerThreads],goalCallAdmission:()=>callBudget.admit()}:{}),
           preflightFn:options=>ensureCodexPreflight({...options,runSync:observedProcess('runtime-preflight')}),
           checkerRunFn:options=>runIndependentCodexChecker({...options,runProcess:observedProcess('checker',{attempt_id:options.contract.attempt_id,target_maker:options.contract.target_maker,episode_id:options.contract.checker_episode_id})}),
           spawnFn:(entry,options)=>headlessSpawn(entry,{...options,runSync:observedProcess('handoff')})});
@@ -277,7 +280,7 @@ export async function driveGoalRun({root,runId,expect=null,timeoutMs,maxTurns,to
       if(turns>=maxTurns)return fail('owner-turn-limit');
       const progressKey=goalProgressKey(loop,action),progress=watchdog.before(progressKey);if(!progress.allowed)return fail(progressKey.startsWith('setup:')?'goal-host-no-progress':'goal-owner-no-progress');
       const activityBefore=boundArtifactActivity(root,loop);
-      const packet=buildGoalOwnerPacket({loop,action,deepLoopRoot,profile,task,loadedPolicySha:loadedPolicies.get(thread),hostBudget:{remaining_tokens:Math.max(0,tokenLimit-tokensUsed()),remaining_time_ms:Math.max(0,remaining()),remaining_owner_turns:maxTurns-turns}});
+      const packet=buildGoalOwnerPacket({loop,action,deepLoopRoot,profile,task,loadedPolicySha:loadedPolicies.get(thread),hostBudget:{remaining_tokens:Math.max(0,tokenLimit-tokensUsed()),remaining_time_ms:Math.max(0,remaining()),remaining_owner_turns:maxTurns-turns,remaining_call_time_ms:Math.max(1,Math.min(plan.limits.call_timeout_ms,remaining()))}});
       const prompt=packet.prompt+(progress.diagnostic?'\nDiagnostic allowance: the preceding owner calls produced no new kernel stage or completion evidence. Inspect the current action once, correct a concrete blocker if possible, otherwise pause with the precise missing input or recovery requirement. This is the last unproductive owner turn.':'');
       const entry=buildCodexGoalOwnerEntry({executable:ready.executable.canonical_path,projectRoot:root,prompt,
         model:loop.autonomy.session_model,effort:loop.autonomy.session_effort,providerThreadId:thread});

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateAgentProfileV2, scheduleAgentTrials, summarizeAgentTrialsV2 } from '../evals/lib/agent-report-v2.mjs';
+import { validateAgentProfileV2, scheduleAgentTrials, summarizeAgentTrialsV2,compareAgentReportsV2,validateAgentTrialV2 } from '../evals/lib/agent-report-v2.mjs';
 const profile={schema_version:2,mode:'real-agent',profiles:['native','current','minimal'],tasks:['outcome-deterministic-bug-201'],trials:3,seed:42,model:'gpt-6-astra',effort:'high',reviewer:{reviewer:'subagent-checker',mode:'same-model',flags:[]},timeout_ms:600000,call_timeout_ms:120000,no_progress_turns:3,token_limit:500000,allowed_effects:['isolated-workspace-write']};
 test('v2 exact profile validates repeats and freezes unique deterministic trial identities',()=>{
  assert.equal(validateAgentProfileV2(profile),true);assert.equal(validateAgentProfileV2({...profile,trials:1}),false);assert.equal(validateAgentProfileV2({...profile,typo:1}),false);
@@ -23,8 +23,12 @@ test('v2 executes repeated isolated trials and emits every scheduled unavailable
 });
 test('v2 two measured trials retain separate paths and exact requested-profile evidence',async t=>{
  const out=mkdtempSync(join(tmpdir(),'agent-v2-pass-'));t.after(()=>rmSync(out,{recursive:true,force:true}));
- const report=await runAgentEvaluation({profile:{...profile,profiles:['native'],trials:2},outDir:out,executable:process.execPath,codexHome:out,platform:'linux',runProcess:entry=>{writeFileSync(join(entry.cwd,'solution.mjs'),'export const sumNumbers=v=>v.reduce((a,b)=>a+b,0);');return {ok:true,usage:{num_turns:1,input_tokens:1,output_tokens:1,tokens:2},rawJsonl:'{}\n',termination:{confirmed:true},process_group:{mode:'required',quiescence_confirmed:true,group_id:1234}};}});
+ const report=await runAgentEvaluation({profile:{...profile,profiles:['native'],trials:2},outDir:out,executable:process.execPath,codexHome:out,platform:'linux',runProcess:(entry,options)=>{assert.equal(options.timeoutMs,profile.timeout_ms);writeFileSync(join(entry.cwd,'solution.mjs'),'export const sumNumbers=v=>v.reduce((a,b)=>a+b,0);');return {ok:true,usage:{num_turns:1,input_tokens:1,output_tokens:1,tokens:2},rawJsonl:'{}\n',termination:{confirmed:true},process_group:{mode:'required',quiescence_confirmed:true,group_id:1234}};}});
  for(const attempt of report.attempts)t.after(()=>rmSync(attempt.paths.candidate,{recursive:true,force:true}));
+ const comparison=compareAgentReportsV2([report,structuredClone(report)]);assert.equal(comparison.length,2);
+ const changed=structuredClone(report);changed.provenance.git_status_sha256='f'.repeat(64);assert.throws(()=>compareAgentReportsV2([report,changed]),/IDENTITY_MISMATCH/);
+ assert.throws(()=>compareAgentReportsV2([report,{...report,schema_version:1}]),/VERSION_INVALID/);
+ assert.equal(validateAgentTrialV2({...report.attempts[0],started:false}),false);
  assert.equal(report.passed,true,JSON.stringify(report));assert.equal(report.summary.efficacy.passed,2);assert.notEqual(report.attempts[0].paths.evidence,report.attempts[1].paths.evidence);
 });
 

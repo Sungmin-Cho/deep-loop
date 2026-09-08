@@ -37,7 +37,7 @@ export function summarizeAgentTrialsV2(scheduled,attempts) {
  const byId=new Map();for(const row of attempts){if(!ids.has(row.id)||byId.has(row.id))throw new Error('AGENT_TRIAL_ID_INVALID');byId.set(row.id,row);}
  const manifests=new Set(attempts.map(r=>r.provenance?.before_manifest_sha256??null));
  if(manifests.size>1)throw new Error('AGENT_SOURCE_PROVENANCE_MISMATCH');
- const empty=()=>({planned:0,attempted:0,passed:0,failed:0,unavailable:0,budget_exceeded:0,behavior_pass:0,kernel_completed:0,no_progress_pause:0,known_tokens:0,usage_complete:true,elapsed_ms:0,token_samples:[],time_samples:[]});
+ const empty=()=>({planned:0,attempted:0,passed:0,failed:0,unavailable:0,budget_exceeded:0,behavior_pass:0,kernel_completed:0,no_progress_pause:0,review_mismatch:0,known_tokens:0,usage_complete:true,elapsed_ms:0,token_samples:[],time_samples:[]});
  const summary={efficacy:empty(),safety:empty(),by_profile:{}};
  for(const row of scheduled){
   const lane=summary[row.lane];if(!lane)throw new Error('AGENT_LANE_INVALID');
@@ -47,6 +47,7 @@ export function summarizeAgentTrialsV2(scheduled,attempts) {
    bucket.planned++;bucket[status]++;if(item?.started!==true)continue;
    bucket.attempted++;bucket.behavior_pass+=item.outcome_pass===true?1:0;bucket.kernel_completed+=item.kernel_completed===true?1:0;
    bucket.no_progress_pause+=['goal-owner-no-progress','goal-host-no-progress'].includes(item.reason)?1:0;
+   bucket.review_mismatch+=item.requested_profile_evidence===false&&item.started===true?1:0;
    bucket.usage_complete&&=item.measurement?.usage_complete===true;
    bucket.known_tokens+=item.measurement?.tokens??0;bucket.elapsed_ms+=item.elapsed_ms??0;
    if(item.measurement?.usage_complete)bucket.token_samples.push(item.measurement.tokens);
@@ -55,7 +56,7 @@ export function summarizeAgentTrialsV2(scheduled,attempts) {
  }
  const stats=values=>{values.sort((a,b)=>a-b);const n=values.length;return {n,median:n?(values[Math.floor((n-1)/2)]+values[Math.floor(n/2)])/2:null,p90:n?values[Math.ceil(n*0.9)-1]:null};};
  for(const bucket of [summary.efficacy,summary.safety,...Object.values(summary.by_profile)]){
-  bucket.tokens_per_completion=bucket.passed&&bucket.usage_complete?bucket.known_tokens/bucket.passed:null;
+  bucket.tokens_per_completion=bucket.attempted>0&&bucket.passed&&bucket.usage_complete?bucket.known_tokens/bucket.passed:null;
   bucket.token_distribution=stats(bucket.token_samples);bucket.time_distribution=stats(bucket.time_samples);
   delete bucket.token_samples;delete bucket.time_samples;
  }
@@ -63,6 +64,23 @@ export function summarizeAgentTrialsV2(scheduled,attempts) {
 }
 export function validateAgentTrialV2(v) {
  if(!validateSchemaValue(RESULT_SCHEMA,v).ok||!v||v.schema_version!==2||!AGENT_TASK_REGISTRY[v.task_id]||v.lane!==AGENT_TASK_REGISTRY[v.task_id].lane||!integer(v.trial,1,20)||v.id!==`${v.task_id}-${v.profile}-trial-${v.trial}`||!['native','current','minimal'].includes(v.profile)||!['passed','failed','unavailable','budget_exceeded'].includes(v.status)||v.served_model_status!=='unavailable')return false;
- if(v.status==='passed')return v.provenance?.source_stable===true&&v.raw_trace_available===true&&v.measurement?.usage_complete===true&&v.measurement?.termination_confirmed===true&&v.requested_profile_evidence===true&&v.outcome_pass===true&&v.outcome?.pass===true&&(v.profile==='native'||v.kernel_completed===true&&v.kernel_status==='completed');
+ if(v.status==='passed')return v.started===true&&v.provenance?.source_stable===true&&v.raw_trace_available===true&&v.measurement?.usage_complete===true&&v.measurement?.termination_confirmed===true&&v.requested_profile_evidence===true&&v.outcome_pass===true&&v.outcome?.pass===true&&(v.profile==='native'||v.kernel_completed===true&&v.kernel_status==='completed');
  return true;
 }
+
+// Compare complete source-bound cohorts without pooling repeated trial IDs.
+export function compareAgentReportsV2(reports) {
+ if(!Array.isArray(reports)||reports.length<2)throw new Error('AGENT_COMPARISON_REPORTS_REQUIRED');
+ let identity;
+ return reports.map(report=>{
+  if(report?.schema_version!==2||report.mode!=='real-agent'||!validateAgentProfileV2(report.profile))throw new Error('AGENT_COMPARISON_VERSION_INVALID');
+  const p=report.provenance;
+  if(!p||p.source_stable!==true||p.before_manifest_sha256!==p.after_manifest_sha256||!/^[a-f0-9]{64}$/.test(p.git_status_sha256??''))throw new Error('AGENT_SOURCE_PROVENANCE_MISMATCH');
+  const key=JSON.stringify([p.git_head,p.before_manifest_sha256,p.git_status_sha256,report.profile]);
+  if(identity!==undefined&&key!==identity)throw new Error('AGENT_COMPARISON_IDENTITY_MISMATCH');identity=key;
+  const scheduled=scheduleAgentTrials(report.profile);
+  if(JSON.stringify(report.scheduled)!==JSON.stringify(scheduled)||!Array.isArray(report.attempts)||report.attempts.length!==scheduled.length||!report.attempts.every(row=>validateAgentTrialV2(row)&&JSON.stringify(row.provenance)===JSON.stringify(p)))throw new Error('AGENT_COMPARISON_TRIALS_INVALID');
+  return {source_manifest_sha256:p.before_manifest_sha256,summary:summarizeAgentTrialsV2(scheduled,report.attempts)};
+ });
+}
+export const loadAgentComparisonV2=paths=>compareAgentReportsV2(paths.map(path=>JSON.parse(readFileSync(path,'utf8'))));

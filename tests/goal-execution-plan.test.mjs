@@ -26,3 +26,7 @@ test('checker session must be a distinct CLI thread with confirmed teardown and 
  assert.match(validateGoalCheckerSession(result,{ownerThreads:[]}),/owner-session/);
  assert.match(validateGoalCheckerSession(result,{ownerThreads:[owner],argv:['exec','resume',child]}),/session/);
 });
+
+test('explicit null controller bounds are invalid rather than defaulted',()=>{
+ for(const options of [{callTimeoutMs:null},{noProgressTurns:null}])assert.equal(compileGoalExecutionPlan({loop:loop(),options}).ok,false);
+});

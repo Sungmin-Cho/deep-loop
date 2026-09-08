@@ -21,7 +21,8 @@ function milestones(loop) {
 }
 export function goalProgressKey(loop,action) {
  const episode=(loop.episodes??[]).find(e=>e.id===action.episode_id);
- if(action.episode_id&&episode?.execution)return `episode:${action.episode_id}`;
+ if(action.episode_id&&(episode?.execution||['dispatch_maker','fix_episode','resume_maker'].includes(action.type)))return `episode:${action.episode_id}`;
+ if(['finish','finish_run','write_final_report'].includes(action.type))return 'report:final';
  if(action.workstream_id)return `setup:${action.workstream_id}`;
  const mapped=new Set((loop.workstreams??[]).flatMap(w=>w.requirement_ids??[]));
  return `setup:unmapped:${(loop.goal_contract?.requirements??[]).map(r=>r.id).filter(id=>!mapped.has(id)).sort().join(',')}`;
@@ -49,7 +50,10 @@ export function boundArtifactActivity(root,loop) {
  for(const path of [...paths].sort().slice(0,64)) {
   let fd;
   try {
-   const file=resolve(root,path),real=realpathSync(file),rel=relative(realpathSync(root),real);
+   const canonicalRoot=realpathSync(root),file=resolve(canonicalRoot,path);
+   if(!pathKeyWithin(canonicalRoot,file))continue;
+   hashes[path]=null; // Absence of an already-declared artifact is observable.
+   const real=realpathSync(file);
    if(!sameResolvedPath(real,file)||!pathKeyWithin(realpathSync(root),real))continue;
    fd=openSync(file,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
    const stat=fstatSync(fd);if(!stat.isFile()||stat.size>1024*1024||total+stat.size>4*1024*1024)continue;

@@ -27,3 +27,20 @@ test('goal-review recovery carries exact execution attempt and verified anchor p
  const r=goalRecoveryDiagnostic({run_id:'R',session_chain:{lease:{owner_run_id:'O',generation:2}},goal_reviews:[{id:'g',execution:{phase:'running',attempt_id:'a',handle:'h'}}]},'goal-review-running-unsettled',{events:[{type:'cost'}],remainingOwnerTurns:4});
  assert.equal(r.unresolved_attempts[0].attempt_id,'a');assert.equal(r.unresolved_attempts[0].handle,'h');assert.equal(r.unresolved_attempts[0].termination,'unknown');assert.equal(r.allowed_next_action,'reconcile-exact-attempt');assert.equal(r.anchored_cost_present,true);assert.equal(r.anchored_finish_present,false);assert.equal(r.generation,2);
 });
+
+import { goalProgressKey,boundArtifactActivity,changedBoundArtifact } from '../scripts/lib/goal-progress.mjs';
+import { mkdtempSync,writeFileSync,rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+test('pending makers use the configured maker window and report has a separate key',()=>{
+ const l={episodes:[{id:'e',role:'maker',status:'pending'}],workstreams:[]};
+ const key=goalProgressKey(l,{type:'dispatch_maker',episode_id:'e',workstream_id:'w'});
+ assert.equal(key,'episode:e');assert.equal(goalProgressKey(l,{type:'finish'}),'report:final');
+ const w=createGoalProgressWatchdog({noProgressTurns:20});for(let n=0;n<3;n++)w.after(l,{key});assert.equal(w.before(key).diagnostic,false);
+});
+test('first creation of a previously declared artifact earns activity; new declarations do not',t=>{
+ const root=mkdtempSync(join(tmpdir(),'goal-activity-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const l={episodes:[{expected_artifacts:['new.txt']}]},before=boundArtifactActivity(root,l);
+ writeFileSync(join(root,'new.txt'),'work');assert.equal(changedBoundArtifact(before,boundArtifactActivity(root,l)),true);
+ assert.equal(changedBoundArtifact({},boundArtifactActivity(root,l)),false);
+});

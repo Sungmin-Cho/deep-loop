@@ -1,3 +1,4 @@
+import { isGoalCallAdmissionError } from './goal-call-budget.mjs';
 import { assertGoalPlanIdentity, assertIssuedGoalExecutionPlan, goalPlanHash, validateGoalCheckerSession } from './goal-execution-plan.mjs';
 import { startExecution, returnExecution } from './execution.mjs';
 import { isGoalDriven } from './goal-contract.mjs';
@@ -409,6 +410,7 @@ function driveIndependentChecker({
   attemptIdFactory,
   goalExecutionPlan = null,
   goalOwnerThreads = [],
+  goalCallAdmission = null,
 }) {
   let actionNow = now;
   const stranded = inProgressIndependentChecker(initialLoop);
@@ -518,7 +520,8 @@ function driveIndependentChecker({
   // trusted unattended Codex skill. Claim once so future host ticks cannot retry it.
   if (goalExecutionPlan) {
     assertIssuedGoalExecutionPlan(goalExecutionPlan, initialLoop);
-    if (pending.plugin !== goalExecutionPlan.maker_checker.reviewer || !goalOwnerThreads.length) {
+    if (pending.plugin !== goalExecutionPlan.maker_checker.reviewer)return {ok:false,reason:'checker-registration-binding-mismatch'};
+    if (!goalOwnerThreads.length) {
       return { ok: false, reason: 'checker-owner-session-evidence-unavailable' };
     }
   } else {
@@ -670,6 +673,12 @@ function driveIndependentChecker({
       reason: `checker-gate:${postGate.reason}`, expect: parentFence, now: actionNow,
     });
     return { ok: false, action: pauseOutcome === 'fenced' ? 'fenced' : 'gate-blocked', reason: postGate.reason };
+  }
+
+  if(goalExecutionPlan&&goalCallAdmission)try{goalCallAdmission();}catch(error){
+    if(!isGoalCallAdmissionError(error))throw error;
+    pauseWithOriginalFence(projectRoot,runId,{reason:error.message,expect:parentFence,now:clock()});
+    return {ok:false,action:'gate-blocked',reason:error.message,spawn_state:'not-started'};
   }
 
   let claimed;
@@ -868,7 +877,11 @@ function driveIndependentChecker({
       usageReceipt: checkerUsageReceiptDescriptor,
       goalDriven: isGoalDriven(initialLoop),
     });
-  } catch {
+  } catch (error) {
+    if(isGoalCallAdmissionError(error)){
+      pauseWithOriginalFence(projectRoot,runId,{reason:error.message,expect:parentFence,now:clock()});
+      return {ok:false,action:'gate-blocked',reason:error.message,spawn_state:'not-started',checkerEpisodeId:pending.id,attemptId:claimed.attemptId};
+    }
     checkerResult = { ok: false, reason: 'checker-process-error' };
   }
   if (goalExecutionPlan) {
@@ -1090,6 +1103,7 @@ function driveHeadlessRunLocked({
   attemptIdFactory,
   goalExecutionPlan = null,
   goalOwnerThreads = [],
+  goalCallAdmission = null,
 } = {}) {
   const sampleNow = typeof clock === 'function' ? clock : (now === undefined ? Date.now : () => now);
   const entryNow = now === undefined ? sampleNow() : now;
@@ -1202,6 +1216,7 @@ function driveHeadlessRunLocked({
     attemptIdFactory,
     goalExecutionPlan,
     goalOwnerThreads,
+    goalCallAdmission,
   });
   if (checkerResult) return checkerResult;
   if (!pendingHandoff(initialLoop)) {
