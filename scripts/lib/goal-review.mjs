@@ -11,7 +11,7 @@ import { leaseCheck } from './lease.mjs';
 import { wrap, contentHash } from './envelope.mjs';
 import { containedRealFile } from './fs-safe.mjs';
 import { isGoalDriven, exactGoalObject, boundedGoalText, goalRequirementIds, GOAL_ID } from './goal-contract.mjs';
-import { createExecutionRecord, transitionAttempt, attemptIsQuiescent, isAttemptObservation } from './attempt-state.mjs';
+import { createExecutionRecord, transitionAttempt, attemptIsQuiescent, isAttemptObservation, isExecutionRecord } from './attempt-state.mjs';
 import { captureGoalSnapshot, snapshotEvidenceRefs } from './goal-snapshot.mjs';
 import { ordinaryFinishProofState, workstreamClosureProofState } from './finish.mjs';
 import { checkBudget } from './budget.mjs';
@@ -103,7 +103,15 @@ export function goalPrerequisites(loop) {
   if (unmapped.length) missing.push('goal-requirements-unmapped');
   const obligations = loop.goal_obligations.filter(item => item.status !== 'resolved').map(item => item.id);
   if (obligations.length) missing.push('goal-obligations-unresolved');
-  if (loop.episodes.some(item => item.execution && !attemptIsQuiescent(item.execution))) missing.push('execution-not-quiescent');
+  if (loop.episodes.some(item => {
+    if (!item.execution) return false;
+    // Human-gated abandonment ends owner-inline work, which has no independent
+    // producer to reconcile. Preserve its historical running record: cancellation
+    // is not a successful return. External/invalid attempts still need real proof.
+    const cancelledInline = item.status === 'abandoned' && item.role === 'maker'
+      && isExecutionRecord(item.execution) && item.execution.mode === 'inline';
+    return !cancelledInline && !attemptIsQuiescent(item.execution);
+  })) missing.push('execution-not-quiescent');
   return { ok: missing.length === 0, missing, unmapped_requirement_ids: unmapped, unresolved_obligation_ids: obligations };
 }
 

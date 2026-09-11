@@ -94,7 +94,7 @@ export const ROUTE_FLAGS = Object.freeze({
   'state get': route(['field', 'json', ...L], { unread: Object.freeze(['json']) }),
   'state patch': route(['field', 'value', ...F, ...L]),
   pause: route(['reason', 'mode', ...F, ...L]),
-  recover: route(['confirm', 'supersede-affinity', 'reason', ...F, ...L]),
+  recover: route(['confirm', 'supersede-affinity', 'same-owner', 'reason', ...F, ...L]),
   'recovery acquire': route(['capsule', 'runtime', ...F, ...L]),
   'adapter resolve': route(['protocol', 'task', 'tier', 'verb', ...L]),
   'budget check': route([...L]),

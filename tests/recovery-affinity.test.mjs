@@ -38,6 +38,7 @@ import {
   acquireRecovery,
   recoverBoundary,
   recoverRun,
+  resumeSameOwner,
   supersedeAffinity,
 } from '../scripts/lib/recover.mjs';
 import { extendBudget } from '../scripts/lib/budget.mjs';
@@ -48,6 +49,74 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = join(REPO_ROOT, 'scripts', 'deep-loop.mjs');
 const STATE_MODULE_URL = new URL('../scripts/lib/state.mjs', import.meta.url).href;
 const NOW = Date.parse('2026-07-23T00:00:00.000Z');
+
+test('confirmed same-owner resume preserves affinity and pending evidence', () => {
+  const { root, runId } = openAffinityFixture('codex');
+  const before = readState(root, runId).data;
+  before.pause_reason = 'needs-human:INDEPENDENCE_UNAVAILABLE-review-seat-retry-exhausted';
+  writeState(root, runId, before);
+  const options = { expect: { owner: runId, generation: 1 }, confirm: true,
+    reason: 'User approved retry', now: NOW + 2000, clock: () => NOW + 2000 };
+  assert.throws(() => resumeSameOwner(root, runId, { ...options, confirm: false }), /CONFIRM_REQUIRED/);
+  assert.throws(() => resumeSameOwner(root, runId, { ...options, expect: { owner: runId, generation: 2 } }), /LEASE_FENCED/);
+  resumeSameOwner(root, runId, options);
+  const after = readState(root, runId).data;
+  assert.equal(after.status, 'running');
+  assert.equal(after.pause_reason, null);
+  assert.deepEqual(after.episodes, before.episodes);
+  assert.deepEqual(after.workstreams, before.workstreams);
+  assert.deepEqual(after.circuit_breaker, before.circuit_breaker);
+  assert.deepEqual(after.session_chain.sessions, before.session_chain.sessions);
+  assert.equal(after.session_chain.lease.generation, 1);
+  assert.equal(after.session_chain.lease.owner_run_id, runId);
+});
+
+test('same-owner resume cannot replace lost-host recovery or clear a breaker', () => {
+  const { root, runId } = openAffinityFixture('codex');
+  const options = { expect: { owner: runId, generation: 1 }, confirm: true,
+    reason: 'User approved retry', now: NOW + 2000, clock: () => NOW + 2000 };
+  assert.throws(() => resumeSameOwner(root, runId, options), /SAME_OWNER_PAUSE_INVALID/);
+  const state = readState(root, runId).data;
+  state.pause_reason = 'needs-human:review';
+  state.circuit_breaker.tripped = true;
+  writeState(root, runId, state);
+  assert.throws(() => resumeSameOwner(root, runId, options), /BREAKER_BLOCKED/);
+  assert.deepEqual(readState(root, runId).data, state);
+});
+
+test('same-owner CLI rejects ambiguous authority and resumes only once', () => {
+  const { root, runId } = openAffinityFixture('codex');
+  const state = readState(root, runId).data;
+  state.pause_reason = 'needs-human:review';
+  writeState(root, runId, state);
+  const args = ['recover', '--same-owner', '--confirm', '--reason', 'User approved retry',
+    '--owner', runId, '--generation', '1'];
+  assert.equal(invoke(root, runId, ['recover', '--same-owner', '--confirm',
+    '--owner', runId, '--generation', '1']).status, 2);
+  assert.notEqual(invoke(root, runId, [...args, '--supersede-affinity']).status, 0);
+  const result = invoke(root, runId, args);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).status, 'running');
+  assert.notEqual(invoke(root, runId, args).status, 0);
+});
+
+test('same-owner resume preserves hard budgets and in-flight handoffs', () => {
+  for (const mode of ['budget', 'handoff', 'released', 'residue']) {
+    const { root, runId } = openAffinityFixture('codex');
+    const state = readState(root, runId).data;
+    state.pause_reason = 'needs-human:review';
+    if (mode === 'budget') state.budget.max_wallclock_sec = 1;
+    if (mode === 'handoff') state.session_chain.lease.handoff_child_run_id = 'reserved-child';
+    if (mode === 'released') state.session_chain.lease.state = 'released';
+    if (mode === 'residue') state.session_chain.lease.handoff_idempotency_key = 'stale-reservation';
+    writeState(root, runId, state);
+    assert.throws(() => resumeSameOwner(root, runId, {
+      expect: { owner: runId, generation: 1 }, confirm: true, reason: 'User approved retry',
+      now: NOW + 2000, clock: () => NOW + 2000,
+    }), /BUDGET_BLOCKED|SAME_OWNER_LEASE_INVALID/);
+    assert.deepEqual(readState(root, runId).data, state);
+  }
+});
 
 function historicalCursor(owner, workstreamId, episodeId) {
   return {

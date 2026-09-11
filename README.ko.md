@@ -12,6 +12,15 @@ deep-loop는 독립 실행 가능한(standalone/독립) Claude Code / Codex / Gr
 
 실제 후보 버전 실험에서 효율적인 전체 목표 완료는 입증되지 않았습니다. [검증 한계](evals/goal-execution-hardening-evidence.md)를 확인하세요.
 
+## 사람 승인에 의한 동일 소유자 재개
+
+열린 워크스트림 affinity를 가진 active 소유자가 `needs-human:*`으로 일시정지했고
+진행 중인 handoff가 없다면, 사람의 명시 승인 후 `recover --same-owner --confirm
+--reason TEXT --owner ID --generation N --project-root ROOT --run-id RUN`으로 재개한다.
+소유자·generation·에피소드·리뷰 이력·미해결 의무는 유지하며 hard budget과 breaker는
+우회하지 않는다. 소실된 호스트 복구·소유권 인수·완료 증명이 아니다. 이 경로가 없는
+설치 버전에서 state 직접 편집이나 pause reason 변경으로 흉내 내지 않는다.
+
 ## 목표 계약 (v1.23.0)
 
 장기 작업과 접근 방식 변경 뒤에도 완료 조건을 유지하려면 목표 계약을 사용합니다. `init-run --goal-contract '<JSON>'`으로 durable schema `0.5.0`에 명시적으로 진입합니다. 해당 옵션이 없는 호출과 기존 run은 `0.4.0` 계약을 유지합니다. 진입 스킬은 사용자의 목표를 명시적인 요구사항 ID와 수락 조건으로 정리한 뒤 목표 기반 run을 만듭니다. 최소 계약 예시는 다음과 같습니다.

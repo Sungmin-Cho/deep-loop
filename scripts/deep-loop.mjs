@@ -74,6 +74,7 @@ import { detectAndPersist } from './lib/detect-terminal.mjs';
 import {
   acquireRecovery,
   recoverRun,
+  resumeSameOwner,
   supersedeAffinity,
 } from './lib/recover.mjs';
 import {
@@ -1704,7 +1705,7 @@ const handlers = {
   // The new-policy route never releases an open affinity to a generic future owner.
   recover: async (a) => {
     const allowed = new Set([
-      'confirm', 'supersede-affinity', 'reason', 'owner', 'generation',
+      'confirm', 'supersede-affinity', 'same-owner', 'reason', 'owner', 'generation',
       'project-root', 'run-id', 'now',
     ]);
     if (!knownFlagVocabulary(a, allowed) || !exactFlagGrammar(a, allowed)) {
@@ -1724,7 +1725,18 @@ const handlers = {
     const generation = intArg(f, 'generation');   // exits 3 on invalid/missing
     try {
       let result;
-      if (Object.hasOwn(f, 'supersede-affinity')) {
+      if (Object.hasOwn(f, 'same-owner')) {
+        if ((f['same-owner'] !== true && f['same-owner'] !== 'true')
+          || Object.hasOwn(f, 'supersede-affinity')) {
+          error('USAGE: --same-owner must be affirmative and exclusive'); return 2;
+        }
+        const reason = reqStr(f, 'reason');
+        if (!reason) { error('USAGE: same-owner resume requires --reason TEXT'); return 2; }
+        result = resumeSameOwner(root, runId, {
+          reason, expect: { owner, generation },
+          confirm: true, now: parseExplicitNow(f),
+        });
+      } else if (Object.hasOwn(f, 'supersede-affinity')) {
         if (f['supersede-affinity'] !== true && f['supersede-affinity'] !== 'true') {
           error('USAGE: --supersede-affinity must be affirmative');
           return 2;
@@ -1739,7 +1751,7 @@ const handlers = {
         });
       } else {
         if (Object.hasOwn(f, 'reason')) {
-          error('USAGE: --reason is valid only with --supersede-affinity');
+          error('USAGE: --reason requires --supersede-affinity or --same-owner');
           return 2;
         }
         result = recoverRun(root, runId, {

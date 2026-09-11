@@ -12,6 +12,7 @@ export function reviewedGoalWork(t, options = {}) {
   t.after(f.cleanup);
   const delivery = f.workstream('delivery', options.requirementIds || ['REQ-A']);
   const artifact = f.artifact(delivery, 'answer.mjs', 'export const answer = 42;\n');
+  options.beforeMaker?.(f, delivery, artifact);
   const maker = goalOk(f.cli(['episode', 'new', '--plugin', 'standalone', '--role', 'maker', '--kind', 'implementation', '--point', 'implementation', '--workstream', delivery.id, '--artifacts', JSON.stringify([artifact])])).id;
   const execution = goalOk(f.cli(['execution', 'prepare', '--episode', maker, '--mode', 'inline', '--stage', 'primary', '--task', 'Deliver A'])).execution;
   goalOk(f.cli(['execution', 'return', '--episode', maker, '--attempt', execution.attempt_id, '--artifacts', JSON.stringify([artifact])]));

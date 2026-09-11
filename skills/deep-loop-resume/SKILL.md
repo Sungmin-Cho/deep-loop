@@ -62,6 +62,21 @@ replay가 성립하지 않고, 그 경우는 §4-(b)③의 사람 런북 대상�
 > `root recovery acquire`로 한 소비만 nonce를 받지 않아 replay가 원리적으로 없다. 절이 없는데
 > 보유한 값이 있다면 그 값으로 한 번 재시도해 응답의 `proceed`로 판단한다.
 
+## 동일 소유자 needs-human 재개
+
+`resume-command`가 pending handoff 없음을 보고한 경우에만 fresh `state get`으로
+status, pause_reason, session_chain.lease, session_chain.sessions, workstreams를 확인한다.
+현재 세션이 소유한 active lease, `needs-human:*` pause, 열린 workstream affinity이고
+handoff child가 없을 때 **사람이 해당 정지 사유의 재시도를 명시 승인한 뒤에만**:
+
+```
+node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" recover --same-owner --confirm --reason "<human approval and retry reason>" --owner <owner_run_id> --generation <generation> --project-root "<canonical_project_root>" --run-id <run_id>
+```
+
+이 경로는 새 소유자를 만들지 않는다. 성공하면 단계 3으로 이동한다. budget/breaker,
+host-session-lost, 진행 중인 handoff 거부를 우회하거나 pause reason을 재표기하지 않는다.
+실패하면 오류를 그대로 보고한다. 완료·리뷰 증명과 미해결 의무는 별도로 충족해야 한다.
+
 ## Boundary handoff
 
 첫 줄이 현재 runtime의 `/deep-loop-resume` 또는

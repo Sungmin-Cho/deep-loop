@@ -140,6 +140,12 @@ human/confirm/reason route; it never waives an original requirement.
 
 ## Finish
 
+Human-confirmed abandoned inline makers are cancelled owner work, not live external
+producers. Their historical execution records remain unchanged and grant no completion
+credit. Goal prerequisites accept this cancellation while still requiring quiescence
+for external attempts, including abandoned external producers. Never use abandonment
+as evidence that an external process stopped.
+
 Use `goal status --json`. A stale proof calls for a fresh review; a fresh rejected
 result calls for real follow-up work for its failed IDs. Continue mode can do
 either in the current owner. In handoff mode the exact closed boundary comes
