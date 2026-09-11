@@ -63,13 +63,13 @@
     },
     {
       "file": "scripts/lib/goal-review.mjs",
-      "line": 213,
+      "line": 221,
       "literal": "if (!isAttemptObservation(observation) || observation.source !== 'supervisor-receipt' || review.transport !== 'codex') throw new Error('GOAL_OBSERVATION_UNSUPPORTED');",
       "reason": "Exact persisted goal transport identity for supervisor-only ingestion."
     },
     {
       "file": "scripts/lib/goal-review.mjs",
-      "line": 243,
+      "line": 251,
       "literal": "|| review.transport !== 'codex' || (issued.state === 'succeeded' && issued.settled !== true)) throw new Error('GOAL_HOST_RECEIPT_INVALID');",
       "reason": "Exact persisted goal transport identity for supervisor-only ingestion."
     },
