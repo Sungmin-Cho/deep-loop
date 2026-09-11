@@ -5,9 +5,58 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { reviewedGoalWork, goalOk, nativeObservation } from './helpers/reviewed-goal.mjs';
 import { makeGoalFixture, TEST_GOAL_CONTRACT } from './helpers/goal-fixture.mjs';
+import { goalPrerequisites } from '../scripts/lib/goal-review.mjs';
+import { createExecutionRecord, transitionAttempt } from '../scripts/lib/attempt-state.mjs';
 
 const finish = f => f.cli(['finish', '--status', 'completed', '--report', 'final-report.md']);
 const dispatch = f => goalOk(f.cli(['goal', 'dispatch', '--transport', 'native']));
+
+test('cancellation exception never hides malformed, un-abandoned or unknown external attempts', t => {
+  const f = reviewedGoalWork(t);
+  const base = f.state();
+  const inline = createExecutionRecord({ attemptId: 'synthetic-inline', mode: 'inline', stage: 'primary', task: 'test', now: 0 });
+  let external = createExecutionRecord({ attemptId: 'synthetic-external', mode: 'external', stage: 'primary', task: 'test', now: 0 });
+  external = transitionAttempt(external, 'start', { handle: 'unknown-producer', now: 0 });
+  const unknown = transitionAttempt(external, 'reconcile', { observation: nativeObservation('unknown', 'unknown-producer'), now: 0 });
+  for (const [status, role, execution] of [
+    ['abandoned', 'maker', { ...inline, handle: 'invalid-inline-handle' }],
+    ['in_progress', 'maker', inline],
+    ['abandoned', 'checker', inline],
+    ['abandoned', 'maker', unknown],
+  ]) {
+    const loop = structuredClone(base);
+    loop.episodes.push({ id: 'synthetic-cancelled', status, role, execution });
+    assert.ok(goalPrerequisites(loop).missing.includes('execution-not-quiescent'));
+  }
+});
+
+for (const mode of ['inline', 'external']) {
+  test(`abandoned ${mode} attempt preserves cancellation versus external liveness semantics`, (t) => {
+    let abandonedId, originalExecution;
+    const f = reviewedGoalWork(t, { beforeMaker(f, ws, artifact) {
+      abandonedId = goalOk(f.cli(['episode', 'new', '--plugin', 'standalone', '--role', 'maker',
+        '--kind', 'implementation', '--point', 'implementation', '--workstream', ws.id,
+        '--artifacts', JSON.stringify([artifact])])).id;
+      const execution = goalOk(f.cli(['execution', 'prepare', '--episode', abandonedId,
+        '--mode', mode, '--stage', 'primary', '--task', 'Cancelled earlier work'])).execution;
+      if (mode === 'external') goalOk(f.cli(['execution', 'start', '--episode', abandonedId,
+        '--attempt', execution.attempt_id, '--handle', 'possibly-live-producer']));
+      originalExecution = f.state().episodes.find(e => e.id === abandonedId).execution;
+      goalOk(f.cli(['episode', 'abandon', '--id', abandonedId, '--confirm', '--reason', 'Human cancellation']));
+    } });
+    const abandoned = f.state().episodes.find(e => e.id === abandonedId);
+    assert.equal(abandoned.status, 'abandoned');
+    assert.deepEqual(abandoned.execution, originalExecution, 'no fabricated return or completion credit');
+    const result = f.cli(['goal', 'dispatch', '--transport', 'native']);
+    if (mode === 'inline') {
+      goalOk(result);
+      assert.equal(finish(f).exit, 1, 'cancellation never replaces whole-goal review');
+    } else {
+      assert.equal(result.exit, 1);
+      assert.match(result.stderr, /execution-not-quiescent/);
+    }
+  });
+}
 function start(f, review) {
   return f.cli(['goal', 'start', '--id', review.id, '--attempt', review.execution.attempt_id, '--handle', 'synthetic-goal-reviewer']);
 }
