@@ -5,6 +5,22 @@ All notable changes to deep-loop are documented in this file.
 > Note: the `[1.1.0]`/`[1.2.0]` entries pre-date this changelog file (a known lag between
 > `plugin.json.version` and the changelog); this release does not retro-fill them.
 
+## [1.24.1] — 2026-09-11
+
+### Fixed
+
+- Add explicitly confirmed same-owner recovery for a needs-human pause with an
+  active, unchanged lease and open workstream affinity. Real budget/breaker and
+  handoff/recovery guards remain enforced inside the anchored transaction.
+- Treat human-abandoned, valid owner-inline makers as cancelled work when checking
+  whole-goal prerequisites, without rewriting execution history or granting
+  completion credit. External or unknown producers still require termination proof.
+
+### Compatibility
+
+- Durable schema versions and independent ordinary/whole-goal review requirements
+  are unchanged. This release does not claim production or real-agent efficacy.
+
 ## [1.24.0] — 2026-09-08
 
 ### Added
