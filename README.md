@@ -12,6 +12,16 @@ deep-loop is a standalone Claude Code / Codex / Grok CLI plugin that runs durabl
 
 Measured candidate trials did not establish efficient end-to-end completion; see [validation limitations](evals/goal-execution-hardening-evidence.md).
 
+## Confirmed same-owner resume
+
+An active owner paused for `needs-human:*` with an open workstream affinity and
+no pending handoff can resume using `recover --same-owner --confirm --reason TEXT
+--owner ID --generation N --project-root ROOT --run-id RUN`. Obtain explicit human
+approval first. This route preserves owner, generation, episodes, review history,
+and obligations; hard budget and breaker gates still apply. It is not lost-host
+recovery, takeover, or completion proof. Installed versions without this route
+must not emulate it by editing state or changing the pause reason.
+
 ## Goal contracts (v1.23.0)
 
 Use a goal contract when completion needs to survive long-running work and changes of approach. `init-run --goal-contract '<JSON>'` opts into durable schema `0.5.0`; calls without it and existing runs retain the `0.4.0` contract. The entry skill compiles the user's goal into explicit requirement IDs and acceptance criteria before creating the goal-driven run. A minimal contract is:

@@ -942,6 +942,45 @@ export function recoverRun(root, runId, {
   return recoverBoundary(root, runId, { confirm, expect, now, clock });
 }
 
+// Human approval resumes the existing owner; it grants no completion or review credit.
+export function resumeSameOwner(root, runId, {
+  expect, confirm, reason, now, clock = Date.now,
+} = {}) {
+  if (confirm !== true) throw new Error('CONFIRM_REQUIRED: pass --confirm (human-only)');
+  assertReason(reason);
+  const event = { type: 'same-owner-resumed', data: { reason }, now };
+  appendAnchored(root, runId, event, loop => {
+    loop.status = 'running';
+    loop.pause_reason = null;
+    loop.session_chain.lease.resume_policy = null;
+  }, loop => {
+    assertFence(loop, expect);
+    assertNoRecoveryInFlight(loop);
+    const lease = loop.session_chain.lease;
+    if (loop.status !== 'paused' || !loop.pause_reason?.startsWith('needs-human:')) {
+      throw new Error('SAME_OWNER_PAUSE_INVALID');
+    }
+    if (lease.state !== 'active' || !['idle', 'acquired'].includes(lease.handoff_phase)
+      || lease.resume_policy !== 'human'
+      || ['handoff_child_run_id', 'handoff_idempotency_key', 'handoff_trigger',
+        'takeover_kind', 'recovery_rel', 'recovery_sha256', 'recovery_discriminator',
+        'handoff_boundary_event', 'handoff_project_binding_generation',
+        'handoff_project_root_digest'].some(key => lease[key] != null)) {
+      throw new Error('SAME_OWNER_LEASE_INVALID');
+    }
+    const affinity = openAffinityState(loop);
+    if (!affinity || affinity.session.run_id !== expect.owner || openScopeSessions(loop).length !== 1) {
+      throw new Error('SAME_OWNER_AFFINITY_REQUIRED');
+    }
+    const blocked = recoverySafetyReason(loop, lockedSafetyTime(clock, 'same-owner resume'));
+    if (blocked) throw new Error(blocked);
+    event.data.previous_pause_reason = loop.pause_reason;
+    event.data.owner = expect.owner;
+    event.data.generation = expect.generation;
+  });
+  return { ok: true, status: 'running', owner: expect.owner, generation: expect.generation };
+}
+
 function recoveryArtifactBytesLocked(root, runId, rel, guard) {
   const normalized = normalizePortableRelativePath(rel);
   if (normalized !== rel || !normalized?.startsWith('recoveries/')) {
