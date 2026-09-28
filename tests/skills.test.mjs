@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { POLICY_PIN_REASONS } from '../scripts/lib/router-adapter.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const skillPath = (dir) => join(ROOT, 'skills', dir, 'SKILL.md');
@@ -1656,4 +1657,64 @@ test('Path V requires attended visible approve before emit', () => {
   const emit = src.indexOf('handoff emit');
   assert.ok(attended !== -1 && emit !== -1, 'Path V must name attended visible approve and emit');
   assert.ok(attended < emit, 'attended visible approve must precede emit');
+});
+
+// Issue #73: the router procedure is shared by every route consumer and sends
+// the run's frozen digest as policy_pin through `router probe`.
+function routerProcedure(src) {
+  const start = src.indexOf('## 1.75. 라우터 절차');
+  const end = src.indexOf('## 2. Legacy Action 분기');
+  assert.ok(start >= 0, 'continue must define §1.75 라우터 절차');
+  assert.ok(end > start, '§1.75 must precede the legacy action table');
+  return src.slice(start, end);
+}
+
+test('continue §1.75 runs router probe and sends the frozen policy_pin', () => {
+  const src = readFileSync(skillPath('deep-loop-continue'), 'utf8');
+  const sec = routerProcedure(src);
+  assert.match(sec, /router probe --json/);
+  assert.match(sec, /"policy_pin"/);
+  assert.match(sec, /키를 넣지 않는다/);
+  assert.match(sec, /python3 <probe\.route_task>/);
+  assert.match(sec, /합성하지 않는다|합성하거나/);
+  assert.ok(!src.includes('DEEP_MODEL_ROUTER_CLI 또는 설치된 플러그인 캐시의'),
+    'the skill must not locate route_task.py on its own');
+  const stop = sec.indexOf('degrade하지 않는다');
+  const absent = sec.indexOf('라우터 부재다');
+  assert.ok(stop >= 0 && absent >= 0 && stop < absent, 'a failing probe stops before the router-absent rule applies');
+  assert.match(sec, /band를 정할 수 없으면 HIGH/);
+});
+
+test('continue §1.75 names every router pin failure with its own reason token', () => {
+  const sec = routerProcedure(readFileSync(skillPath('deep-loop-continue'), 'utf8'));
+  const rows = [...sec.matchAll(/^\| `(pin_[a-z_]+)` \| `router-policy-pin:(pin_[a-z_]+)` \|/gm)];
+  assert.deepEqual(rows.map((row) => row[1]).sort(), [...POLICY_PIN_REASONS].sort());
+  for (const row of rows) assert.equal(row[1], row[2]);
+  const pinRule = sec.indexOf('MODEL_STATE_UNAVAILABLE');
+  const genericRule = sec.indexOf('`1`/`2`/`5`');
+  assert.ok(pinRule >= 0 && genericRule > pinRule, 'the pin rule is judged before the generic exit rule');
+});
+
+test('continue §1.75 lists each consumer with its fenced recording command', () => {
+  const sec = routerProcedure(readFileSync(skillPath('deep-loop-continue'), 'utf8'));
+  assert.match(sec, /episode record --id [^\n|]*--status in_progress[^\n|]*--routing[^\n|]*--owner[^\n|]*--generation/);
+  assert.match(sec, /review dispatch [^\n|]*--routing[^\n|]*--owner[^\n|]*--generation/);
+  assert.match(sec, /execution prepare [^\n|]*--routing[^\n|]*--owner[^\n|]*--generation/);
+});
+
+test('dispatch_maker, dispatch_checker and the v0.5 maker path delegate to §1.75', () => {
+  const src = readFileSync(skillPath('deep-loop-continue'), 'utf8');
+  const maker = src.slice(src.indexOf('### dispatch_maker'), src.indexOf('### dispatch_checker'));
+  const checker = src.slice(src.indexOf('### dispatch_checker'), src.indexOf('### fix_episode'));
+  assert.match(maker, /§1\.75/);
+  assert.match(checker, /§1\.75/);
+  assert.match(src, /grok Route E는 degrade-진행이 없다/);
+  const goal = readFileSync(join(ROOT, 'skills', 'deep-loop-workflow', 'references', 'goal-execution.md'), 'utf8');
+  const shared = goal.slice(goal.indexOf('## Shared maker path'), goal.indexOf('## Claimed ordinary checker'));
+  assert.match(shared, /§1\.75/);
+  assert.match(shared, /--routing/);
+  assert.match(shared, /router probe/);
+  const retry = goal.slice(goal.indexOf('A new retry can use a fresh route.'));
+  assert.match(retry.slice(0, 400), /§1\.75/);
+  assert.match(goal, /Freeze routing on a resumed attempt/);
 });
