@@ -94,9 +94,13 @@ function isPersonalSkillPath(path) {
 // through a relative path. Decide on normalized segments of the path as given
 // (resolve() would erase the `..`): `.././`, `..//` and mixed separators are the
 // same checkout, while `../deep-model-router2` and absolute paths are not.
-function isForbiddenRelativeCheckout(path) {
-  const text = posix(path);
-  if (text.startsWith('/') || /^[A-Za-z]:/.test(text)) return false;
+// A drive-absolute (`C:/`) or rooted/UNC (`/`, `//server`) path is absolute; a
+// drive-relative `C:..\x` still resolves against that drive's cwd, so its
+// remainder is judged like any other relative path.
+export function isForbiddenRelativeCheckout(path) {
+  let text = posix(path);
+  if (/^[A-Za-z]:\//.test(text) || text.startsWith('/')) return false;
+  text = text.replace(/^[A-Za-z]:/, '');
   const segments = posixPath.normalize(text).toLowerCase().split('/');
   return segments.some((segment, index) => segment === SIBLING_CHECKOUT && segments[index - 1] === '..');
 }

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createFileSymlinkOrSkip } from './helpers/fs-fixtures.mjs';
-import { canonicalRouteTask, locateDeepModelRouter } from '../scripts/lib/locate-deep-model-router.mjs';
+import { canonicalRouteTask, isForbiddenRelativeCheckout, locateDeepModelRouter } from '../scripts/lib/locate-deep-model-router.mjs';
 import {
   attachRoutingToDescriptor,
   assertRoutingDigest,
@@ -720,4 +720,17 @@ test('locator: an uppercase Codex personal skill path is rejected too', () => {
   mkdirSync(dirname(upper), { recursive: true });
   writeFileSync(upper, '# personal\n');
   assert.equal(locateDeepModelRouter({ env: { DEEP_MODEL_ROUTER_CLI: upper }, home }), null);
+});
+
+test('locator: Windows drive-relative sibling spellings are relative; drive-absolute and UNC paths are not', () => {
+  // Judge the spelling rule directly: on a POSIX host a `C:` path never exists,
+  // so a locator-level null would pass without exercising the rule.
+  const tail = 'skills\\model-router\\scripts\\route_task.py';
+  for (const spelled of [`C:..\\deep-model-router\\${tail}`, `c:.././deep-model-router/x`, `C:deep\\..\\..\\deep-model-router`]) {
+    assert.equal(isForbiddenRelativeCheckout(spelled), true, spelled);
+  }
+  for (const absolute of [`C:\\x\\..\\deep-model-router\\${tail}`, `C:/deep-model-router`, `\\\\server\\share\\..\\deep-model-router`,
+    '/abs/../deep-model-router', '../deep-model-router2/x']) {
+    assert.equal(isForbiddenRelativeCheckout(absolute), false, absolute);
+  }
 });
