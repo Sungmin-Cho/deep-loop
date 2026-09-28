@@ -92,6 +92,9 @@ smoke and transport fixtures must not be described as statistical efficacy evide
   and the attested spawn/finalize binders. `DEEP_LOOP_ROOT/scripts/bridge-exec.mjs`
   constructs child argv from the probed mechanism; `DEEP_LOOP_ROOT/scripts/bridge-finalize.mjs`
   copies stdout only from a SUCCEEDED supervisor receipt. They do not mutate loop state.
+  `DEEP_LOOP_ROOT/scripts/lib/router-probe.mjs` owns the read-only `router probe`: the
+  realpath and manifest version of the router install the locator selects, and the run's
+  frozen-digest `policy_pin`. It reads files only and never spawns.
 - Hook and headless glue, spelled out rather than brace-expanded so each path stays
   greppable — `DEEP_LOOP_ROOT/tests/docs.test.mjs` checks these by literal, which is how a stale
   `.sh` wrapper reference was caught once:
