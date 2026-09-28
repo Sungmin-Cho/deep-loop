@@ -243,7 +243,7 @@ python3 <probe.route_task> --request-json <request.json> --format json
 {"request": <보낸 요청 JSON>, "decision": {"route_schema_version": 1, "router_plugin_version": "<stdout 값>", "policy_sha256": "<stdout 값>"}, "selected_model": "<stdout 값>", "selected_effort_native": "<stdout 값>", "effective_policy": <stdout 값 또는 {}>, "provenance": "router"}
 ```
 
-라우터 JSON에 `decision_fingerprint` 또는 `request_sha256`가 있으면 그대로
+라우터 JSON에 `decision_fingerprint` 또는 `request_sha256`가 있으면 `decision` 안에 그대로
 포함하고, 없으면 생략한다. 둘 중 어느 값도 스킬이 합성하지 않는다. 관측 파일
 `observations/<subject_sha256>.json`은 터미널 커밋 뒤 커널이 발행하며, 스킬은
 읽거나 쓰지 않고 `--artifacts`에도 넣지 않는다.

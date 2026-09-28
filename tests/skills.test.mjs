@@ -1696,6 +1696,8 @@ test('continue §1.75 spells out the RouteRequestV1 and --routing shapes an owne
   assert.match(sec, /계약에 없는 키는[^\n]*exit 2/);
   assert.match(sec, /`request`는 보낸 요청 JSON 그대로/);
   assert.match(sec, /"provenance": "router"/);
+  assert.match(sec, /`decision_fingerprint`[^\n]*`request_sha256`[^\n]*`decision` 안에/,
+    'optional fingerprints go inside decision, where route observation reads them');
 });
 
 test('continue §1.75 names every router pin failure with its own reason token', () => {
