@@ -1688,6 +1688,16 @@ test('continue §1.75 runs router probe and sends the frozen policy_pin', () => 
   assert.match(sec, /v0\.5 새 retry는/, 'a new v0.5 retry may route afresh');
 });
 
+test('continue §1.75 spells out the RouteRequestV1 and --routing shapes an owner must build', () => {
+  const sec = routerProcedure(readFileSync(skillPath('deep-loop-continue'), 'utf8'));
+  for (const key of ['"route_schema_version": 1', '"task_class"', '"complexity"', '"uncertainty"', '"blast_radius"', '"reversibility"', '"runtime"']) {
+    assert.ok(sec.includes(key), `RouteRequestV1 shape must name ${key}`);
+  }
+  assert.match(sec, /계약에 없는 키는[^\n]*exit 2/);
+  assert.match(sec, /`request`는 보낸 요청 JSON 그대로/);
+  assert.match(sec, /"provenance": "router"/);
+});
+
 test('continue §1.75 names every router pin failure with its own reason token', () => {
   const sec = routerProcedure(readFileSync(skillPath('deep-loop-continue'), 'utf8'));
   const rows = [...sec.matchAll(/^\| `(pin_[a-z_]+)` \| `router-policy-pin:(pin_[a-z_]+)` \|/gm)];

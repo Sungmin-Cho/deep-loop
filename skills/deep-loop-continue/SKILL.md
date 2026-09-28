@@ -205,7 +205,13 @@ node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" router probe --json --project-root "
 
    exit가 0이 아니면 degrade하지 않는다. 이 tick을 멈추고 커널 진단을 그대로 보고한다. exit 0이고 `route_task`가 null이면 라우터 부재다. `reasons`에 `router-path-rejected`가 있으면 "플러그인 캐시의 `route_task.py` symlink를 정리하거나 `DEEP_MODEL_ROUTER_CLI`를 지정하라"를 보고에 포함한다. python3 부재도 라우터 부재다. 개인 `~/.claude/skills/model-router` 심링크와 `../deep-model-router` checkout은 커널 locator가 거부한다.
 
-2. 분류(`task_class`, complexity / uncertainty / blast_radius / reversibility, flags, runtime)로 RouteRequestV1을 만든다. probe의 `policy_pin`이 문자열이면 요청 JSON에 `"policy_pin": "<그 값>"`을 그대로 넣고, null이면 키를 넣지 않는다. pin 값을 합성하거나 다른 곳에서 가져오지 않는다.
+2. 분류로 RouteRequestV1 JSON 파일을 만든다. 최소 형태:
+
+```json
+{"route_schema_version": 1, "task_class": "<IMPLEMENTATION 등 대문자 class>", "complexity": 0, "uncertainty": 0, "blast_radius": 0, "reversibility": 0, "flags": [], "runtime": "claude_code|codex|grok"}
+```
+
+   네 차원은 0–3 정수, `route_schema_version`은 정수 1이다. 필요하면 router 계약의 선택 키(`reasoning_centric`, `availability_snapshot`, `local_policy` 등)를 더할 수 있지만, 계약에 없는 키는 router가 exit 2로 거부한다. probe의 `policy_pin`이 문자열이면 요청 JSON에 `"policy_pin": "<그 값>"`을 그대로 넣고, null이면 키를 넣지 않는다. pin 값을 합성하거나 다른 곳에서 가져오지 않는다.
 
 3. probe가 반환한 경로만 실행한다. router를 따로 찾지 않는다:
 
@@ -231,7 +237,11 @@ python3 <probe.route_task> --request-json <request.json> --format json
   - LOW/MEDIUM이면 `--routing` 없이 진행(현행 session_profile 단일 전파)
 - `TERMINATION_UNCONFIRMED` 뒤에는 라우터 write-capable retry 금지
 
-`--routing` 최소 키: `request`, `decision`(`route_schema_version` / `router_plugin_version` / `policy_sha256`), `selected_model`, `selected_effort_native`, `effective_policy`, `provenance`.
+`--routing` 최소 키: `request`, `decision`(`route_schema_version` / `router_plugin_version` / `policy_sha256`), `selected_model`, `selected_effort_native`, `effective_policy`, `provenance`. `request`는 보낸 요청 JSON 그대로(`policy_pin` 포함)이고, 나머지는 router stdout에서 옮긴다:
+
+```json
+{"request": <보낸 요청 JSON>, "decision": {"route_schema_version": 1, "router_plugin_version": "<stdout 값>", "policy_sha256": "<stdout 값>"}, "selected_model": "<stdout 값>", "selected_effort_native": "<stdout 값>", "effective_policy": <stdout 값 또는 {}>, "provenance": "router"}
+```
 
 라우터 JSON에 `decision_fingerprint` 또는 `request_sha256`가 있으면 그대로
 포함하고, 없으면 생략한다. 둘 중 어느 값도 스킬이 합성하지 않는다. 관측 파일
