@@ -73,6 +73,13 @@ function acceptRouteTask(path) {
   return resolved;
 }
 
+// Realpath of a located route_task.py after the same checks the env overrides
+// get. Cache hits come back lexical from the walk, so a caller that must know
+// which install actually runs re-canonicalizes here.
+export function canonicalRouteTask(path) {
+  return typeof path === 'string' && path.length > 0 ? acceptRouteTask(path) : null;
+}
+
 function isPersonalSkillPath(path) {
   const text = posix(path);
   return PERSONAL_MARKERS.some((marker) => text.includes(marker));
