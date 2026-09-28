@@ -1,10 +1,10 @@
 import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, posix as posixPath, resolve } from 'node:path';
 import { pathWithin } from './fs-safe.mjs';
 
 const ROUTE_TASK = 'route_task.py';
-const RELATIVE_CHECKOUT = '../deep-model-router';
+const SIBLING_CHECKOUT = 'deep-model-router';
 const PERSONAL_MARKERS = ['/.claude/skills/model-router', '/.codex/skills/model-router'];
 const CACHE_SUFFIX = '/skills/model-router/scripts/route_task.py';
 const VERSION_RE = /\/deep-model-router\/([^/]+)\/skills\/model-router\/scripts\/route_task\.py$/;
@@ -90,8 +90,15 @@ function isPersonalSkillPath(path) {
   return PERSONAL_MARKERS.some((marker) => text.includes(marker));
 }
 
+// The forbidden source is the sibling `../deep-model-router` checkout reached
+// through a relative path. Decide on normalized segments of the path as given
+// (resolve() would erase the `..`): `.././`, `..//` and mixed separators are the
+// same checkout, while `../deep-model-router2` and absolute paths are not.
 function isForbiddenRelativeCheckout(path) {
-  return posix(path).toLowerCase().includes(RELATIVE_CHECKOUT);
+  const text = posix(path);
+  if (text.startsWith('/') || /^[A-Za-z]:/.test(text)) return false;
+  const segments = posixPath.normalize(text).toLowerCase().split('/');
+  return segments.some((segment, index) => segment === SIBLING_CHECKOUT && segments[index - 1] === '..');
 }
 
 function parseSemver(version) {

@@ -665,3 +665,59 @@ test('locator: personal skill markers match regardless of letter case', (t) => {
   const located = locateDeepModelRouter({ env: {}, home });
   assert.ok(located === null || canonicalRouteTask(located) === null, 'a cache hit that resolves into a personal tree is never executable');
 });
+
+test('locator: every relative spelling of the sibling checkout is rejected, by path segment', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'dl-loc-seg-')));
+  const cwd = join(base, 'project');
+  mkdirSync(cwd, { recursive: true });
+  const sibling = join(base, 'deep-model-router', 'skills', 'model-router', 'scripts', 'route_task.py');
+  mkdirSync(dirname(sibling), { recursive: true });
+  writeFileSync(sibling, '#!/usr/bin/env python3\n');
+  const tail = 'skills/model-router/scripts/route_task.py';
+  for (const spelled of [
+    `.././deep-model-router/${tail}`,
+    `..//deep-model-router/${tail}`,
+    `./../deep-model-router/${tail}`,
+    `x/../../deep-model-router/${tail}`,
+    `..\\.\\deep-model-router\\${tail.replaceAll('/', '\\')}`,
+    `../DEEP-MODEL-ROUTER/${tail}`,
+  ]) {
+    assert.equal(locateDeepModelRouter({ env: { DEEP_MODEL_ROUTER_CLI: spelled }, home: base, cwd }), null, spelled);
+    assert.equal(canonicalRouteTask(spelled, { cwd }), null, spelled);
+  }
+  assert.equal(locateDeepModelRouter({ env: { DEEP_MODEL_ROUTER_ROOT: '.././deep-model-router' }, home: base, cwd }), null);
+});
+
+test('locator: a differently named sibling and absolute overrides containing .. stay allowed', () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'dl-loc-abs-')));
+  const cwd = join(home, 'project');
+  mkdirSync(cwd, { recursive: true });
+  const other = join(home, 'deep-model-router2', 'skills', 'model-router', 'scripts', 'route_task.py');
+  mkdirSync(dirname(other), { recursive: true });
+  writeFileSync(other, '#!/usr/bin/env python3\n');
+  assert.equal(locateDeepModelRouter({
+    env: { DEEP_MODEL_ROUTER_CLI: '../deep-model-router2/skills/model-router/scripts/route_task.py' }, home, cwd,
+  }), realpathSync(other));
+  const cacheBase = join(home, '.claude', 'plugins', 'cache', 'vendor');
+  const low = join(cacheBase, 'deep-model-router', '1.15.0', 'skills', 'model-router', 'scripts', 'route_task.py');
+  const high = join(cacheBase, 'deep-model-router', '1.16.1', 'skills', 'model-router', 'scripts', 'route_task.py');
+  for (const file of [low, high]) {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, '#!/usr/bin/env python3\n');
+  }
+  mkdirSync(join(cacheBase, 'staging'), { recursive: true });
+  const viaDots = join(cacheBase, 'staging') + '/../deep-model-router/1.15.0';
+  assert.equal(locateDeepModelRouter({ env: { DEEP_MODEL_ROUTER_ROOT: viaDots }, home, cwd }), realpathSync(low),
+    'an explicit absolute ROOT with .. selects that install, not the higher fallback');
+  assert.equal(locateDeepModelRouter({
+    env: { DEEP_MODEL_ROUTER_CLI: `${viaDots}/skills/model-router/scripts/route_task.py` }, home, cwd,
+  }), realpathSync(low));
+});
+
+test('locator: an uppercase Codex personal skill path is rejected too', () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'dl-loc-codex-case-')));
+  const upper = join(home, '.CODEX', 'SKILLS', 'model-router', 'scripts', 'route_task.py');
+  mkdirSync(dirname(upper), { recursive: true });
+  writeFileSync(upper, '# personal\n');
+  assert.equal(locateDeepModelRouter({ env: { DEEP_MODEL_ROUTER_CLI: upper }, home }), null);
+});
