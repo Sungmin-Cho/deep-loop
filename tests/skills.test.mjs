@@ -1683,6 +1683,9 @@ test('continue §1.75 runs router probe and sends the frozen policy_pin', () => 
   const absent = sec.indexOf('라우터 부재다');
   assert.ok(stop >= 0 && absent >= 0 && stop < absent, 'a failing probe stops before the router-absent rule applies');
   assert.match(sec, /band를 정할 수 없으면 HIGH/);
+  assert.match(sec, /legacy `fix_episode`와 v0\.5 resumed attempt는 이 절차를 부르지 않/,
+    'only the legacy fix and a resumed v0.5 attempt skip routing');
+  assert.match(sec, /v0\.5 새 retry는/, 'a new v0.5 retry may route afresh');
 });
 
 test('continue §1.75 names every router pin failure with its own reason token', () => {

@@ -45,7 +45,8 @@ export function probeRouterPin({
   locate = locateDeepModelRouter,
 } = {}) {
   const located = locate({ env, home, cwd });
-  const routeTask = located ? canonicalRouteTask(located) : null;
+  // A relative result means relative to the caller's cwd, not this process's.
+  const routeTask = located ? canonicalRouteTask(located, { cwd }) : null;
   const routerReason = located && !routeTask ? 'router-path-rejected' : null;
   const routerVersion = routeTask ? readRouterVersion(routeTask) : null;
   return { ok: true, ...routerPinContext({ loop: loopData, routeTask, routerVersion, routerReason }) };

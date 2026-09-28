@@ -209,24 +209,30 @@ function probeCli(args, { home, env = {} }) {
   });
 }
 
+// Fixed clock and no terminal probing: the seed never reads the real time or env.
+const SEED_NOW = Date.parse('2026-08-16T00:00:00Z');
+
 function seedRun() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'dl-probe-run-')));
-  const { runId } = initRun(root, { runtime: 'claude', goal: 'g', now: new Date('2026-08-16T00:00:00Z') });
+  const { runId } = initRun(root, {
+    runtime: 'claude', goal: 'g', now: new Date(SEED_NOW), env: {}, platform: 'linux', run: () => ({ code: 1 }),
+  });
   return { root, runId, fence: { owner: runId, generation: 1, intent: 'business' } };
 }
 
 function recordRoutedMaker({ root, runId, fence }, policy = POLICY_A) {
   const ws = newWorkstream(root, runId, {
-    title: 'impl', branch: 'impl', worktree: '.claude/worktrees/impl', fence,
+    title: 'impl', branch: 'impl', worktree: '.claude/worktrees/impl', fence, now: SEED_NOW,
   }).id;
   const { id } = newEpisode(root, runId, {
     plugin: 'deep-work', role: 'maker', kind: 'implementation', point: 'implementation',
-    workstream: ws, expectedArtifacts: ['art.txt'], fence,
+    workstream: ws, expectedArtifacts: ['art.txt'], fence, now: SEED_NOW,
   });
   recordEpisode(root, runId, id, {
     status: 'in_progress',
     routing: frozenLoop(policy).episodes[0].routing,
     fence,
+    now: SEED_NOW,
   });
   return id;
 }
@@ -289,4 +295,37 @@ test('router probe CLI: usage errors are exit 2 and a damaged run is exit 1', ()
   assert.notEqual(readFileSync(loopPath, 'utf8'), loop, 'fixture must actually damage loop.json');
   const damaged = probeCli(['probe', '--json', ...locator], { home });
   assert.equal(damaged.status, 1, damaged.stdout + damaged.stderr);
+});
+
+test('probe: an injected relative locator result resolves against the supplied cwd', () => {
+  const home = tempHome();
+  const cwd = join(home, 'project');
+  mkdirSync(cwd, { recursive: true });
+  const routeTask = installTree(join(home, 'project', 'router'), { version: '1.16.1' });
+  const probe = probeRouterPin({
+    loopData: frozenLoop(), env: {}, home, cwd,
+    locate: () => join('router', 'skills', 'model-router', 'scripts', 'route_task.py'),
+  });
+  assert.equal(probe.route_task, realpathSync(routeTask));
+  assert.equal(probe.policy_pin, POLICY_A);
+});
+
+test('router probe CLI: a valueless --project-root is a usage error', () => {
+  const home = tempHome();
+  const seeded = seedRun();
+  const result = probeCli(['probe', '--json', '--project-root', '--run-id', seeded.runId], { home });
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+});
+
+test('probe: an injected relative ../deep-model-router result is rejected before resolution', () => {
+  const base = tempHome();
+  const cwd = join(base, 'project');
+  mkdirSync(cwd, { recursive: true });
+  installTree(join(base, 'deep-model-router'), { version: '1.16.1' });
+  const probe = probeRouterPin({
+    loopData: frozenLoop(), env: {}, home: base, cwd,
+    locate: () => '../deep-model-router/skills/model-router/scripts/route_task.py',
+  });
+  assert.equal(probe.route_task, null);
+  assert.deepEqual(probe.reasons, ['router-path-rejected']);
 });

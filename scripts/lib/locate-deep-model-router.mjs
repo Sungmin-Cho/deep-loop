@@ -76,8 +76,11 @@ function acceptRouteTask(path) {
 // Realpath of a located route_task.py after the same checks the env overrides
 // get. Cache hits come back lexical from the walk, so a caller that must know
 // which install actually runs re-canonicalizes here.
-export function canonicalRouteTask(path) {
-  return typeof path === 'string' && path.length > 0 ? acceptRouteTask(path) : null;
+// A relative path resolves against `cwd`; its spelling is checked first.
+export function canonicalRouteTask(path, { cwd = process.cwd() } = {}) {
+  if (typeof path !== 'string' || path.length === 0) return null;
+  if (isForbiddenRelativeCheckout(path) || isPersonalSkillPath(path)) return null;
+  return acceptRouteTask(resolve(cwd || process.cwd(), path));
 }
 
 // Case-folded: Windows and default macOS volumes resolve `.CLAUDE/SKILLS` to the

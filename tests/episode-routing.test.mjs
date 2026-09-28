@@ -330,7 +330,9 @@ test('a pinned request does not bypass the digest backstop on either legacy writ
   }), /EPISODE_ROUTING_DIGEST_MISMATCH/);
 });
 
-test('a fix maker reuses the rejected maker routing, pin included, byte for byte', () => {
+// Record-copy only: the kernel does not link a fix to its source maker here, so this
+// proves a copied pinned record is accepted intact, not which maker the skill picks.
+test('a fix maker accepts a copied pinned routing record byte for byte', () => {
   const { root, runId, fence } = seed();
   const pinned = routingFixture({ request: { policy_pin: POLICY_A } });
   const { ws, id: makerId } = readyMaker(root, runId, fence, { routing: pinned });

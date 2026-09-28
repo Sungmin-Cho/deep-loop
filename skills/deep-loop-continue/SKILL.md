@@ -195,7 +195,7 @@ route가 필요한 곳에서만 이 절차를 부른다.
 | legacy `dispatch_checker` | Route A/B/C/E 선택 후, spawn 전에 maker와 별도로 1회 | `review dispatch --point <review_point> --workstream <workstream_id> --routing '<routing_json_compact>' --owner <owner_run_id> --generation <n>` |
 | v0.5 maker 새 primary attempt·새 retry | route를 쓸 때만 | `execution prepare --episode <episode_id> --mode <mode> --stage primary --task <task> --routing '<routing_json_compact>' --owner <owner_run_id> --generation <n>` |
 
-각 소비자 절의 실제 명령(`--project-root`, `--run-id` 포함)이 정본이다. 이 표는 어느 명령에 `--routing`을 붙이는지만 보여 준다. `fix_episode`와 v0.5 resumed attempt는 이 절차를 부르지 않고 기존 record를 그대로 쓴다.
+각 소비자 절의 실제 명령(`--project-root`, `--run-id` 포함)이 정본이다. 이 표는 어느 명령에 `--routing`을 붙이는지만 보여 준다. legacy `fix_episode`와 v0.5 resumed attempt는 이 절차를 부르지 않고 기존 record를 그대로 쓴다. v0.5 새 retry는 새 attempt이므로 위 표대로 이 절차로 새로 route할 수 있다.
 
 1. router를 판별한다:
 

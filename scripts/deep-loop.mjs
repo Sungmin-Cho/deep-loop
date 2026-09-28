@@ -1462,6 +1462,10 @@ const handlers = {
     if (verb !== 'probe') { error(`unknown router verb: ${verb ?? '<none>'}`); return 2; }
     const f = parseFlags(rest);
     if (f.json !== true) { error('USAGE: router probe requires --json'); return 2; }
+    if (Object.hasOwn(f, 'project-root') && reqStr(f, 'project-root') === null) {
+      error('USAGE: explicit --project-root requires a non-empty value');
+      return 2;
+    }
     const root = rootOf(f);
     const runId = exactReadRunId(f);
     if (!runId) return exactReadFailureCode(f);
