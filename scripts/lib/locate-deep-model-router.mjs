@@ -80,13 +80,15 @@ export function canonicalRouteTask(path) {
   return typeof path === 'string' && path.length > 0 ? acceptRouteTask(path) : null;
 }
 
+// Case-folded: Windows and default macOS volumes resolve `.CLAUDE/SKILLS` to the
+// same tree as `.claude/skills`, so a case variant must not slip past the markers.
 function isPersonalSkillPath(path) {
-  const text = posix(path);
+  const text = posix(path).toLowerCase();
   return PERSONAL_MARKERS.some((marker) => text.includes(marker));
 }
 
 function isForbiddenRelativeCheckout(path) {
-  return posix(path).includes(RELATIVE_CHECKOUT);
+  return posix(path).toLowerCase().includes(RELATIVE_CHECKOUT);
 }
 
 function parseSemver(version) {
@@ -144,13 +146,14 @@ export function locateDeepModelRouter({
   cwd = process.cwd(),
 } = {}) {
   const cli = env?.DEEP_MODEL_ROUTER_CLI;
-  if (cli) {
+  // Check the spelling as given: resolve() would erase the `../` of a sibling checkout.
+  if (cli && !isForbiddenRelativeCheckout(cli)) {
     const hit = acceptRouteTask(resolve(cwd || process.cwd(), cli));
     if (hit) return hit;
   }
 
   const root = env?.DEEP_MODEL_ROUTER_ROOT;
-  if (root) {
+  if (root && !isForbiddenRelativeCheckout(root)) {
     const hit = acceptRouteTask(join(root, 'skills', 'model-router', 'scripts', ROUTE_TASK));
     if (hit && isInstalledCacheRouteTask(hit)) return hit;
   }

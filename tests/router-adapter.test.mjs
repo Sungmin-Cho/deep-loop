@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createFileSymlinkOrSkip } from './helpers/fs-fixtures.mjs';
-import { locateDeepModelRouter } from '../scripts/lib/locate-deep-model-router.mjs';
+import { canonicalRouteTask, locateDeepModelRouter } from '../scripts/lib/locate-deep-model-router.mjs';
 import {
   attachRoutingToDescriptor,
   assertRoutingDigest,
@@ -634,4 +634,34 @@ test('pin outcome: every outcome carries policy_pin_reason', () => {
     assert.ok(Object.hasOwn(translated, 'policy_pin_reason'));
     assert.equal(translated.policy_pin_reason, null);
   }
+});
+
+test('locator: an existing ../deep-model-router checkout is rejected before resolution removes the ..', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'dl-loc-sibling-')));
+  const cwd = join(base, 'project');
+  mkdirSync(cwd, { recursive: true });
+  const sibling = join(base, 'deep-model-router', 'skills', 'model-router', 'scripts', 'route_task.py');
+  mkdirSync(dirname(sibling), { recursive: true });
+  writeFileSync(sibling, '#!/usr/bin/env python3\n');
+  for (const spelled of [
+    '../deep-model-router/skills/model-router/scripts/route_task.py',
+    '..\\deep-model-router\\skills\\model-router\\scripts\\route_task.py',
+  ]) {
+    assert.equal(locateDeepModelRouter({ env: { DEEP_MODEL_ROUTER_CLI: spelled }, home: base, cwd }), null, spelled);
+  }
+  assert.equal(locateDeepModelRouter({ env: { DEEP_MODEL_ROUTER_CLI: sibling }, home: base, cwd }), realpathSync(sibling),
+    'an explicit absolute override stays allowed');
+});
+
+test('locator: personal skill markers match regardless of letter case', (t) => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'dl-loc-case-')));
+  const upper = join(home, '.CLAUDE', 'SKILLS', 'model-router', 'scripts', 'route_task.py');
+  mkdirSync(dirname(upper), { recursive: true });
+  writeFileSync(upper, '# personal\n');
+  assert.equal(locateDeepModelRouter({ env: { DEEP_MODEL_ROUTER_CLI: upper }, home }), null);
+  const cache = join(home, '.claude', 'plugins', 'cache', 'm', 'deep-model-router', '1.16.1', 'skills', 'model-router', 'scripts', 'route_task.py');
+  mkdirSync(dirname(cache), { recursive: true });
+  if (!createFileSymlinkOrSkip(t, upper, cache)) return;
+  const located = locateDeepModelRouter({ env: {}, home });
+  assert.ok(located === null || canonicalRouteTask(located) === null, 'a cache hit that resolves into a personal tree is never executable');
 });
