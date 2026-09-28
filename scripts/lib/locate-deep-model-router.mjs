@@ -1,10 +1,10 @@
 import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, posix as posixPath, resolve } from 'node:path';
 import { pathWithin } from './fs-safe.mjs';
 
 const ROUTE_TASK = 'route_task.py';
-const RELATIVE_CHECKOUT = '../deep-model-router';
+const SIBLING_CHECKOUT = 'deep-model-router';
 const PERSONAL_MARKERS = ['/.claude/skills/model-router', '/.codex/skills/model-router'];
 const CACHE_SUFFIX = '/skills/model-router/scripts/route_task.py';
 const VERSION_RE = /\/deep-model-router\/([^/]+)\/skills\/model-router\/scripts\/route_task\.py$/;
@@ -73,13 +73,36 @@ function acceptRouteTask(path) {
   return resolved;
 }
 
+// Realpath of a located route_task.py after the same checks the env overrides
+// get. Cache hits come back lexical from the walk, so a caller that must know
+// which install actually runs re-canonicalizes here.
+// A relative path resolves against `cwd`; its spelling is checked first.
+export function canonicalRouteTask(path, { cwd = process.cwd() } = {}) {
+  if (typeof path !== 'string' || path.length === 0) return null;
+  if (isForbiddenRelativeCheckout(path) || isPersonalSkillPath(path)) return null;
+  return acceptRouteTask(resolve(cwd || process.cwd(), path));
+}
+
+// Case-folded: Windows and default macOS volumes resolve `.CLAUDE/SKILLS` to the
+// same tree as `.claude/skills`, so a case variant must not slip past the markers.
 function isPersonalSkillPath(path) {
-  const text = posix(path);
+  const text = posix(path).toLowerCase();
   return PERSONAL_MARKERS.some((marker) => text.includes(marker));
 }
 
-function isForbiddenRelativeCheckout(path) {
-  return posix(path).includes(RELATIVE_CHECKOUT);
+// The forbidden source is the sibling `../deep-model-router` checkout reached
+// through a relative path. Decide on normalized segments of the path as given
+// (resolve() would erase the `..`): `.././`, `..//` and mixed separators are the
+// same checkout, while `../deep-model-router2` and absolute paths are not.
+// A drive-absolute (`C:/`) or rooted/UNC (`/`, `//server`) path is absolute; a
+// drive-relative `C:..\x` still resolves against that drive's cwd, so its
+// remainder is judged like any other relative path.
+export function isForbiddenRelativeCheckout(path) {
+  let text = posix(path);
+  if (/^[A-Za-z]:\//.test(text) || text.startsWith('/')) return false;
+  text = text.replace(/^[A-Za-z]:/, '');
+  const segments = posixPath.normalize(text).toLowerCase().split('/');
+  return segments.some((segment, index) => segment === SIBLING_CHECKOUT && segments[index - 1] === '..');
 }
 
 function parseSemver(version) {
@@ -137,13 +160,14 @@ export function locateDeepModelRouter({
   cwd = process.cwd(),
 } = {}) {
   const cli = env?.DEEP_MODEL_ROUTER_CLI;
-  if (cli) {
+  // Check the spelling as given: resolve() would erase the `../` of a sibling checkout.
+  if (cli && !isForbiddenRelativeCheckout(cli)) {
     const hit = acceptRouteTask(resolve(cwd || process.cwd(), cli));
     if (hit) return hit;
   }
 
   const root = env?.DEEP_MODEL_ROUTER_ROOT;
-  if (root) {
+  if (root && !isForbiddenRelativeCheckout(root)) {
     const hit = acceptRouteTask(join(root, 'skills', 'model-router', 'scripts', ROUTE_TASK));
     if (hit && isInstalledCacheRouteTask(hit)) return hit;
   }

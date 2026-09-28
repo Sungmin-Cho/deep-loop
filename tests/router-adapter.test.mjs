@@ -5,14 +5,17 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createFileSymlinkOrSkip } from './helpers/fs-fixtures.mjs';
-import { locateDeepModelRouter } from '../scripts/lib/locate-deep-model-router.mjs';
+import { canonicalRouteTask, isForbiddenRelativeCheckout, locateDeepModelRouter } from '../scripts/lib/locate-deep-model-router.mjs';
 import {
   attachRoutingToDescriptor,
   assertRoutingDigest,
   buildRoutingRecord,
   isRoutingRecord,
   mayRecordInProgress,
+  POLICY_PIN_REASONS,
+  routerPinContext,
   shouldAttachRouting,
+  supportsPolicyPin,
   translateRouteOutcome,
 } from '../scripts/lib/router-adapter.mjs';
 
@@ -432,4 +435,302 @@ test('adapter: live DEEP_MODEL_ROUTER_CLI LOW route is dispatchable and freezes 
   assert.equal(frozen.decision.policy_sha256, translated.decision.policy_sha256);
   assert.match(frozen.decision.decision_fingerprint, /^[0-9a-f]{64}$/);
   assert.match(frozen.decision.request_sha256, /^[0-9a-f]{64}$/);
+});
+
+function pinnedLoop(...episodes) {
+  return { episodes };
+}
+
+function routedEpisode(policy, extra = {}) {
+  return {
+    id: extra.id || `ep-${policy.slice(0, 4)}`,
+    role: 'maker',
+    status: 'in_progress',
+    workstream_id: 'ws-1',
+    routing: buildRoutingRecord(
+      { route_schema_version: 1, task_class: 'IMPLEMENTATION' },
+      decision({ policy_sha256: policy }),
+    ),
+    ...extra,
+  };
+}
+
+test('pin: a run without a frozen digest sends no pin', () => {
+  const ctx = routerPinContext({ loop: pinnedLoop(), routeTask: '/r/route_task.py', routerVersion: '1.16.1' });
+  assert.equal(ctx.policy_pin, null);
+  assert.equal(ctx.frozen_policy_sha256, null);
+  assert.equal(ctx.policy_pin_supported, true);
+  assert.deepEqual(ctx.reasons, ['no-frozen-digest']);
+});
+
+test('pin: a supported router receives the frozen digest as policy_pin', () => {
+  for (const version of ['1.16.0', '1.16.1', '2.0.0']) {
+    const ctx = routerPinContext({
+      loop: pinnedLoop(routedEpisode(POLICY_A)), routeTask: '/r/route_task.py', routerVersion: version,
+    });
+    assert.equal(ctx.policy_pin, POLICY_A, version);
+    assert.equal(ctx.frozen_policy_sha256, POLICY_A);
+    assert.equal(ctx.router_version, version);
+    assert.deepEqual(ctx.reasons, []);
+  }
+});
+
+test('pin: a router older than 1.16.0 receives no pin', () => {
+  const ctx = routerPinContext({
+    loop: pinnedLoop(routedEpisode(POLICY_A)), routeTask: '/r/route_task.py', routerVersion: '1.15.0',
+  });
+  assert.equal(ctx.policy_pin, null);
+  assert.equal(ctx.policy_pin_supported, false);
+  assert.equal(ctx.frozen_policy_sha256, POLICY_A);
+  assert.deepEqual(ctx.reasons, ['router-pin-unsupported']);
+});
+
+test('pin: missing, rejected or unidentified routers send no pin, with ordered reasons', () => {
+  const frozen = pinnedLoop(routedEpisode(POLICY_A));
+  assert.deepEqual(routerPinContext({ loop: frozen, routeTask: '/r/route_task.py', routerVersion: null }).reasons,
+    ['router-version-unknown']);
+  assert.deepEqual(routerPinContext({ loop: frozen, routeTask: null, routerVersion: '1.16.1' }).reasons,
+    ['router-missing']);
+  assert.deepEqual(routerPinContext({
+    loop: frozen, routeTask: null, routerReason: 'router-path-rejected',
+  }).reasons, ['router-path-rejected']);
+  assert.deepEqual(routerPinContext({ loop: pinnedLoop(), routeTask: null }).reasons,
+    ['router-missing', 'no-frozen-digest']);
+  for (const version of ['1.16.0-rc.1', '1.16.0+b', 'v1.16.0', '1.16', 1.16]) {
+    const ctx = routerPinContext({ loop: frozen, routeTask: '/r/route_task.py', routerVersion: version });
+    assert.equal(ctx.router_version, null, String(version));
+    assert.equal(ctx.policy_pin, null, String(version));
+    assert.deepEqual(ctx.reasons, ['router-version-unknown'], String(version));
+  }
+});
+
+test('pin: the frozen digest is run-wide, including abandoned and other-workstream episodes', () => {
+  const abandoned = routedEpisode(POLICY_A, { id: 'ep-1', status: 'abandoned' });
+  const otherWs = routedEpisode(POLICY_A, { id: 'ep-1', workstream_id: 'ws-other' });
+  for (const first of [abandoned, otherWs]) {
+    const ctx = routerPinContext({
+      loop: pinnedLoop(first, routedEpisode(POLICY_B, { id: 'ep-2' })),
+      routeTask: '/r/route_task.py', routerVersion: '1.16.1',
+    });
+    assert.equal(ctx.frozen_policy_sha256, POLICY_A);
+    assert.equal(ctx.policy_pin, POLICY_A);
+  }
+});
+
+test('pin: supportsPolicyPin compares strict semver against 1.16.0', () => {
+  assert.equal(supportsPolicyPin('1.16.0'), true);
+  assert.equal(supportsPolicyPin('1.17.0'), true);
+  assert.equal(supportsPolicyPin('2.0.0'), true);
+  assert.equal(supportsPolicyPin('1.15.9'), false);
+  assert.equal(supportsPolicyPin('0.99.99'), false);
+  assert.equal(supportsPolicyPin('1.16.0-rc.1'), false);
+  assert.equal(supportsPolicyPin(null), false);
+});
+
+test('pin: POLICY_PIN_REASONS is the frozen router pin_* vocabulary', () => {
+  assert.ok(Object.isFrozen(POLICY_PIN_REASONS));
+  assert.deepEqual([...POLICY_PIN_REASONS].sort(), [
+    'pin_base_changed', 'pin_generation_missing', 'pin_revoked', 'pin_suppressed_by_off',
+  ]);
+});
+
+function pinTerminal(stateReason, overrides = {}) {
+  return JSON.stringify({
+    route_schema_version: 1,
+    router_plugin_version: '1.16.1',
+    policy_sha256: null,
+    request_sha256: null,
+    decision_fingerprint: null,
+    terminal: 'MODEL_STATE_UNAVAILABLE',
+    risk_band: null,
+    selected_model: null,
+    selected_effort_native: null,
+    effective_policy: null,
+    model_overlay: { status: 'unavailable', state_reason: stateReason },
+    ...overrides,
+  });
+}
+
+test('pin outcome: each pin_* terminal is named and keeps the band rule', () => {
+  for (const reason of POLICY_PIN_REASONS) {
+    for (const [band, mayRecord] of [['LOW', true], ['MEDIUM', true], ['HIGH', false], ['CRITICAL', false], [null, false]]) {
+      const translated = outcome({ exit: 1, stdout: pinTerminal(reason), stderr: '', frozenDigest: POLICY_A, localBand: band });
+      assert.equal(translated.status, 'terminal', reason);
+      assert.equal(translated.degrade_reason, 'policy-pin-unavailable', reason);
+      assert.equal(translated.policy_pin_reason, reason);
+      assert.equal(translated.dispatch_authorized, false);
+      assert.equal(translated.routing_provenance, 'local-fallback');
+      assert.equal(mayRecordInProgress(translated), mayRecord, `${reason}/${band}`);
+    }
+  }
+});
+
+test('pin outcome: pinned and noop routes with the frozen digest dispatch; a different digest is still refused', () => {
+  for (const status of ['pinned', 'noop']) {
+    const translated = outcome({
+      exit: 0,
+      stdout: JSON.stringify(decision({ model_overlay: { status, state_reason: null } })),
+      stderr: '',
+      frozenDigest: POLICY_A,
+    });
+    assert.equal(translated.status, 'ok', status);
+    assert.equal(translated.dispatch_authorized, true);
+    assert.equal(translated.policy_pin_reason, null);
+  }
+  const drifted = outcome({
+    exit: 0,
+    stdout: JSON.stringify(decision({ policy_sha256: POLICY_B, model_overlay: { status: 'pinned', state_reason: null } })),
+    stderr: '',
+    frozenDigest: POLICY_A,
+  });
+  assert.equal(drifted.degrade_reason, 'digest-mismatch');
+  assert.equal(drifted.dispatch_authorized, false);
+});
+
+test('pin outcome: unknown reasons, other terminals and other exits keep their existing branch', () => {
+  const unknown = outcome({ exit: 1, stdout: pinTerminal('pin_future'), stderr: '', localBand: 'LOW' });
+  assert.equal(unknown.degrade_reason, 'terminal');
+  assert.equal(unknown.policy_pin_reason, null);
+  const otherTerminal = outcome({
+    exit: 1, stdout: pinTerminal('pin_base_changed', { terminal: 'HUMAN_REQUIRED' }), stderr: '', localBand: 'LOW',
+  });
+  assert.equal(otherTerminal.degrade_reason, 'terminal');
+  assert.equal(otherTerminal.policy_pin_reason, null);
+  const invalid = outcome({ exit: 2, stdout: pinTerminal('pin_base_changed'), stderr: '', localBand: 'LOW' });
+  assert.equal(invalid.degrade_reason, 'invalid-input');
+  assert.equal(invalid.policy_pin_reason, null);
+  const unreadable = outcome({ exit: 1, stdout: pinTerminal('unreadable'), stderr: '', localBand: 'LOW' });
+  assert.equal(unreadable.degrade_reason, 'terminal');
+  assert.equal(unreadable.policy_pin_reason, null);
+});
+
+test('pin outcome: exit 4 pinned routes keep deferred confirmation; an old router rejecting the key is empty-stdout', () => {
+  for (const status of ['pinned', 'noop']) {
+    const deferred = outcome({
+      exit: 4,
+      stdout: JSON.stringify(decision({ model_overlay: { status, state_reason: null } })),
+      stderr: '',
+      frozenDigest: POLICY_A,
+    });
+    assert.equal(deferred.status, 'deferred_confirm');
+    assert.equal(deferred.dispatch_authorized, true);
+    assert.equal(deferred.degrade_forbidden, true);
+    assert.equal(deferred.policy_pin_reason, null);
+  }
+  const oldRouter = outcome({
+    exit: 2, stdout: '', stderr: 'error: --request-json has unknown field(s): policy_pin', localBand: 'LOW',
+  });
+  assert.equal(oldRouter.status, 'internal');
+  assert.equal(oldRouter.degrade_reason, 'empty-stdout');
+  assert.equal(oldRouter.policy_pin_reason, null);
+});
+
+test('pin outcome: every outcome carries policy_pin_reason', () => {
+  for (const translated of [
+    outcome({ exit: 0, stdout: JSON.stringify(decision()), stderr: '' }),
+    outcome({ exit: 3, stdout: JSON.stringify(decision()), stderr: '' }),
+    outcome({ processState: 'timeout', stdout: '', stderr: '' }),
+  ]) {
+    assert.ok(Object.hasOwn(translated, 'policy_pin_reason'));
+    assert.equal(translated.policy_pin_reason, null);
+  }
+});
+
+test('locator: an existing ../deep-model-router checkout is rejected before resolution removes the ..', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'dl-loc-sibling-')));
+  const cwd = join(base, 'project');
+  mkdirSync(cwd, { recursive: true });
+  const sibling = join(base, 'deep-model-router', 'skills', 'model-router', 'scripts', 'route_task.py');
+  mkdirSync(dirname(sibling), { recursive: true });
+  writeFileSync(sibling, '#!/usr/bin/env python3\n');
+  for (const spelled of [
+    '../deep-model-router/skills/model-router/scripts/route_task.py',
+    '..\\deep-model-router\\skills\\model-router\\scripts\\route_task.py',
+  ]) {
+    assert.equal(locateDeepModelRouter({ env: { DEEP_MODEL_ROUTER_CLI: spelled }, home: base, cwd }), null, spelled);
+  }
+  assert.equal(locateDeepModelRouter({ env: { DEEP_MODEL_ROUTER_CLI: sibling }, home: base, cwd }), realpathSync(sibling),
+    'an explicit absolute override stays allowed');
+});
+
+test('locator: personal skill markers match regardless of letter case', (t) => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'dl-loc-case-')));
+  const upper = join(home, '.CLAUDE', 'SKILLS', 'model-router', 'scripts', 'route_task.py');
+  mkdirSync(dirname(upper), { recursive: true });
+  writeFileSync(upper, '# personal\n');
+  assert.equal(locateDeepModelRouter({ env: { DEEP_MODEL_ROUTER_CLI: upper }, home }), null);
+  const cache = join(home, '.claude', 'plugins', 'cache', 'm', 'deep-model-router', '1.16.1', 'skills', 'model-router', 'scripts', 'route_task.py');
+  mkdirSync(dirname(cache), { recursive: true });
+  if (!createFileSymlinkOrSkip(t, upper, cache)) return;
+  const located = locateDeepModelRouter({ env: {}, home });
+  assert.ok(located === null || canonicalRouteTask(located) === null, 'a cache hit that resolves into a personal tree is never executable');
+});
+
+test('locator: every relative spelling of the sibling checkout is rejected, by path segment', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'dl-loc-seg-')));
+  const cwd = join(base, 'project');
+  mkdirSync(cwd, { recursive: true });
+  const sibling = join(base, 'deep-model-router', 'skills', 'model-router', 'scripts', 'route_task.py');
+  mkdirSync(dirname(sibling), { recursive: true });
+  writeFileSync(sibling, '#!/usr/bin/env python3\n');
+  const tail = 'skills/model-router/scripts/route_task.py';
+  for (const spelled of [
+    `.././deep-model-router/${tail}`,
+    `..//deep-model-router/${tail}`,
+    `./../deep-model-router/${tail}`,
+    `x/../../deep-model-router/${tail}`,
+    `..\\.\\deep-model-router\\${tail.replaceAll('/', '\\')}`,
+    `../DEEP-MODEL-ROUTER/${tail}`,
+  ]) {
+    assert.equal(locateDeepModelRouter({ env: { DEEP_MODEL_ROUTER_CLI: spelled }, home: base, cwd }), null, spelled);
+    assert.equal(canonicalRouteTask(spelled, { cwd }), null, spelled);
+  }
+  assert.equal(locateDeepModelRouter({ env: { DEEP_MODEL_ROUTER_ROOT: '.././deep-model-router' }, home: base, cwd }), null);
+});
+
+test('locator: a differently named sibling and absolute overrides containing .. stay allowed', () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'dl-loc-abs-')));
+  const cwd = join(home, 'project');
+  mkdirSync(cwd, { recursive: true });
+  const other = join(home, 'deep-model-router2', 'skills', 'model-router', 'scripts', 'route_task.py');
+  mkdirSync(dirname(other), { recursive: true });
+  writeFileSync(other, '#!/usr/bin/env python3\n');
+  assert.equal(locateDeepModelRouter({
+    env: { DEEP_MODEL_ROUTER_CLI: '../deep-model-router2/skills/model-router/scripts/route_task.py' }, home, cwd,
+  }), realpathSync(other));
+  const cacheBase = join(home, '.claude', 'plugins', 'cache', 'vendor');
+  const low = join(cacheBase, 'deep-model-router', '1.15.0', 'skills', 'model-router', 'scripts', 'route_task.py');
+  const high = join(cacheBase, 'deep-model-router', '1.16.1', 'skills', 'model-router', 'scripts', 'route_task.py');
+  for (const file of [low, high]) {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, '#!/usr/bin/env python3\n');
+  }
+  mkdirSync(join(cacheBase, 'staging'), { recursive: true });
+  const viaDots = join(cacheBase, 'staging') + '/../deep-model-router/1.15.0';
+  assert.equal(locateDeepModelRouter({ env: { DEEP_MODEL_ROUTER_ROOT: viaDots }, home, cwd }), realpathSync(low),
+    'an explicit absolute ROOT with .. selects that install, not the higher fallback');
+  assert.equal(locateDeepModelRouter({
+    env: { DEEP_MODEL_ROUTER_CLI: `${viaDots}/skills/model-router/scripts/route_task.py` }, home, cwd,
+  }), realpathSync(low));
+});
+
+test('locator: an uppercase Codex personal skill path is rejected too', () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'dl-loc-codex-case-')));
+  const upper = join(home, '.CODEX', 'SKILLS', 'model-router', 'scripts', 'route_task.py');
+  mkdirSync(dirname(upper), { recursive: true });
+  writeFileSync(upper, '# personal\n');
+  assert.equal(locateDeepModelRouter({ env: { DEEP_MODEL_ROUTER_CLI: upper }, home }), null);
+});
+
+test('locator: Windows drive-relative sibling spellings are relative; drive-absolute and UNC paths are not', () => {
+  // Judge the spelling rule directly: on a POSIX host a `C:` path never exists,
+  // so a locator-level null would pass without exercising the rule.
+  const tail = 'skills\\model-router\\scripts\\route_task.py';
+  for (const spelled of [`C:..\\deep-model-router\\${tail}`, `c:.././deep-model-router/x`, `C:deep\\..\\..\\deep-model-router`]) {
+    assert.equal(isForbiddenRelativeCheckout(spelled), true, spelled);
+  }
+  for (const absolute of [`C:\\x\\..\\deep-model-router\\${tail}`, `C:/deep-model-router`, `\\\\server\\share\\..\\deep-model-router`,
+    '/abs/../deep-model-router', '../deep-model-router2/x']) {
+    assert.equal(isForbiddenRelativeCheckout(absolute), false, absolute);
+  }
 });

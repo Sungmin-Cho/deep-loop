@@ -185,6 +185,69 @@ Artifact 상세 교정 규칙은 `deep-loop-workflow`의 `## 핵심 불변식`�
 
 `max_parallel` 환경에서 여러 active workstream이 있어도, 항상 `action.workstream_id`가 지정하는 workstream의 worktree만 진입한다 — 임의 active workstream이 아님.
 
+## 1.75. 라우터 절차 (route 소비자 공통)
+
+route가 필요한 곳에서만 이 절차를 부른다.
+
+| 소비자 | 언제 | 기록 명령(형태) |
+|---|---|---|
+| legacy `dispatch_maker` | 신규 maker 에피소드 경계에서만 | `episode record --id <episode_id> --status in_progress --routing '<routing_json_compact>' --owner <owner_run_id> --generation <n>` |
+| legacy `dispatch_checker` | Route A/B/C/E 선택 후, spawn 전에 maker와 별도로 1회 | `review dispatch --point <review_point> --workstream <workstream_id> --routing '<routing_json_compact>' --owner <owner_run_id> --generation <n>` |
+| v0.5 maker 새 primary attempt·새 retry | route를 쓸 때만 | `execution prepare --episode <episode_id> --mode <mode> --stage primary --task <task> --routing '<routing_json_compact>' --owner <owner_run_id> --generation <n>` |
+
+각 소비자 절의 실제 명령(`--project-root`, `--run-id` 포함)이 정본이다. 이 표는 어느 명령에 `--routing`을 붙이는지만 보여 준다. legacy `fix_episode`와 v0.5 resumed attempt는 이 절차를 부르지 않고 기존 record를 그대로 쓴다. v0.5 새 retry는 새 attempt이므로 위 표대로 이 절차로 새로 route할 수 있다.
+
+1. router를 판별한다:
+
+```
+node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" router probe --json --project-root "<canonical_project_root>" --run-id <run_id>
+```
+
+   exit가 0이 아니면 degrade하지 않는다. 이 tick을 멈추고 커널 진단을 그대로 보고한다. exit 0이고 `route_task`가 null이면 라우터 부재다. `reasons`에 `router-path-rejected`가 있으면 "플러그인 캐시의 `route_task.py` symlink를 정리하거나 `DEEP_MODEL_ROUTER_CLI`를 지정하라"를 보고에 포함한다. python3 부재도 라우터 부재다. 개인 `~/.claude/skills/model-router` 심링크와 `../deep-model-router` checkout은 커널 locator가 거부한다.
+
+2. 분류로 RouteRequestV1 JSON 파일을 만든다. 최소 형태:
+
+```json
+{"route_schema_version": 1, "task_class": "<IMPLEMENTATION 등 대문자 class>", "complexity": 0, "uncertainty": 0, "blast_radius": 0, "reversibility": 0, "flags": [], "runtime": "claude_code|codex|grok"}
+```
+
+   네 차원은 0–3 정수, `route_schema_version`은 정수 1이다. 필요하면 router 계약의 선택 키(`reasoning_centric`, `availability_snapshot`, `local_policy` 등)를 더할 수 있지만, 계약에 없는 키는 router가 exit 2로 거부한다. probe의 `policy_pin`이 문자열이면 요청 JSON에 `"policy_pin": "<그 값>"`을 그대로 넣고, null이면 키를 넣지 않는다. pin 값을 합성하거나 다른 곳에서 가져오지 않는다.
+
+3. probe가 반환한 경로만 실행한다. router를 따로 찾지 않는다:
+
+```
+python3 <probe.route_task> --request-json <request.json> --format json
+```
+
+4. Exit 번역(§11.3). 위에서부터 판정한다. band는 로컬 분류 또는 직전 완전 결정의 band이며, band를 정할 수 없으면 HIGH로 취급한다.
+- `1`이고 stdout의 `terminal`이 `MODEL_STATE_UNAVAILABLE`이며 `model_overlay.state_reason`이 아래 표의 값: 사유는 표의 토큰이다. HIGH/CRITICAL이면 in_progress로 올리지 않고 `await_human`, LOW/MEDIUM이면 `--routing` 없이 진행하고 tick 보고에 사유와 안내를 남긴다.
+
+| `state_reason` | 사유 | 안내 |
+|---|---|---|
+| `pin_base_changed` | `router-policy-pin:pin_base_changed` | router 플러그인이 업데이트되어 이 run의 고정 정책을 재현할 수 없다. 새 run을 시작한다. |
+| `pin_generation_missing` | `router-policy-pin:pin_generation_missing` | 고정 정책의 세대를 router 상태에서 찾을 수 없다(플러그인 업데이트 또는 상태 초기화). 새 run을 시작한다. |
+| `pin_revoked` | `router-policy-pin:pin_revoked` | 고정 정책이 쓰던 모델이 이후 철회되었다. 새 run을 시작한다. 계속 진행하면 session profile 모델로 실행되며, 그 모델이 철회 대상인지는 deep-loop가 판별할 수 없으니 사람이 확인한다. |
+| `pin_suppressed_by_off` | `router-policy-pin:pin_suppressed_by_off` | `DEEP_MODEL_ROUTER_OVERLAY=off`가 고정 정책에 필요한 overlay 항목을 뺐다. 해제 후 다시 시도하거나 새 run을 시작한다. |
+
+- `0`: 결정을 소비하고 아래 `--routing` JSON을 붙인다.
+- `4`: 결정을 소비하고 사후 확인 의무를 남긴다. degrade 금지.
+- `3`: human gate를 전파한다. in_progress로 올리지 않고 `await_human`.
+- `1`/`2`/`5`, 비-JSON, 미지원 schema, digest 불일치, spawn/timeout/signal/빈 stdout/범위 밖 exit/`TERMINATION_UNCONFIRMED`, 라우터 부재:
+  - band가 HIGH/CRITICAL이면 in_progress로 올리지 않고 `await_human`
+  - LOW/MEDIUM이면 `--routing` 없이 진행(현행 session_profile 단일 전파)
+- `TERMINATION_UNCONFIRMED` 뒤에는 라우터 write-capable retry 금지
+
+`--routing` 최소 키: `request`, `decision`(`route_schema_version` / `router_plugin_version` / `policy_sha256`), `selected_model`, `selected_effort_native`, `effective_policy`, `provenance`. `request`는 보낸 요청 JSON 그대로(`policy_pin` 포함)이고, 나머지는 router stdout에서 옮긴다:
+
+```json
+{"request": <보낸 요청 JSON>, "decision": {"route_schema_version": 1, "router_plugin_version": "<stdout 값>", "policy_sha256": "<stdout 값>"}, "selected_model": "<stdout 값>", "selected_effort_native": "<stdout 값>", "effective_policy": <stdout 값 또는 {}>, "provenance": "router"}
+```
+
+라우터 JSON에 `decision_fingerprint` 또는 `request_sha256`가 있으면 `decision` 안에 그대로
+포함하고, 없으면 생략한다. 둘 중 어느 값도 스킬이 합성하지 않는다. 관측 파일
+`observations/<subject_sha256>.json`은 터미널 커밋 뒤 커널이 발행하며, 스킬은
+읽거나 쓰지 않고 `--artifacts`에도 넣지 않는다.
+
 ## 2. Legacy Action 분기 (next-action이 반환한 `action.type`대로, 스스로 판단 추가 금지)
 
 ### dispatch_maker
@@ -195,29 +258,7 @@ node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" adapter resolve --protocol <protocol
 
 `guard.ok === false`이면 dispatch 중단 → `await_human` 안내.
 
-**신규 maker 에피소드 경계에서만** 라우터를 호출한다. `adapter resolve` 이후, in_progress 기록 이전. durable `episodes[].routing`이 이미 있으면 재호출하지 않는다.
-
-분류(`task_class`, complexity / uncertainty / blast_radius / reversibility, flags, runtime)를 RouteRequestV1로 만들고 `DEEP_MODEL_ROUTER_CLI` 또는 설치된 플러그인 캐시의 `route_task.py`를 찾는다. 개인 `~/.claude/skills/model-router` 심링크와 `../deep-model-router` checkout은 금지. python3 부재·CLI 부재는 라우터 부재다.
-
-```
-python3 <route_task.py> --request-json <request.json> --format json
-```
-
-Exit 번역(§11.3):
-- `0`: 결정을 소비하고 아래 `--routing` JSON을 붙인다.
-- `4`: 결정을 소비하고 사후 확인 의무를 남긴다. degrade 금지.
-- `3`: human gate를 전파한다. in_progress로 올리지 않고 `await_human`.
-- `1`/`2`/`5`, 비-JSON, 미지원 schema, digest 불일치, spawn/timeout/signal/빈 stdout/범위 밖 exit/`TERMINATION_UNCONFIRMED`, 라우터 부재:
-  - 로컬 분류 또는 직전 완전 결정의 band가 HIGH/CRITICAL이면 in_progress로 올리지 않고 `await_human`
-  - LOW/MEDIUM이면 `--routing` 없이 진행(현행 session_profile 단일 전파)
-- `TERMINATION_UNCONFIRMED` 뒤에는 라우터 write-capable retry 금지
-
-`--routing` 최소 키: `request`, `decision`(`route_schema_version` / `router_plugin_version` / `policy_sha256`), `selected_model`, `selected_effort_native`, `effective_policy`, `provenance`.
-
-라우터 JSON에 `decision_fingerprint` 또는 `request_sha256`가 있으면 그대로
-포함하고, 없으면 생략한다. 둘 중 어느 값도 스킬이 합성하지 않는다. 관측 파일
-`observations/<subject_sha256>.json`은 터미널 커밋 뒤 커널이 발행하며, 스킬은
-읽거나 쓰지 않고 `--artifacts`에도 넣지 않는다.
+**신규 maker 에피소드 경계에서만** §1.75 라우터 절차를 수행한다. `adapter resolve` 이후, in_progress 기록 이전. durable `episodes[].routing`이 이미 있으면 재호출하지 않는다.
 
 진행 시 episode in_progress로 기록(authorized 결정이 있을 때만 `--routing`을 붙인다):
 ```
@@ -253,7 +294,7 @@ node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" episode record --id <episode_id> --s
 
 먼저 `references/adapters.md`의 **상호 배타 checker routing** Route A–E 중 실제 가능한 경로를 선택하되 아직 dispatch하지 않는다. durable `session_runtime`이 grok이면 먼저 `review bridge-probe --json`과 Route E 전제(E-0–E-7)를 평가한다. 전부 충족하면 **Route E**(`Read("DEEP_LOOP_ROOT/skills/deep-loop-workflow/references/checker-bridge.md")`)로 dispatch한다 — bridge 자식이 유일한 checker이며, 이 대화의 inline 리뷰·`deep-review:*` Skill 호출·`spawn_subagent` checker는 여전히 금지다. 전제가 하나라도 실패하면 현행 그대로 Route D(`needs-human`)로 중단하며 계약 파일도 쓰지 않는다. grok에서 Route A/B/C는 선택하지 않는다. Route D이면 `needs-human`으로 중단하며 계약 파일도 쓰지 않는다. Route A/B/C/E일 때만 아래 계약 준비를 수행한 뒤 선택한 경로로 dispatch한다.
 
-Route A/B/C/E 선택 후, 실제 spawn 전에 maker와 **별도** route를 한 번 수행한다. 성공한 결정은 아래 review dispatch의 `--routing` JSON으로 checker 생성 시 심는다. 생성 후 episode record로 routing을 추가하지 않는다. HIGH/CRITICAL 실패·human_gate면 review dispatch와 spawn을 하지 않고 `await_human`. 라우터 부재·LOW/MEDIUM degrade면 Claude/Codex에서는 `--routing` 없이 dispatch하고 session_profile을 쓴다. **grok Route E는 degrade-진행이 없다** — routing이 없으면 Route D다.
+Route A/B/C/E 선택 후, 실제 spawn 전에 maker와 **별도로** §1.75 라우터 절차를 한 번 수행한다. 성공한 결정은 아래 review dispatch의 `--routing` JSON으로 checker 생성 시 심는다. 생성 후 episode record로 routing을 추가하지 않는다. HIGH/CRITICAL 실패·human_gate면 review dispatch와 spawn을 하지 않고 `await_human`. 라우터 부재·LOW/MEDIUM degrade면 Claude/Codex에서는 `--routing` 없이 dispatch하고 session_profile을 쓴다. **grok Route E는 degrade-진행이 없다** — routing이 없으면 Route D다.
 
 먼저 recipe를 **상태에서** 읽는다(이전 대화 컨텍스트를 가정하지 말 것 — 이 값이 아래 분기의 유일한 근거다):
 

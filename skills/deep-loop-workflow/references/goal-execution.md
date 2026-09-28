@@ -70,7 +70,10 @@ adding judgment does not apply to this v0.5 branch.
 Prepare once with `execution prepare --episode ... --mode inline|external
 --stage primary|continuation --task ...`. The kernel returns an attempt and an
 invocation descriptor. `created:false` is an existing intent, not permission to
-start another external producer.
+start another external producer. When this new attempt is routed (a fresh
+primary or a new retry), first follow the continue skill's router procedure
+(§1.75), which runs `router probe` and sends its `policy_pin`, and pass the
+resulting record with `--routing`. A resumed attempt keeps its recorded routing.
 
 - **Inline:** do the actual work in the current owner conversation. Interrupted
   work resumes the same attempt. If a prerequisite requires switching, first
@@ -100,7 +103,9 @@ const returned = [cli, 'execution', 'return', '--episode', episodeId,
   '--attempt', attemptId, '--artifacts', JSON.stringify(actualArtifacts), ...base.slice(1)];
 ```
 
-Freeze routing on a resumed attempt. A new retry can use a fresh route. An inline
+Freeze routing on a resumed attempt. A new retry can use a fresh route. A fresh
+route uses the continue skill's router procedure (§1.75), including `router probe`
+and its `policy_pin`, and records the result through `execution prepare --routing`. An inline
 owner records a model/effort only when it matches the observed current profile;
 choosing another model requires an actual external dispatch.
 

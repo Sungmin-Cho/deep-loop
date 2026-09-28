@@ -214,3 +214,39 @@ test('the bound review writer trips at the configured goal limit and leaves the 
   assert.equal(loop.status, 'paused');
   assert.equal(ok(f.cli(['next-action', '--json'])).action.type, 'await_human');
 });
+
+const pinnedRoute = (policy, pin = 'a'.repeat(64), model = 'model-a') => ({
+  request: { task_class: 'IMPLEMENTATION', policy_pin: pin },
+  decision: { route_schema_version: 1, router_plugin_version: 'fixture', policy_sha256: policy },
+  selected_model: model, selected_effort_native: 'high', effective_policy: {}, provenance: 'local-fallback',
+});
+const runBytes = f => ['loop.json', 'event-log.jsonl', '.loop.hash']
+  .map(name => readFileSync(join(f.root, '.deep-loop', 'runs', f.runId, name)));
+
+test('execution prepare records a pinned route and still refuses a different digest', (t) => {
+  const f = setup(t);
+  const prepare = (id, routing) => f.cli(['execution', 'prepare', '--episode', id, '--mode', 'external', '--stage', 'primary', '--task', 'Deliver A', '--routing', JSON.stringify(routing)]);
+  ok(prepare(f.maker, pinnedRoute('a'.repeat(64))));
+  assert.equal(f.state().episodes.find(e => e.id === f.maker).routing.request.policy_pin, 'a'.repeat(64));
+  const second = ok(f.cli(['episode', 'new', '--plugin', 'standalone', '--role', 'maker', '--kind', 'implementation', '--point', 'implementation', '--workstream', f.ws.id, '--artifacts', JSON.stringify([`${f.ws.worktree}/second.mjs`])])).id;
+  const drifted = prepare(second, pinnedRoute('b'.repeat(64)));
+  assert.equal(drifted.exit, 1);
+  assert.match(drifted.stderr, /EPISODE_ROUTING_DIGEST_MISMATCH/);
+});
+
+test('a prepared or running attempt refuses a different pinned route without writing', (t) => {
+  const f = setup(t);
+  const prepare = routing => f.cli(['execution', 'prepare', '--episode', f.maker, '--mode', 'external', '--stage', 'primary', '--task', 'Deliver A', '--routing', JSON.stringify(routing)]);
+  const first = ok(prepare(pinnedRoute('a'.repeat(64)))).execution;
+  for (const phase of ['prepared', 'running']) {
+    if (phase === 'running') ok(f.cli(['execution', 'start', '--episode', f.maker, '--attempt', first.attempt_id, '--handle', 'synthetic-child']));
+    assert.equal(f.state().episodes.find(e => e.id === f.maker).execution.phase, phase);
+    const before = runBytes(f);
+    for (const other of [pinnedRoute('a'.repeat(64), 'c'.repeat(64)), pinnedRoute('a'.repeat(64), 'a'.repeat(64), 'model-b')]) {
+      const refused = prepare(other);
+      assert.equal(refused.exit, 1, phase);
+      assert.match(refused.stderr, /EXECUTION_INTENT_FROZEN/, phase);
+      assert.deepEqual(runBytes(f), before, `${phase}: a refused prepare writes nothing`);
+    }
+  }
+});

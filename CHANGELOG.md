@@ -5,6 +5,36 @@ All notable changes to deep-loop are documented in this file.
 > Note: the `[1.1.0]`/`[1.2.0]` entries pre-date this changelog file (a known lag between
 > `plugin.json.version` and the changelog); this release does not retro-fill them.
 
+## [1.25.0] — 2026-09-28
+
+### Added
+
+- Read-only `router probe --json`: reports the installed deep-model-router
+  `route_task.py` realpath chosen by the kernel locator, its manifest version,
+  the run's frozen policy digest, and the `policy_pin` to send.
+- Route requests after a run's first routed episode carry the frozen digest as
+  `policy_pin` when the router is 1.16.0 or newer, so a local overlay
+  publication no longer stops an in-flight run.
+
+### Changed
+
+- The continue skill runs only the router path returned by `router probe`;
+  the kernel locator order is now the authority for router selection.
+- A pin that the router cannot reproduce (`MODEL_STATE_UNAVAILABLE` with
+  `pin_suppressed_by_off`, `pin_revoked`, `pin_base_changed` or
+  `pin_generation_missing`) is reported as `router-policy-pin:<reason>` with
+  recovery guidance. Band rules are unchanged.
+
+### Compatibility
+
+- No schema or migration change. Records carrying `request.policy_pin` remain
+  valid for the previous kernel. Older or unidentifiable routers receive no pin,
+  and the recording-time digest check still applies. `pin_suppressed_by_off`
+  recovers in the same run once `DEEP_MODEL_ROUTER_OVERLAY=off` is removed. The
+  other pin failures (`pin_base_changed` after a router plugin update,
+  `pin_revoked`, `pin_generation_missing`) need a new run. The experimental
+  `goal drive` host does not call the router and is unchanged.
+
 ## [1.24.1] — 2026-09-11
 
 ### Fixed

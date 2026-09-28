@@ -18,6 +18,8 @@ The pinned-path checker fetches the deep-loop repository at the proposed SHA. A 
 The v1.24.0 entry is a release draft until source validation, merge and the separate
 distribution gates complete. Goal-contract discoverability is not evidence of model
 efficacy or of a verified Grok reviewer bridge.
+The v1.25.0 entry (router policy pin) is likewise a release draft until source
+validation, merge and the separate distribution gates complete.
 
 ## Marketplace pin edits
 

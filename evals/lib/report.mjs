@@ -81,9 +81,9 @@ function seededRnd(hex) {
 }
 
 export function buildReport(results, {
-  now = '2026-08-10T00:00:00Z', bank = [], out = null, kernelVersion = '1.24.0',
+  now = '2026-08-10T00:00:00Z', bank = [], out = null, kernelVersion = '1.25.0',
   barrierEvidence = undefined, enforceFullBank = false, profile = {
-    id: 'deep-loop-current-v1.24', driver: 'fixture', model: 'none:fixture', harness: 'none:fixture',
+    id: 'deep-loop-current-v1.25', driver: 'fixture', model: 'none:fixture', harness: 'none:fixture',
   },
 } = {}) {
   const bankHash = taskBankSha256(bank);
