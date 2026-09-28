@@ -533,3 +533,105 @@ test('pin: POLICY_PIN_REASONS is the frozen router pin_* vocabulary', () => {
     'pin_base_changed', 'pin_generation_missing', 'pin_revoked', 'pin_suppressed_by_off',
   ]);
 });
+
+function pinTerminal(stateReason, overrides = {}) {
+  return JSON.stringify({
+    route_schema_version: 1,
+    router_plugin_version: '1.16.1',
+    policy_sha256: null,
+    request_sha256: null,
+    decision_fingerprint: null,
+    terminal: 'MODEL_STATE_UNAVAILABLE',
+    risk_band: null,
+    selected_model: null,
+    selected_effort_native: null,
+    effective_policy: null,
+    model_overlay: { status: 'unavailable', state_reason: stateReason },
+    ...overrides,
+  });
+}
+
+test('pin outcome: each pin_* terminal is named and keeps the band rule', () => {
+  for (const reason of POLICY_PIN_REASONS) {
+    for (const [band, mayRecord] of [['LOW', true], ['MEDIUM', true], ['HIGH', false], ['CRITICAL', false], [null, false]]) {
+      const translated = outcome({ exit: 1, stdout: pinTerminal(reason), stderr: '', frozenDigest: POLICY_A, localBand: band });
+      assert.equal(translated.status, 'terminal', reason);
+      assert.equal(translated.degrade_reason, 'policy-pin-unavailable', reason);
+      assert.equal(translated.policy_pin_reason, reason);
+      assert.equal(translated.dispatch_authorized, false);
+      assert.equal(translated.routing_provenance, 'local-fallback');
+      assert.equal(mayRecordInProgress(translated), mayRecord, `${reason}/${band}`);
+    }
+  }
+});
+
+test('pin outcome: pinned and noop routes with the frozen digest dispatch; a different digest is still refused', () => {
+  for (const status of ['pinned', 'noop']) {
+    const translated = outcome({
+      exit: 0,
+      stdout: JSON.stringify(decision({ model_overlay: { status, state_reason: null } })),
+      stderr: '',
+      frozenDigest: POLICY_A,
+    });
+    assert.equal(translated.status, 'ok', status);
+    assert.equal(translated.dispatch_authorized, true);
+    assert.equal(translated.policy_pin_reason, null);
+  }
+  const drifted = outcome({
+    exit: 0,
+    stdout: JSON.stringify(decision({ policy_sha256: POLICY_B, model_overlay: { status: 'pinned', state_reason: null } })),
+    stderr: '',
+    frozenDigest: POLICY_A,
+  });
+  assert.equal(drifted.degrade_reason, 'digest-mismatch');
+  assert.equal(drifted.dispatch_authorized, false);
+});
+
+test('pin outcome: unknown reasons, other terminals and other exits keep their existing branch', () => {
+  const unknown = outcome({ exit: 1, stdout: pinTerminal('pin_future'), stderr: '', localBand: 'LOW' });
+  assert.equal(unknown.degrade_reason, 'terminal');
+  assert.equal(unknown.policy_pin_reason, null);
+  const otherTerminal = outcome({
+    exit: 1, stdout: pinTerminal('pin_base_changed', { terminal: 'HUMAN_REQUIRED' }), stderr: '', localBand: 'LOW',
+  });
+  assert.equal(otherTerminal.degrade_reason, 'terminal');
+  assert.equal(otherTerminal.policy_pin_reason, null);
+  const invalid = outcome({ exit: 2, stdout: pinTerminal('pin_base_changed'), stderr: '', localBand: 'LOW' });
+  assert.equal(invalid.degrade_reason, 'invalid-input');
+  assert.equal(invalid.policy_pin_reason, null);
+  const unreadable = outcome({ exit: 1, stdout: pinTerminal('unreadable'), stderr: '', localBand: 'LOW' });
+  assert.equal(unreadable.degrade_reason, 'terminal');
+  assert.equal(unreadable.policy_pin_reason, null);
+});
+
+test('pin outcome: exit 4 pinned routes keep deferred confirmation; an old router rejecting the key is empty-stdout', () => {
+  for (const status of ['pinned', 'noop']) {
+    const deferred = outcome({
+      exit: 4,
+      stdout: JSON.stringify(decision({ model_overlay: { status, state_reason: null } })),
+      stderr: '',
+      frozenDigest: POLICY_A,
+    });
+    assert.equal(deferred.status, 'deferred_confirm');
+    assert.equal(deferred.dispatch_authorized, true);
+    assert.equal(deferred.degrade_forbidden, true);
+    assert.equal(deferred.policy_pin_reason, null);
+  }
+  const oldRouter = outcome({
+    exit: 2, stdout: '', stderr: 'error: --request-json has unknown field(s): policy_pin', localBand: 'LOW',
+  });
+  assert.equal(oldRouter.status, 'internal');
+  assert.equal(oldRouter.degrade_reason, 'empty-stdout');
+  assert.equal(oldRouter.policy_pin_reason, null);
+});
+
+test('pin outcome: every outcome carries policy_pin_reason', () => {
+  for (const translated of [
+    outcome({ exit: 0, stdout: JSON.stringify(decision()), stderr: '' }),
+    outcome({ exit: 3, stdout: JSON.stringify(decision()), stderr: '' }),
+    outcome({ processState: 'timeout', stdout: '', stderr: '' }),
+  ]) {
+    assert.ok(Object.hasOwn(translated, 'policy_pin_reason'));
+    assert.equal(translated.policy_pin_reason, null);
+  }
+});

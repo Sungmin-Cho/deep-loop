@@ -31,11 +31,13 @@ function parseDecision(stdout) {
 function baseOutcome({
   status, degrade_reason, localBand, decision = null, write_retry_forbidden = false,
   dispatch_authorized = false, routing_provenance = 'local-fallback', degrade_forbidden = false,
+  policy_pin_reason = null,
 }) {
   return {
     dispatch_authorized,
     status,
     degrade_reason,
+    policy_pin_reason,
     risk_band: normalizeRiskBand(decision?.risk_band) ?? normalizeRiskBand(localBand),
     local_floor_applied: asObject(decision?.effective_policy) || {},
     routing_provenance,
@@ -70,6 +72,13 @@ function unauthorizedProcess({ processState, stderr, python3Available, cliPath, 
     return baseOutcome({ status: 'internal', degrade_reason: 'signal', localBand });
   }
   return null;
+}
+
+// A router that cannot reproduce the frozen policy names why in model_overlay.
+function pinUnavailableReason(decision) {
+  if (decision?.terminal !== 'MODEL_STATE_UNAVAILABLE') return null;
+  const reason = asObject(decision.model_overlay)?.state_reason;
+  return POLICY_PIN_REASONS.includes(reason) ? reason : null;
 }
 
 // Complete §11.3 translation. Process failures and identity mismatches are the
@@ -142,6 +151,13 @@ export function translateRouteOutcome({
     });
   }
   if (exit === 1) {
+    const pinReason = pinUnavailableReason(decision);
+    if (pinReason) {
+      return baseOutcome({
+        status: 'terminal', degrade_reason: 'policy-pin-unavailable', localBand, decision,
+        policy_pin_reason: pinReason,
+      });
+    }
     return baseOutcome({ status: 'terminal', degrade_reason: 'terminal', localBand, decision });
   }
   if (exit === 2) {
