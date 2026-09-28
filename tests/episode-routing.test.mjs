@@ -298,3 +298,53 @@ test('continue SKILL routes after adapter resolve / route A-B-C and will not mar
   assert.match(fix, /target_maker|거절된 maker|prior_maker_routing|routing을 다시 호출하지 않는다|라우터를 다시 호출하지 않는다/);
   assert.match(fix, /--routing/);
 });
+
+test('routing records carrying request.policy_pin are recorded and still digest-checked (legacy writers)', () => {
+  const { root, runId, fence } = seed();
+  const pinned = routingFixture({ request: { policy_pin: POLICY_A } });
+  const { ws, id: makerId } = readyMaker(root, runId, fence, { routing: pinned });
+  const maker = readState(root, runId).data.episodes.find((item) => item.id === makerId);
+  assert.equal(maker.routing.request.policy_pin, POLICY_A);
+  recordEpisode(root, runId, makerId, { status: 'done', artifacts: ['art.txt'], fence });
+  const dispatched = dispatchReview(root, runId, {
+    point: 'implementation', workstreamId: ws, detected: { 'deep-review': true }, fence,
+    routing: routingFixture({ request: { task_class: 'REVIEW', policy_pin: POLICY_A } }),
+  });
+  const checker = readState(root, runId).data.episodes.find((item) => item.id === dispatched.checkerEpisodeId);
+  assert.equal(checker.routing.request.policy_pin, POLICY_A);
+});
+
+test('a pinned request does not bypass the digest backstop on either legacy writer', () => {
+  const { root, runId, fence } = seed();
+  const drifted = routingFixture({ request: { policy_pin: POLICY_A }, decision: { policy_sha256: POLICY_B } });
+  const { ws, id: makerId } = readyMaker(root, runId, fence, { routing: routingFixture() });
+  const { id: second } = newEpisode(root, runId, {
+    plugin: 'deep-work', role: 'maker', kind: 'implementation', point: 'implementation',
+    workstream: ws, expectedArtifacts: ['art.txt'], fence,
+  });
+  assert.throws(() => recordEpisode(root, runId, second, { status: 'in_progress', routing: drifted, fence }),
+    /EPISODE_ROUTING_DIGEST_MISMATCH/);
+  recordEpisode(root, runId, makerId, { status: 'done', artifacts: ['art.txt'], fence });
+  assert.throws(() => dispatchReview(root, runId, {
+    point: 'implementation', workstreamId: ws, detected: { 'deep-review': true }, fence, routing: drifted,
+  }), /EPISODE_ROUTING_DIGEST_MISMATCH/);
+});
+
+test('a fix maker reuses the rejected maker routing, pin included, byte for byte', () => {
+  const { root, runId, fence } = seed();
+  const pinned = routingFixture({ request: { policy_pin: POLICY_A } });
+  const { ws, id: makerId } = readyMaker(root, runId, fence, { routing: pinned });
+  const prior = readState(root, runId).data.episodes.find((item) => item.id === makerId).routing;
+  const { id: fixId } = newEpisode(root, runId, {
+    plugin: 'deep-work', role: 'maker', kind: 'fix', point: 'implementation',
+    workstream: ws, expectedArtifacts: ['art.txt'], fence,
+  });
+  recordEpisode(root, runId, fixId, { status: 'in_progress', routing: prior, fence });
+  const fix = readState(root, runId).data.episodes.find((item) => item.id === fixId);
+  assert.equal(JSON.stringify(fix.routing), JSON.stringify(prior));
+});
+
+test('the previous kernel fixture still accepts a routing record carrying request.policy_pin', async () => {
+  const legacy = await import('./fixtures/legacy-v04/scripts/lib/router-adapter.mjs');
+  assert.equal(legacy.isRoutingRecord(routingFixture({ request: { policy_pin: POLICY_A } })), true);
+});
