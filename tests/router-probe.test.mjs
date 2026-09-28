@@ -3,9 +3,18 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { createFileSymlinkOrSkip } from './helpers/fs-fixtures.mjs';
+import { initRun } from '../scripts/lib/initrun.mjs';
+import { newEpisode, recordEpisode } from '../scripts/lib/episode.mjs';
+import { runDir } from '../scripts/lib/state.mjs';
+import { newWorkstream } from '../scripts/lib/workspace.mjs';
 import { buildRoutingRecord } from '../scripts/lib/router-adapter.mjs';
 import { probeRouterPin, readRouterVersion } from '../scripts/lib/router-probe.mjs';
+
+const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'deep-loop.mjs');
 
 const POLICY_A = 'a'.repeat(64);
 
@@ -183,4 +192,101 @@ test('probe: an empty environment and caches report router-missing without a pin
     policy_pin: null,
     reasons: ['router-missing', 'no-frozen-digest'],
   });
+});
+
+// ── CLI: router probe --json ───────────────────────────────────────────────
+
+function isolatedEnv(home, overrides = {}) {
+  const env = { ...process.env };
+  delete env.DEEP_MODEL_ROUTER_CLI;
+  delete env.DEEP_MODEL_ROUTER_ROOT;
+  return { ...env, HOME: home, USERPROFILE: home, ...overrides };
+}
+
+function probeCli(args, { home, env = {} }) {
+  return spawnSync(process.execPath, [CLI, 'router', ...args], {
+    encoding: 'utf8', cwd: home, env: isolatedEnv(home, env),
+  });
+}
+
+function seedRun() {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'dl-probe-run-')));
+  const { runId } = initRun(root, { runtime: 'claude', goal: 'g', now: new Date('2026-08-16T00:00:00Z') });
+  return { root, runId, fence: { owner: runId, generation: 1, intent: 'business' } };
+}
+
+function recordRoutedMaker({ root, runId, fence }, policy = POLICY_A) {
+  const ws = newWorkstream(root, runId, {
+    title: 'impl', branch: 'impl', worktree: '.claude/worktrees/impl', fence,
+  }).id;
+  const { id } = newEpisode(root, runId, {
+    plugin: 'deep-work', role: 'maker', kind: 'implementation', point: 'implementation',
+    workstream: ws, expectedArtifacts: ['art.txt'], fence,
+  });
+  recordEpisode(root, runId, id, {
+    status: 'in_progress',
+    routing: frozenLoop(policy).episodes[0].routing,
+    fence,
+  });
+  return id;
+}
+
+function durableBytes(root, runId) {
+  const dir = runDir(root, runId);
+  return ['loop.json', 'event-log.jsonl', '.loop.hash'].map((name) => readFileSync(join(dir, name)));
+}
+
+test('router probe CLI: no pin before the first routed episode, the frozen digest after it', () => {
+  const home = tempHome();
+  const cli = installTree(join(home, 'router'), { version: '1.16.1' });
+  const seeded = seedRun();
+  const locator = ['--project-root', seeded.root, '--run-id', seeded.runId];
+  const before = probeCli(['probe', '--json', ...locator], { home, env: { DEEP_MODEL_ROUTER_CLI: cli } });
+  assert.equal(before.status, 0, before.stderr);
+  const first = JSON.parse(before.stdout);
+  assert.equal(first.policy_pin, null);
+  assert.equal(first.route_task, realpathSync(cli));
+  assert.deepEqual(first.reasons, ['no-frozen-digest']);
+
+  recordRoutedMaker(seeded);
+  const bytes = durableBytes(seeded.root, seeded.runId);
+  const runs = [1, 2].map(() => probeCli(['probe', '--json', ...locator], { home, env: { DEEP_MODEL_ROUTER_CLI: cli } }));
+  for (const run of runs) {
+    assert.equal(run.status, 0, run.stderr);
+    const payload = JSON.parse(run.stdout);
+    assert.equal(payload.frozen_policy_sha256, POLICY_A);
+    assert.equal(payload.policy_pin, POLICY_A);
+    assert.equal(payload.router_version, '1.16.1');
+  }
+  assert.equal(runs[0].stdout, runs[1].stdout, 'two fresh processes read the same pin');
+  assert.deepEqual(durableBytes(seeded.root, seeded.runId), bytes, 'router probe never writes durable state');
+});
+
+test('router probe CLI: selects the highest Claude cache install when no override is set', () => {
+  const home = tempHome();
+  installTree(claudeCache(home, '1.15.0'), { version: '1.15.0' });
+  const high = installTree(claudeCache(home, '1.16.1'), { version: '1.16.1' });
+  const seeded = seedRun();
+  recordRoutedMaker(seeded);
+  const result = probeCli(['probe', '--json', '--project-root', seeded.root, '--run-id', seeded.runId], { home });
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.route_task, realpathSync(high));
+  assert.equal(payload.policy_pin, POLICY_A);
+});
+
+test('router probe CLI: usage errors are exit 2 and a damaged run is exit 1', () => {
+  const home = tempHome();
+  const seeded = seedRun();
+  const locator = ['--project-root', seeded.root, '--run-id', seeded.runId];
+  assert.equal(probeCli(['probe', ...locator], { home }).status, 2, 'missing --json');
+  assert.equal(probeCli(['probe', '--json', '--project-root', seeded.root], { home }).status, 2, 'missing --run-id');
+  assert.equal(probeCli([], { home }).status, 2, 'bare router');
+  assert.equal(probeCli(['bogus', '--json', ...locator], { home }).status, 2, 'unknown verb');
+  const loopPath = join(runDir(seeded.root, seeded.runId), 'loop.json');
+  const loop = readFileSync(loopPath, 'utf8');
+  writeFileSync(loopPath, loop.replace('"goal": "g"', '"goal": "h"').replace('"goal":"g"', '"goal":"h"'));
+  assert.notEqual(readFileSync(loopPath, 'utf8'), loop, 'fixture must actually damage loop.json');
+  const damaged = probeCli(['probe', '--json', ...locator], { home });
+  assert.equal(damaged.status, 1, damaged.stdout + damaged.stderr);
 });

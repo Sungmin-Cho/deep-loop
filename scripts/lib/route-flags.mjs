@@ -89,6 +89,7 @@ export const ROUTE_FLAGS = Object.freeze({
   }),
   'review import': route(['stdin', ...R, ...F, ...L], { rejected: R }),
   'review bridge-probe': route(['json', ...L], { unread: Object.freeze(['json']) }),
+  'router probe': route(['json', ...L], { unread: Object.freeze(['json']) }),
   'handoff emit': route(['boundary-event', 'headless', 'reason', 'trigger', ...F, ...L]),
   respawn: route(['dry-run', 'headless', 'attended', 'timeout-ms', ...F, ...L]),
   'state get': route(['field', 'json', ...L], { unread: Object.freeze(['json']) }),

@@ -16,7 +16,7 @@ const HANDLERS = [
   'path', 'validate', 'detect-plugins', 'recipe-match', 'run', 'root',
   'runtime-executable', 'launcher-executable', 'init-run', 'next-action',
   'resume-command', 'tick', 'checkpoint', 'lease', 'workstream', 'episode',
-  'review', 'handoff', 'respawn', 'state', 'pause', 'recover', 'recovery',
+  'review', 'router', 'handoff', 'respawn', 'state', 'pause', 'recover', 'recovery',
   'adapter', 'budget', 'comprehension', 'breaker', 'insights', 'spawn-style',
   'attended-launch', 'session-profile', 'detect-terminal', 'finish',
 ];

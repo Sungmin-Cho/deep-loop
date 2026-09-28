@@ -50,6 +50,7 @@ import {
   recordReviewOutcome,
 } from './lib/review.mjs';
 import { probeCheckerBridge } from './lib/checker-bridge.mjs';
+import { probeRouterPin } from './lib/router-probe.mjs';
 import { readBoundedText } from './lib/bounded-input.mjs';
 import { nextAction } from './lib/next-action.mjs';
 import { emitHandoff } from './lib/handoff.mjs';
@@ -1453,6 +1454,21 @@ const handlers = {
       }
     }
     error(`unknown episode verb: ${verb}`); return 2;
+  },
+  // Read-only: which router install the locator selects and the frozen-digest
+  // policy_pin to send. No lease fence; it never writes durable state.
+  router: async (a) => {
+    const [verb, ...rest] = a;
+    if (verb !== 'probe') { error(`unknown router verb: ${verb ?? '<none>'}`); return 2; }
+    const f = parseFlags(rest);
+    if (f.json !== true) { error('USAGE: router probe requires --json'); return 2; }
+    const root = rootOf(f);
+    const runId = exactReadRunId(f);
+    if (!runId) return exactReadFailureCode(f);
+    const captured = verifiedExactSnapshot(root, runId);
+    if (!captured.ok) return reportVerifiedExactFailure(captured);
+    json(probeRouterPin({ loopData: captured.snapshot.data, env: process.env, home: homedir(), cwd: process.cwd() }));
+    return 0;
   },
   review: async (a) => {
     const [verb, ...rest] = a;

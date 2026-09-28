@@ -30,7 +30,7 @@ const EXPECTED_KEYS = Object.freeze([
   'execution prepare', 'execution start', 'execution return', 'execution reconcile',
   'goal bridge-descriptor', 'goal bridge-record', 'goal drive', 'goal capabilities', 'goal dispatch', 'goal start', 'goal record', 'goal reconcile', 'goal status', 'goal obligation', 'goal obligation-resolve',
   'review configure', 'review dispatch', 'review claim', 'review record', 'review import',
-  'review bridge-probe',
+  'review bridge-probe', 'router probe',
   'handoff emit', 'respawn', 'state get', 'state patch',
   'pause', 'recover', 'recovery acquire', 'adapter resolve',
   'budget check', 'budget record', 'budget extend',
@@ -49,7 +49,7 @@ function invoke(args) {
 
 test('ROUTE_FLAGS lists every rawRouteKey the dispatcher can produce', () => {
   assert.deepEqual(Object.keys(ROUTE_FLAGS).sort(), [...EXPECTED_KEYS].sort());
-  assert.equal(EXPECTED_KEYS.length, 81);
+  assert.equal(EXPECTED_KEYS.length, 82);
   const source = readFileSync(CLI, 'utf8');
   const inventory = source.match(/const MUTATING_ROUTE_INVENTORY = Object\.freeze\(\[([\s\S]*?)\]\);/)?.[1];
   assert.ok(inventory);
@@ -300,4 +300,18 @@ test('skill and test (route, flag) pairs are a subset of LOCATOR union allow', (
     extractQuotedRoutePairs(observe).some(([route, flag]) => route === 'checkpoint observe' && flag === 'json'),
     'postcompact observe argv must contribute checkpoint observe --json',
   );
+});
+
+test('router probe is a read-only route with a --json-only vocabulary', () => {
+  assert.deepEqual(allowedNames(ROUTE_FLAGS['router probe']), ['json', 'now', 'project-root', 'run-id']);
+  const source = readFileSync(CLI, 'utf8');
+  const inventory = source.match(/const MUTATING_ROUTE_INVENTORY = Object\.freeze\(\[([\s\S]*?)\]\);/)?.[1] || '';
+  assert.doesNotMatch(inventory, /router probe/);
+  const typo = invoke(['router', 'probe', '--json', '--bogus', '--run-id', 'RUN']);
+  assert.equal(typo.status, 2);
+  assert.match(typo.stderr, /unknown flag --bogus for route `router probe`/);
+  const help = invoke(['help', 'router']);
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /router probe/);
+  assert.match(help.stdout, /--json/);
 });
