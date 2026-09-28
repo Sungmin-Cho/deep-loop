@@ -12,7 +12,10 @@ import {
   buildRoutingRecord,
   isRoutingRecord,
   mayRecordInProgress,
+  POLICY_PIN_REASONS,
+  routerPinContext,
   shouldAttachRouting,
+  supportsPolicyPin,
   translateRouteOutcome,
 } from '../scripts/lib/router-adapter.mjs';
 
@@ -432,4 +435,101 @@ test('adapter: live DEEP_MODEL_ROUTER_CLI LOW route is dispatchable and freezes 
   assert.equal(frozen.decision.policy_sha256, translated.decision.policy_sha256);
   assert.match(frozen.decision.decision_fingerprint, /^[0-9a-f]{64}$/);
   assert.match(frozen.decision.request_sha256, /^[0-9a-f]{64}$/);
+});
+
+function pinnedLoop(...episodes) {
+  return { episodes };
+}
+
+function routedEpisode(policy, extra = {}) {
+  return {
+    id: extra.id || `ep-${policy.slice(0, 4)}`,
+    role: 'maker',
+    status: 'in_progress',
+    workstream_id: 'ws-1',
+    routing: buildRoutingRecord(
+      { route_schema_version: 1, task_class: 'IMPLEMENTATION' },
+      decision({ policy_sha256: policy }),
+    ),
+    ...extra,
+  };
+}
+
+test('pin: a run without a frozen digest sends no pin', () => {
+  const ctx = routerPinContext({ loop: pinnedLoop(), routeTask: '/r/route_task.py', routerVersion: '1.16.1' });
+  assert.equal(ctx.policy_pin, null);
+  assert.equal(ctx.frozen_policy_sha256, null);
+  assert.equal(ctx.policy_pin_supported, true);
+  assert.deepEqual(ctx.reasons, ['no-frozen-digest']);
+});
+
+test('pin: a supported router receives the frozen digest as policy_pin', () => {
+  for (const version of ['1.16.0', '1.16.1', '2.0.0']) {
+    const ctx = routerPinContext({
+      loop: pinnedLoop(routedEpisode(POLICY_A)), routeTask: '/r/route_task.py', routerVersion: version,
+    });
+    assert.equal(ctx.policy_pin, POLICY_A, version);
+    assert.equal(ctx.frozen_policy_sha256, POLICY_A);
+    assert.equal(ctx.router_version, version);
+    assert.deepEqual(ctx.reasons, []);
+  }
+});
+
+test('pin: a router older than 1.16.0 receives no pin', () => {
+  const ctx = routerPinContext({
+    loop: pinnedLoop(routedEpisode(POLICY_A)), routeTask: '/r/route_task.py', routerVersion: '1.15.0',
+  });
+  assert.equal(ctx.policy_pin, null);
+  assert.equal(ctx.policy_pin_supported, false);
+  assert.equal(ctx.frozen_policy_sha256, POLICY_A);
+  assert.deepEqual(ctx.reasons, ['router-pin-unsupported']);
+});
+
+test('pin: missing, rejected or unidentified routers send no pin, with ordered reasons', () => {
+  const frozen = pinnedLoop(routedEpisode(POLICY_A));
+  assert.deepEqual(routerPinContext({ loop: frozen, routeTask: '/r/route_task.py', routerVersion: null }).reasons,
+    ['router-version-unknown']);
+  assert.deepEqual(routerPinContext({ loop: frozen, routeTask: null, routerVersion: '1.16.1' }).reasons,
+    ['router-missing']);
+  assert.deepEqual(routerPinContext({
+    loop: frozen, routeTask: null, routerReason: 'router-path-rejected',
+  }).reasons, ['router-path-rejected']);
+  assert.deepEqual(routerPinContext({ loop: pinnedLoop(), routeTask: null }).reasons,
+    ['router-missing', 'no-frozen-digest']);
+  for (const version of ['1.16.0-rc.1', '1.16.0+b', 'v1.16.0', '1.16', 1.16]) {
+    const ctx = routerPinContext({ loop: frozen, routeTask: '/r/route_task.py', routerVersion: version });
+    assert.equal(ctx.router_version, null, String(version));
+    assert.equal(ctx.policy_pin, null, String(version));
+    assert.deepEqual(ctx.reasons, ['router-version-unknown'], String(version));
+  }
+});
+
+test('pin: the frozen digest is run-wide, including abandoned and other-workstream episodes', () => {
+  const abandoned = routedEpisode(POLICY_A, { id: 'ep-1', status: 'abandoned' });
+  const otherWs = routedEpisode(POLICY_A, { id: 'ep-1', workstream_id: 'ws-other' });
+  for (const first of [abandoned, otherWs]) {
+    const ctx = routerPinContext({
+      loop: pinnedLoop(first, routedEpisode(POLICY_B, { id: 'ep-2' })),
+      routeTask: '/r/route_task.py', routerVersion: '1.16.1',
+    });
+    assert.equal(ctx.frozen_policy_sha256, POLICY_A);
+    assert.equal(ctx.policy_pin, POLICY_A);
+  }
+});
+
+test('pin: supportsPolicyPin compares strict semver against 1.16.0', () => {
+  assert.equal(supportsPolicyPin('1.16.0'), true);
+  assert.equal(supportsPolicyPin('1.17.0'), true);
+  assert.equal(supportsPolicyPin('2.0.0'), true);
+  assert.equal(supportsPolicyPin('1.15.9'), false);
+  assert.equal(supportsPolicyPin('0.99.99'), false);
+  assert.equal(supportsPolicyPin('1.16.0-rc.1'), false);
+  assert.equal(supportsPolicyPin(null), false);
+});
+
+test('pin: POLICY_PIN_REASONS is the frozen router pin_* vocabulary', () => {
+  assert.ok(Object.isFrozen(POLICY_PIN_REASONS));
+  assert.deepEqual([...POLICY_PIN_REASONS].sort(), [
+    'pin_base_changed', 'pin_generation_missing', 'pin_revoked', 'pin_suppressed_by_off',
+  ]);
 });

@@ -224,3 +224,41 @@ export function assertRoutingDigest(loop, routing) {
   const next = routing?.decision?.policy_sha256;
   if (frozen && next && frozen !== next) throw new Error('EPISODE_ROUTING_DIGEST_MISMATCH');
 }
+
+// deep-model-router >= 1.16.0 reproduces an earlier policy from `policy_pin`;
+// an older router rejects the unknown RouteRequestV1 key with exit 2.
+export const POLICY_PIN_MIN_ROUTER_VERSION = '1.16.0';
+export const POLICY_PIN_REASONS = Object.freeze([
+  'pin_suppressed_by_off', 'pin_revoked', 'pin_base_changed', 'pin_generation_missing',
+]);
+const STRICT_SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
+
+export function supportsPolicyPin(version) {
+  const have = typeof version === 'string' ? version.match(STRICT_SEMVER) : null;
+  if (!have) return false;
+  const want = POLICY_PIN_MIN_ROUTER_VERSION.match(STRICT_SEMVER);
+  for (let i = 1; i <= 3; i += 1) {
+    if (Number(have[i]) !== Number(want[i])) return Number(have[i]) > Number(want[i]);
+  }
+  return true;
+}
+
+// Pure pin decision for `router probe`. The caller supplies the located router;
+// this module never imports the locator.
+export function routerPinContext({ loop, routeTask = null, routerVersion = null, routerReason = null } = {}) {
+  const frozen = frozenPolicyDigest(loop);
+  const version = typeof routerVersion === 'string' && STRICT_SEMVER.test(routerVersion) ? routerVersion : null;
+  const supported = Boolean(routeTask) && supportsPolicyPin(version);
+  let routerSide = null;
+  if (!routeTask) routerSide = routerReason === 'router-path-rejected' ? 'router-path-rejected' : 'router-missing';
+  else if (!version) routerSide = 'router-version-unknown';
+  else if (!supported) routerSide = 'router-pin-unsupported';
+  return {
+    route_task: routeTask || null,
+    router_version: version,
+    policy_pin_supported: supported,
+    frozen_policy_sha256: frozen,
+    policy_pin: supported && frozen ? frozen : null,
+    reasons: [...(routerSide ? [routerSide] : []), ...(frozen ? [] : ['no-frozen-digest'])],
+  };
+}
