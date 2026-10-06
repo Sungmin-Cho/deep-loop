@@ -21,6 +21,7 @@ export const ROUTE_FLAGS = Object.freeze({
   'recipe-match': route(['goal', ...L]),
   'run list': route([...L]),
   'run resolve': route(['purpose', 'cwd', ...L]),
+  'run status': route(['cwd', 'json', ...L], { unread: Object.freeze(['json']) }),
   'root diagnose': route(['candidate-project-root', ...L]),
   'root rebind': route([
     'candidate-project-root', 'actor', 'confirm',

@@ -18,7 +18,7 @@ const CLI = join(ROOT, 'scripts', 'deep-loop.mjs');
 
 const EXPECTED_KEYS = Object.freeze([
   'path resolve', 'validate', 'detect-plugins', 'recipe-match',
-  'run list', 'run resolve',
+  'run list', 'run resolve', 'run status',
   'root diagnose', 'root rebind', 'root recover', 'root recovery acquire',
   'runtime-executable diagnose', 'runtime-executable approve',
   'launcher-executable diagnose', 'launcher-executable approve',
@@ -49,7 +49,7 @@ function invoke(args) {
 
 test('ROUTE_FLAGS lists every rawRouteKey the dispatcher can produce', () => {
   assert.deepEqual(Object.keys(ROUTE_FLAGS).sort(), [...EXPECTED_KEYS].sort());
-  assert.equal(EXPECTED_KEYS.length, 82);
+  assert.equal(EXPECTED_KEYS.length, 83);
   const source = readFileSync(CLI, 'utf8');
   const inventory = source.match(/const MUTATING_ROUTE_INVENTORY = Object\.freeze\(\[([\s\S]*?)\]\);/)?.[1];
   assert.ok(inventory);
@@ -313,5 +313,22 @@ test('router probe is a read-only route with a --json-only vocabulary', () => {
   const help = invoke(['help', 'router']);
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /router probe/);
+  assert.match(help.stdout, /--json/);
+});
+
+test('run status is a read-only route: not mutating, --json/--cwd vocabulary, listed in help', () => {
+  assert.deepEqual(allowedNames(ROUTE_FLAGS['run status']), ['cwd', 'json', 'now', 'project-root', 'run-id']);
+  const source = readFileSync(CLI, 'utf8');
+  const inventory = source.match(/const MUTATING_ROUTE_INVENTORY = Object\.freeze\(\[([\s\S]*?)\]\);/)?.[1] || '';
+  const mutating = [...inventory.matchAll(/['"]([^'"]+)['"]/g)].map((match) => match[1]);
+  assert.ok(mutating.length > 0);
+  assert.equal(mutating.includes('run status'), false);
+  const typo = invoke(['run', 'status', '--json', '--bogus']);
+  assert.equal(typo.status, 2);
+  assert.equal(typo.stdout, '');
+  assert.match(typo.stderr, /unknown flag --bogus for route `run status`/);
+  const help = invoke(['help', 'run']);
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /run status/);
   assert.match(help.stdout, /--json/);
 });
