@@ -546,6 +546,30 @@ test('family 5 propagates recorded wrapper members through neutral helper names'
   ]) assert.deepEqual(findExecutableExternalActions(source), [], source);
 });
 
+test('family 5 follows JavaScript expression continuation across newlines in arrow-bodied wrappers', () => {
+  const cases = [
+    [`const invoke = argv => true &&\n$.process.run(argv); invoke(['git','push']);`, 'git push'],
+    [`const invoke = argv => true &&\n$.process.run(argv)\ninvoke(['git','push'])`, 'git push'],
+    [`const invoke2 = async argv => await\n$.process.run(argv); invoke2(['git','push']);`, 'git push'],
+    [`const invoke3 = argv => argv ? $.process.run(argv)\n: null; invoke3(['git','push']);`, 'git push'],
+    [`const invoke3 = argv => argv\n? $.process.run(argv)\n: null\ninvoke3(['git','push'])`, 'git push'],
+    [`const invoke4 = argv => $.process.run\n(argv); invoke4(['git','push']);`, 'git push'],
+    [`const invoke4 = argv => $.process.run\n(argv)\ninvoke4(['git','push'])`, 'git push'],
+    [`const post = () => $.http.fetch\n('https://api.github.com/repos/o/r/pulls', { method: 'POST' }); post();`, 'network api:pull-request'],
+    [`const post = () => $.http.fetch\n('https://api.github.com/repos/o/r/pulls', { method: 'POST' })\npost()`, 'network api:pull-request'],
+    [`import { spawnSync } from 'node:child_process';\nconst go = (b, argv) => true &&\nspawnSync(b, argv); go('git', ['push']);`, 'git push'],
+    [`import { spawnSync } from 'node:child_process';\nconst go = (b, argv) => spawnSync\n(b, argv)\ngo('git', ['push'])`, 'git push'],
+  ];
+  for (const [source, route] of cases) {
+    assert.deepEqual(findExecutableExternalActions(source), [route], source);
+  }
+  // an independent statement on the next line is not swallowed into the helper body
+  for (const source of [
+    `const note = argv => argv\nconst x = 1\n$.process.run(['node', 'x.mjs'])\nnote(['git', 'push'])`,
+    `const note = argv => argv.length\nconst x = $.process.run\nnote(['git', 'push'])`,
+  ]) assert.deepEqual(findExecutableExternalActions(source), [], source);
+});
+
 test('family 5 optional-chaining and wrapper negatives', () => {
   for (const source of [
     `const caps = { run: (argv) => $.process.run(argv) }; caps.run(['node', 'x.mjs', 'run', 'status', '--json']);`,

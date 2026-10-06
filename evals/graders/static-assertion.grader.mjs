@@ -186,17 +186,29 @@ function callableSurface(stream) {
 
   const functions = [];
   const objectLiterals = [];
-  // End of an expression-bodied arrow: `;`, a line break at depth 0 (unless the next line continues the
-  // expression with `.`, `?`, `+`, `&`, `|` or `:`), or the closer of an enclosing group.
+  // End of an expression-bodied arrow: `;`, the closer of an enclosing group, or a line break at depth 0
+  // where neither side requires the expression to continue. A line break is not a boundary after an
+  // operator / opening bracket / `=>` / prefix keyword, nor before `.`, `?.`, `(`, `[`, an operator, `,` or a
+  // closer. When in doubt the scan continues: a false positive is caught by the real-repo assertion, a false
+  // negative would be silent.
+  const CONTINUES_AFTER = new Set(['&&', '||', '??', '?', ':', '=', '==', '===', '!=', '!==', '<', '>', '<=', '>=',
+    '+', '-', '*', '/', '%', '**', '&', '|', '^', '<<', '>>', '>>>', ',', '.', '?.', '(', '[', '{', '=>', '!', '~',
+    'await', 'return', 'typeof', 'void', 'delete', 'new', 'yield', 'in', 'of', 'instanceof']);
+  const CONTINUES_BEFORE = new Set(['.', '?.', '(', '[', '&&', '||', '??', '?', ':', '=', '==', '===', '!=', '!==', '<', '>',
+    '<=', '>=', '+', '-', '*', '/', '%', '**', '&', '|', '^', ',', ')', ']', '}', 'in', 'of', 'instanceof']);
+  const continuesAfter = token => token.type !== 'string' && CONTINUES_AFTER.has(token.value);
+  const continuesBefore = token => token.type !== 'string' && CONTINUES_BEFORE.has(token.value);
   const statementEnd = start => {
     let depth = 0;
     for (let cursor = start; cursor < stream.length; cursor += 1) {
       const value = stream[cursor].value;
-      if (value === '(' || value === '[' || value === '{') depth += 1;
-      else if (value === ')' || value === ']' || value === '}') { if (depth === 0) return cursor - 1; depth -= 1; }
-      else if (depth === 0 && value === ';') return cursor;
+      const punct = stream[cursor].type === 'punct';
+      if (punct && (value === '(' || value === '[' || value === '{')) depth += 1;
+      else if (punct && (value === ')' || value === ']' || value === '}')) { if (depth === 0) return cursor - 1; depth -= 1; }
+      else if (punct && depth === 0 && value === ';') return cursor;
       const next = stream[cursor + 1];
-      if (depth === 0 && next && next.line > stream[cursor].line && !['.', '?', '+', '&', '|', ':'].includes(next.value)) return cursor;
+      if (depth === 0 && next && next.line > stream[cursor].line
+        && !continuesAfter(stream[cursor]) && !continuesBefore(next)) return cursor;
     }
     return stream.length - 1;
   };
