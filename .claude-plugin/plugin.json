@@ -5,5 +5,7 @@
   "author": { "name": "Sungmin Cho" },
   "repository": "https://github.com/Sungmin-Cho/deep-loop.git",
   "license": "MIT",
+  "hooks": "./hooks/hooks.claude.json",
+  "types": "./hooks/status-band/types.d.ts",
   "keywords": ["loop-engineering","orchestration","durable-state","handoff","deep-suite","claude-code","codex-cli","codex-app","grok-cli","windows"]
 }
