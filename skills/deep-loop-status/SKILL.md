@@ -46,7 +46,7 @@ node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" state get --field session_chain.leas
 node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" budget check --project-root "<canonical_project_root>" --run-id <run_id>
 ```
 
-`spent`(turns), `tokens_spent`, 남은 예산, `ok` 여부를 출력한다.
+`budget check`는 `{ok, reason, tier_after}`만 돌려준다. `spent`(turns), `tokens_spent`, 남은 예산 같은 수치는 이 명령이 아니라 `state get --field budget`의 값이나 읽기 전용 `run status --json`의 `run.budget`에서 읽는다.
 
 ### 3. Comprehension Debt
 

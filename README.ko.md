@@ -224,6 +224,19 @@ deep-loop은 자신이 쌓은 run 이력을 3-verb 커널 서브커맨드(`scrip
 
 payload(`insights_schema_version`은 `1` 유지 — 아래는 additive 필드)에는 신뢰 라벨 2종도 담깁니다: `suspicious_active`는 `excluded_active`의 부분집합으로, non-terminal·non-paused run 중 lease가 `released`이거나 `releasing`인데 TTL이 만료·부재인 경우를 표시합니다(죽은 lease 신호이지 추가 제외가 아님). `post_finish_mutated`는 terminal run의 `finish` 이벤트 뒤에 non-exempt 이벤트가 낀 경우를 표시합니다(집계에는 그대로 유지되고 라벨만 추가). `insights emit`의 stdout JSON은 두 라벨 배열을 envelope payload 안뿐 아니라 최상위 반환값에도 그대로 포함해 stdout만 읽는 소비자도 파싱 없이 볼 수 있습니다. `insights latest`는 artifact가 path+sha256으로 바인딩된 `insights-emitted` 이벤트(anchor) 이후, auto-floor cost를 제외한 이벤트가 정확히 하나이고 그것이 `finish`일 때만 신뢰합니다 — 그 외(다른 이벤트가 더 있거나 전혀 없는 경우)는 fail-soft로 다음 후보 파일로 건너뜁니다. 사람에게 insights 후보를 보여주는 소비자(예: `/deep-loop-finish`의 후보 블록)는 `suspicious_active`/`post_finish_mutated` 중 하나라도 비어있지 않으면 후보와 함께 표시해야 합니다.
 
+## Claude Code status band
+
+Claude Code(터미널 또는 desktop)에서는 deep-loop가 작업 중인 run을 프롬프트 위 한 줄로 보여줄 수 있습니다. 예: `loop D01T · running · budget 1/200 turns · debt 0.00/0.5 · review 0 pending · ws 0/1 · next: discover`. run id 끝 4자, status(와 pause 사유), 예산 대비 사용 turn(`soft-stop`/`hard-stop` 표시 포함), comprehension debt와 임계값, 미검토 human review 수, 끝난 workstream 수, 커널이 고른 next action, 걸린 circuit breaker를 표시합니다. breaker가 걸리거나 debt 게이트가 막거나 예산이 정지 구간에 들어가거나 run이 완료·중단되면 짧은 토스트가 뜹니다.
+
+- **읽기 전용.** band는 `run status --json`만 실행합니다. `Status`·`Ack` 버튼은 빈 프롬프트에 `/deep-loop-status`·`/deep-loop-ack`를 채워 넣을 뿐이며(`Hide`는 이 세션 동안 band를 숨김), 대신 전송하거나 상태를 바꾸지 않습니다. 프롬프트에 글이 있으면 비우라고 안내하고, composer가 없는 host에서는 명령을 복사합니다.
+- **나타나는 경우.** 터미널 또는 desktop surface에서, 작업 디렉터리가 `running` 또는 `paused` run 하나를 고를 때, 또는 여러 active run 때문에 선택이 모호할 때(`N active runs · /deep-loop-status`, `worktree claimed by N runs`, Status·Hide 버튼)입니다. run이 없는 프로젝트, 완료·중단된 run, 읽을 수 없거나 integrity 검사에 실패한 run 디렉터리, 비대화형 `claude -p` 세션, run 목록이 선택 상한을 넘는 경우에는 나타나지 않습니다.
+- **요구 사항.** Mods를 지원하는 Claude Code(2.1.287 이상). 그보다 오래된 Claude Code, Codex, Grok에서는 band가 없고 동작도 이전과 같습니다. schema나 migration 변경은 없습니다.
+- **끄는 법.** `Hide`(이 세션 한정), `/plugin`에서 deep-loop 플러그인 비활성화, 또는 `disableAllHooks` 설정. band를 숨기거나 꺼도 loop 동작은 달라지지 않습니다.
+
+같은 요약을 CLI로도 볼 수 있습니다: `node "<absolute-deep-loop-root>/scripts/deep-loop.mjs" run status --json [--cwd <dir>] [--run-id <id>] --project-root "<canonical_project_root>"`. 읽기 전용이며 lease를 잡지 않고, `status_version: 1`이 붙은 닫힌 모양의 JSON envelope 한 줄을 냅니다. exit 0·1은 항상 envelope를 담고(1은 단일 run이 선택되지 않은 경우, 즉 모호하거나 유효하지 않은 경우), exit 2는 stdout이 빈 사용법 오류입니다. goal proof는 평가하지 않으므로, proof에 따라 달라지는 v0.5 run의 next action은 평가하지 않음으로 보고됩니다.
+
+`.claude-plugin/plugin.json`은 Claude Code가 `hooks/hooks.claude.json`을 읽게 합니다. 이 파일은 `hooks/hooks.json`의 `hooks`를 그대로 반복하고 band 모듈을 더합니다. 반복하는 이유는 Grok이 manifest hooks 파일만 읽기 때문입니다. Claude Code는 동일한 command hook을 한 번만 실행하며(Claude Code 2.1.291·2.1.200에서 측정), Codex는 계속 `hooks/hooks.json`만 읽습니다.
+
 ## 안전 불변식
 
 1. **proposal-only / 사람 승인** — push, PR, merge, publish, delete, marketplace/deep-suite sync는 자동 실행 안 함. v1은 항상 proposal을 제시하고 사람 확인 대기.

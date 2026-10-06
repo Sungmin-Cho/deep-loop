@@ -92,6 +92,7 @@ smoke and transport fixtures must not be described as statistical efficacy evide
   and the attested spawn/finalize binders. `DEEP_LOOP_ROOT/scripts/bridge-exec.mjs`
   constructs child argv from the probed mechanism; `DEEP_LOOP_ROOT/scripts/bridge-finalize.mjs`
   copies stdout only from a SUCCEEDED supervisor receipt. They do not mutate loop state.
+  `DEEP_LOOP_ROOT/scripts/lib/run-status.mjs` owns the read-only `run status --json` summary.
   `DEEP_LOOP_ROOT/scripts/lib/router-probe.mjs` owns the read-only `router probe`: the
   realpath and manifest version of the router install the locator selects, and the run's
   frozen-digest `policy_pin`. It reads files only and never spawns.
@@ -103,6 +104,8 @@ smoke and transport fixtures must not be described as statistical efficacy evide
   - `DEEP_LOOP_ROOT/scripts/hooks-impl/sessionstart-restore.mjs` — SessionStart (`compact` source), read-only.
   - `DEEP_LOOP_ROOT/scripts/hooks-impl/drive-headless.mjs` — measured headless driver.
   - `DEEP_LOOP_ROOT/hooks/hooks.json` holds their static shell-free Node bootstraps.
+  - `DEEP_LOOP_ROOT/hooks/hooks.claude.json` — Claude manifest hooks file: `hooks.json`'s hooks verbatim plus the module.
+  - `DEEP_LOOP_ROOT/hooks/status-band/register.mjs` and `DEEP_LOOP_ROOT/hooks/status-band/band.mjs` — Claude-only read-only band.
 - `skills/deep-loop*/SKILL.md` + `skills/deep-loop-workflow/references/*.md` — Execution plane.
 - `protocols/*.json` · `recipes/*.json` (+ `recipes/automation/*.yml`) · `schemas/*.json` —
   declarative adapters, policies, durable/input schemas.
@@ -181,6 +184,8 @@ Enforced by code and by review. Each is load-bearing; none is a summary of anoth
    spawns: PreCompact is emit-only, PostCompact invokes only the bounded public
    `checkpoint observe` CLI, SessionStart emits restore context only, and every
    exception is best-effort and non-blocking.
+   The Claude-only status-band mod runs only bounded read-only `run status --json`,
+   changes no state, and its absence changes no behavior.
    **Worktree carve-out:** Execution-plane worktree creation is allowed **only** under
    `<root>/.claude/worktrees/` (or `.worktrees/`) — project-root-internal and
    gitignored. Execution-plane preferred creation is `<root>/.worktrees/<slug>`. Kernel `newWorkstream` still accepts `<root>/.claude/worktrees/` as well.
@@ -225,6 +230,9 @@ node --test tests/<x>.test.mjs   # single file
   결제)은 `DEEP_LOOP_ROOT/schemas/runtime-literal-allowlist.json`에 사유와 함께 등재한다.
   `DEEP_LOOP_ROOT/tests/unit/runtime-literals.test.mjs`가 미등재 리터럴을 잡지만 **강제 장치가 아니다** —
   변수 경유 비교와 `??` 기본값은 잡지 못한다.
+- A surface declared only by a host manifest (the Claude status band) is not a
+  session-runtime capability: no `RUNTIME_CAPABILITIES` field. `hooks.claude.json`'s `hooks`
+  must equal `hooks.json`'s — Grok reads only that file; Claude runs identical commands once (measured).
 - Every deep-loop artifact except `loop.json` — handoff, compaction-state,
   final-report — is wrapped in the M3 envelope (`producer:"deep-loop"`, ULID `run_id`,
   `parent_run_id` chain).

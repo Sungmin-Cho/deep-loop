@@ -5,6 +5,40 @@ All notable changes to deep-loop are documented in this file.
 > Note: the `[1.1.0]`/`[1.2.0]` entries pre-date this changelog file (a known lag between
 > `plugin.json.version` and the changelog); this release does not retro-fill them.
 
+## [1.26.0] — 2026-10-06
+
+### Added
+
+- Read-only `run status [--json] [--cwd DIR] [--run-id ID] [--project-root R]`: one
+  closed-shape `status_version: 1` JSON envelope for the selected run (status, budget,
+  comprehension debt, breaker, pending human reviews, workstreams, next action) or for the
+  ambiguous/invalid/none resolution. Exit 0 or 1 always carries the envelope; exit 2 is a
+  usage error with empty stdout. It evaluates no goal proof and takes no lease.
+- Claude Code status band mod (`hooks/status-band/`): a read-only line above the prompt
+  for a selected `running` or `paused` run, or a bounded notice for several active runs,
+  with `Status`, `Ack` and `Hide` buttons that only fill the prompt, and one merged toast on
+  breaker, debt-gate, budget-stop and completion transitions. It runs only `run status --json`.
+  Needs Claude Code with Mods support (2.1.287 or newer); disable it with `Hide`, by disabling
+  the plugin, or with `disableAllHooks`.
+
+### Changed
+
+- The static assertion grader now recognizes Claude Code Mods host calls (`$.process.run`,
+  `$.process.spawn`, `$.http.fetch`), including optional chaining, namespace aliases and
+  wrapper members, so the band is checked like the hook bootstraps.
+- `/deep-loop-status` no longer claims that `budget check` prints spent turns and tokens; it
+  returns `{ok, reason, tier_after}`, and the figures come from `state get` or `run status --json`.
+
+### Compatibility
+
+- Codex reads only `hooks/hooks.json`, which is unchanged. Grok reads the manifest hooks file
+  `hooks/hooks.claude.json`, whose command hooks are identical (measured on Grok 1.0.46).
+  Claude Code runs the identical command hooks once (measured on 2.1.291 and 2.1.200,
+  including PreCompact, PostCompact and SessionStart(compact)). `hooks/hooks.claude.json` must keep
+  repeating `hooks/hooks.json`'s `hooks` verbatim.
+- Claude Code without Mods support shows no band and behaves as before.
+- No schema or migration change.
+
 ## [1.25.0] — 2026-09-28
 
 ### Added
