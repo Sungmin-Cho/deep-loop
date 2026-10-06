@@ -504,3 +504,53 @@ test('family 5 reports Mods host-call violations in a production surface file', 
   assert.ok(result.evidence.violations.some(item => item.path === path && item.route === 'git push'));
   assert.ok(result.evidence.production_surfaces.includes(path));
 });
+
+test('family 5 follows optional chaining, namespace aliases and Mods wrapper members', () => {
+  const cases = [
+    [`$?.process?.run(['git', 'push']);`, 'git push'],
+    [`$.process?.run?.(['git', 'push']);`, 'git push'],
+    [`const p = $.process; p.run(['git', 'push']);`, 'git push'],
+    [`const p = engine.process; await p.spawn({ argv: ['gh', 'pr', 'create'] });`, 'gh pr'],
+    [`const h = $.http; await h.fetch('https://x/pulls', { method: 'POST' });`, 'network api:pull-request'],
+    [`const caps = { run: (argv, init) => $.process.run(argv, init) }; caps.run(['git', 'push']);`, 'git push'],
+    [`const caps = { run: (argv, init) => $.process.run(argv, init) }; caps?.run(['git', 'push']);`, 'git push'],
+    [`let caps; caps = { run: (argv) => $.process.run(argv) }; function go(c) { return c.run(['git', 'push']); } go(caps);`, 'git push'],
+    [`const caps = { run: (argv) => $.process.run(argv) }; const exec = async (c, argv) => c.run(argv); await exec(caps, ['git', 'push']);`, 'git push'],
+    [`const caps = { get: (u, i) => $.http.fetch(u, i) }; await caps.get('https://x/pulls', { method: 'POST' });`, 'network api:pull-request'],
+  ];
+  for (const [source, route] of cases) {
+    assert.deepEqual(findExecutableExternalActions(source), [route], source);
+  }
+});
+
+test('family 5 optional-chaining and wrapper negatives', () => {
+  for (const source of [
+    `const caps = { run: (argv) => $.process.run(argv) }; caps.run(['node', 'x.mjs', 'run', 'status', '--json']);`,
+    `const caps = { run: (argv) => $.process.run(argv) }; caps?.run(['node', 'x.mjs', 'run', 'status', '--json']);`,
+    `const p = $.process; p.run(['node', 'x.mjs', 'run', 'status']);`,
+    `const caps = { note: (text) => text }; caps.note(['git', 'push']);`,
+    `const q = []; q?.push('git', 'push');`,
+  ]) assert.deepEqual(findExecutableExternalActions(source), [], source);
+});
+
+test('family 5 mutation: the real status band mod has no violation, and swapping its argv for git push is caught', () => {
+  const real = readFileSync(new URL('../hooks/status-band/register.mjs', import.meta.url), 'utf8');
+  assert.deepEqual(findExecutableExternalActions(real), []);
+  const push = `['git', 'push', 'origin', 'main']`;
+  // every run(c, <argv>, root) call site
+  const callSites = [...real.matchAll(/parseStatus\(await run\(c, (statusArgv\([^)]*\)), sessionRoot\)\)/g)];
+  assert.ok(callSites.length >= 2, 'both status run(...) call sites exist');
+  for (const site of callSites) {
+    const mutated = real.replace(site[1], push);
+    assert.notEqual(mutated, real);
+    assert.ok(findExecutableExternalActions(mutated).includes('git push'), site[1]);
+  }
+  // the capability wrapper itself: c.run(argv, ...) is given a fixed pushing argv
+  const inner = real.replace('await c.run(argv, {', `await c.run(${push}, {`);
+  assert.notEqual(inner, real);
+  assert.ok(findExecutableExternalActions(inner).includes('git push'));
+  // and the host call inside the wrapper
+  const host = real.replace('$.process.run(argv, init)', `$.process.run(${push}, init)`);
+  assert.notEqual(host, real);
+  assert.ok(findExecutableExternalActions(host).includes('git push'));
+});

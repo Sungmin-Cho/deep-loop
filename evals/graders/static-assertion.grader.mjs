@@ -70,10 +70,15 @@ function memberPathAt(stream, start) {
   if (stream[start]?.type !== 'identifier') return null;
   const segments = [stream[start].value];
   let next = start + 1;
-  while (stream[next]?.value === '.' && stream[next + 1]?.type === 'identifier') {
-    segments.push(stream[next + 1].value);
-    next += 2;
+  for (;;) {
+    // `?.` is tokenised as `?` then `.`: both spellings are member separators.
+    const dot = stream[next]?.value === '.' ? next : (stream[next]?.value === '?' && stream[next + 1]?.value === '.' ? next + 1 : -1);
+    if (dot < 0 || stream[dot + 1]?.type !== 'identifier') break;
+    segments.push(stream[dot + 1].value);
+    next = dot + 2;
   }
+  // `x?.(` is a call: point `next` at the `(`.
+  if (stream[next]?.value === '?' && stream[next + 1]?.value === '.' && stream[next + 2]?.value === '(') next += 2;
   return { segments, next };
 }
 
@@ -111,6 +116,10 @@ function callableSurface(stream) {
   const networkNamespaces = new Set(['http', 'https']);
   const processObjectAliases = new Map();
   const networkObjectAliases = new Map([['globalThis', new Set(['fetch'])]]);
+  // Mods: `const p = $.process` (namespace alias) and wrapper property names (`{ run: (a) => $.process.run(a) }`).
+  const hostNamespaces = { process: new Set(), network: new Set() };
+  const hostMembers = { process: new Set(['run', 'spawn']), network: new Set(['fetch']) };
+  const memberNames = { process: new Set(), network: new Set() };
   const objectMember = (map, object, member) => {
     if (!map.has(object)) map.set(object, new Set());
     const before = map.get(object).size;
@@ -140,6 +149,7 @@ function callableSurface(stream) {
   };
   const isCallablePath = (segments, aliases, namespaces, members, objects, kind) => {
     if (modHostCall(segments) === kind) return true;
+    if (segments.length === 2 && hostNamespaces[kind]?.has(segments[0]) && hostMembers[kind]?.has(segments[1])) return true;
     if (segments.length === 1) return aliases.has(segments[0]);
     if (segments.length === 2 && namespaces.has(segments[0]) && members.has(segments[1])) return true;
     return objects.get(segments.slice(0, -1).join('.'))?.has(segments.at(-1)) === true;
@@ -287,6 +297,11 @@ function callableSurface(stream) {
         if (isCallablePath(target.segments, networkAliases, networkNamespaces, NETWORK_MEMBERS, networkObjectAliases, 'network')) {
           changed = addCallablePath(networkAliases, networkObjectAliases, name) || changed;
         }
+        if (target.segments.length >= 2 && stream[target.next]?.value !== '(') {
+          const last = target.segments.at(-1);
+          const kindOf = last === 'process' ? 'process' : (last === 'http' ? 'network' : null);
+          if (kindOf && !hostNamespaces[kindOf].has(name)) { hostNamespaces[kindOf].add(name); changed = true; }
+        }
         const targetPath = target.segments.join('.');
         if (hasObjectPrefix(processObjectAliases, targetPath)) changed = copyObjectPaths(processObjectAliases, targetPath, name) || changed;
         if (hasObjectPrefix(networkObjectAliases, targetPath)) changed = copyObjectPaths(networkObjectAliases, targetPath, name) || changed;
@@ -301,6 +316,13 @@ function callableSurface(stream) {
       changed = propagateObject(object, networkAliases, networkNamespaces, NETWORK_MEMBERS, networkObjectAliases, 'network') || changed;
     }
     for (const helper of functions) {
+      if (helper.name.includes('.')) {
+        const member = helper.name.split('.').at(-1);
+        if (hasDirect(helper.body, processAliases, processNamespaces, PROCESS_CALLS, processObjectAliases, 'process')
+          && !memberNames.process.has(member)) { memberNames.process.add(member); changed = true; }
+        if (hasDirect(helper.body, networkAliases, networkNamespaces, NETWORK_MEMBERS, networkObjectAliases, 'network')
+          && !memberNames.network.has(member)) { memberNames.network.add(member); changed = true; }
+      }
       if (hasDirect(helper.body, processAliases, processNamespaces, PROCESS_CALLS, processObjectAliases, 'process')
         ) changed = addCallablePath(processAliases, processObjectAliases, helper.name) || changed;
       if (hasDirect(helper.body, networkAliases, networkNamespaces, NETWORK_MEMBERS, networkObjectAliases, 'network')
@@ -309,7 +331,7 @@ function callableSurface(stream) {
   }
   return {
     processAliases, networkAliases, processNamespaces, networkNamespaces,
-    processObjectAliases, networkObjectAliases,
+    processObjectAliases, networkObjectAliases, hostNamespaces, hostMembers, memberNames,
   };
 }
 
@@ -336,6 +358,16 @@ function networkRoute(words) {
   return 'network-write';
 }
 
+// Mods namespace aliases (`const p = $.process; p.run(...)`) and wrapper member names recorded for this file
+// (any `<x>.<name>(` / `<x>?.<name>(` once `<name>` was seen to wrap a host call).
+// Known gaps: destructured `({ process }) => process.run(...)` (a bare `process.run` is not judged, because
+// Node's own `process` global would make that a false positive) and wrappers built with computed keys.
+function hostCall(surface, segments, kind) {
+  if (segments.length < 2) return false;
+  if (segments.length === 2 && surface.hostNamespaces[kind].has(segments[0]) && surface.hostMembers[kind].has(segments[1])) return true;
+  return surface.memberNames[kind].has(segments.at(-1));
+}
+
 export function findExecutableExternalActions(source, { path = '<source>', structured = false } = {}) {
   const stream = tokens(source);
   const constants = assignedExpressions(stream);
@@ -348,12 +380,14 @@ export function findExecutableExternalActions(source, { path = '<source>', struc
       ? surface.processAliases.has(call.segments[0])
       : (call.segments.length === 2 && surface.processNamespaces.has(call.segments[0]) && PROCESS_CALLS.has(call.segments[1]))
         || surface.processObjectAliases.get(call.segments.slice(0, -1).join('.'))?.has(call.segments.at(-1)))
-      || modHostCall(call.segments) === 'process';
+      || modHostCall(call.segments) === 'process'
+      || hostCall(surface, call.segments, 'process');
     const networkCall = (call.segments.length === 1
       ? surface.networkAliases.has(call.segments[0])
       : (call.segments.length === 2 && surface.networkNamespaces.has(call.segments[0]) && NETWORK_MEMBERS.has(call.segments[1]))
         || surface.networkObjectAliases.get(call.segments.slice(0, -1).join('.'))?.has(call.segments.at(-1)))
-      || modHostCall(call.segments) === 'network';
+      || modHostCall(call.segments) === 'network'
+      || hostCall(surface, call.segments, 'network');
     if (!processCall && !networkCall) continue;
     const open = call.next;
     const end = matching(stream, open);
