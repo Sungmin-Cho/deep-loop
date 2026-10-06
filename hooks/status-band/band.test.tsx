@@ -34,7 +34,7 @@ function rig($: any, on: any, surface: Surface, init: { surfaces?: string[] } = 
   const calls: string[][] = []
   const inits: any[] = []
   const toasts: string[] = []
-  const fills: string[] = []
+  const fills: { text: string; mode: string }[] = []
   const copies: string[] = []
   let submits = 0
   const ctl: any = {
@@ -44,6 +44,8 @@ function rig($: any, on: any, surface: Surface, init: { surfaces?: string[] } = 
     primary: running() as { exitCode: number; stdout: string },
     byRun: {} as Record<string, { exitCode: number; stdout: string }>,
     gate: null as null | Promise<void>,
+    // Holds the n-th band state read counted from the next process.run result (1 = refresh's own read, 2 = inside the state update).
+    hold: null as null | { n: number; promise: Promise<void> },
   }
   on('session.start', (_$: any, e: any) => ({ cwd: e.cwd }))
   on('session.attach', (_$: any, e: any) => ({ clientId: e.clientId }))
@@ -58,12 +60,21 @@ function rig($: any, on: any, surface: Surface, init: { surfaces?: string[] } = 
     calls.push([...e.argv])
     inits.push(e.init)
     if (ctl.gate) await ctl.gate
+    if (ctl.hold) ctl.hold.seen = 0
     const i = e.argv.indexOf('--run-id')
     const r = i >= 0 ? (ctl.byRun[e.argv[i + 1]] ?? failure()) : ctl.primary
     return { value: { ...r, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
+  on('state.get', { plugin: 'deep-loop' } as never, async (_$: any, e: any, next: any) => {
+    const h = ctl.hold
+    if (h && h.seen !== undefined) {
+      h.seen += 1
+      if (h.seen === h.n) await h.promise
+    }
+    return next(e)
+  })
   on('prompt.read', () => ({ value: { text: ctl.draft, cursor: ctl.draft.length } }))
-  on('prompt.fill', (_$: any, e: any) => { fills.push(e.text); return ctl.fill })
+  on('prompt.fill', (_$: any, e: any) => { fills.push({ text: e.text, mode: e.mode }); return ctl.fill })
   on('ui.copy', (_$: any, e: any) => { copies.push(e.text); return { value: { isCopied: true } } })
   on('ui.render', (t$: any, e: any) => h(t$.ui.resolve(e).Box, {}) as never)
   on('ui.toast', (_$: any, e: any) => { toasts.push(e.text); return { value: undefined } })
@@ -162,16 +173,19 @@ for (const surface of SURFACES) {
     let v = await r.draw()
     r.ctl.fill = { isFilled: true, text: '/deep-loop-status ', cursor: 18 }
     await v.ui.press({ key: 'status' })
-    expect(r.fills).toEqual(['/deep-loop-status '])
+    expect(r.fills).toEqual([{ text: '/deep-loop-status ', mode: 'insert' }])
     expect(r.toasts).toEqual([])
     r.ctl.draft = 'half typed'
     await v.ui.press({ key: 'ack' })
-    expect(r.fills).toEqual(['/deep-loop-status '])
+    expect(r.fills).toEqual([{ text: '/deep-loop-status ', mode: 'insert' }])
     expect(r.toasts).toEqual(['Clear the prompt to insert /deep-loop-ack'])
     r.ctl.draft = ''
     r.ctl.fill = { isFilled: false, text: '', cursor: 0 }
     await v.ui.press({ key: 'ack' })
-    expect(r.fills).toEqual(['/deep-loop-status ', '/deep-loop-ack '])
+    expect(r.fills).toEqual([
+      { text: '/deep-loop-status ', mode: 'insert' },
+      { text: '/deep-loop-ack ', mode: 'insert' },
+    ])
     expect(r.toasts[1]).toBe('Type /deep-loop-ack in the prompt')
     expect(r.submits()).toBe(0)
     await v.ui.press({ key: 'hide' })
@@ -335,6 +349,34 @@ test('detach while the primary read is pending: no probe, no state write', async
   expect(r.toasts).toEqual([])
   await r.clock.advance(5000)
   expect(r.probeCalls()).toBe(0)
+})
+
+test('detach while the state write is pending: the stale result is neither published nor toasted', async ($, on) => {
+  const r = rig($, on, 'terminal')
+  await r.start()
+  expect((await r.shown()).line).toContain('budget 41/200')
+  let release: () => void = () => {}
+  r.ctl.hold = { n: 2, promise: new Promise<void>((resolve) => { release = resolve }) }
+  r.ctl.primary = running({ breaker: { tripped: true, reason: 'stale-trip' }, budget: { spent: 99, total: 200, tokens_spent: 1, tokens_total: 2, state: 'ok', reason: 'ok' } })
+  await r.turn()
+  await r.clock.advance(1500) // the primary result is in; the write inside the state update is held
+  r.ctl.surfaces = []
+  await r.detach()
+  await r.clock.advance(1)
+  r.ctl.hold = null
+  release()
+  await r.clock.advance(0)
+  expect(r.toasts).toEqual([])
+  // re-attach: the next refresh publishes the fresh result and no stale line ever shows
+  r.ctl.primary = running({ budget: { spent: 150, total: 200, tokens_spent: 1, tokens_total: 2, state: 'ok', reason: 'ok' } })
+  r.ctl.surfaces = ['terminal']
+  await r.attach()
+  await r.clock.advance(1)
+  const v = await r.shown()
+  expect(v.line).toContain('budget 150/200')
+  expect(v.line).not.toContain('stale-trip')
+  expect(v.line).not.toContain('99/200')
+  expect(r.toasts).toEqual([])
 })
 
 test('transitions merge into one toast per refresh', async ($, on) => {

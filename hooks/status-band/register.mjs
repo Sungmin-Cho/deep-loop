@@ -73,7 +73,10 @@ async function refresh() {
     }
     const toasts = transitions(prev?.selected ?? null, next.selected)
     if (!live()) return
-    await c.writeBand((s) => ({ ...next, tick: s?.tick ?? next.tick }))
+    // The updater itself refuses stale work: the Mods update reads state before applying it,
+    // so a detach inside that window must not publish this result.
+    await c.writeBand((s) => (live() ? { ...next, tick: s?.tick ?? next.tick } : s))
+    if (!live()) return
     // One toast per refresh: several in one tick draw only the last.
     if (toasts.length) c.toast(toasts.join(' · '))
   } finally {
