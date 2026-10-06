@@ -5,7 +5,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { reviewedGoalWork, goalOk, nativeObservation } from './helpers/reviewed-goal.mjs';
 import { makeGoalFixture, TEST_GOAL_CONTRACT } from './helpers/goal-fixture.mjs';
-import { goalPrerequisites } from '../scripts/lib/goal-review.mjs';
+import { goalPrerequisites, goalReviewBoundaryBlocked } from '../scripts/lib/goal-review.mjs';
+import { nextAction } from '../scripts/lib/next-action.mjs';
 import { createExecutionRecord, transitionAttempt } from '../scripts/lib/attempt-state.mjs';
 
 const finish = f => f.cli(['finish', '--status', 'completed', '--report', 'final-report.md']);
@@ -222,4 +223,39 @@ test('explicit handoff mode sends a closed owner to its canonical boundary befor
   assert.equal(result.exit, 1);
   assert.match(result.stderr, /GOAL_BOUNDARY_HANDOFF_REQUIRED/);
   assert.equal(f.state().goal_reviews.length, 0);
+});
+
+// A real completed goal review (snapshot and result artifacts on disk): the expensive proof is evaluated
+// without the status-only skip and reported as not_evaluated with it, at both points that read the proof.
+test('a completed goal review is evaluated normally and not_evaluated under skipGoalProof at both proof points', (t) => {
+  const NOW = '2026-10-06T00:00:00.000Z';
+  const completed = (f, verdict) => {
+    const review = dispatch(f).review; goalOk(start(f, review));
+    const value = verdict === 'approve' ? document(f, review) : document(f, review, { verdict: 'REQUEST_CHANGES', failed: ['REQ-A'] });
+    goalOk(returned(f, review, JSON.stringify(value))); goalOk(record(f, value));
+    return structuredClone(f.state());
+  };
+  const skipped = { type: 'not_evaluated', reason: 'goal-proof' };
+
+  const approvedFixture = reviewedGoalWork(t);
+  const loop = completed(approvedFixture, 'approve');
+  assert.equal(loop.goal_reviews[0].status, 'approved');
+  assert.equal(goalReviewBoundaryBlocked(loop), false);
+  assert.deepEqual(nextAction(loop, { now: NOW }).action, { type: 'finish' });
+  assert.deepEqual(nextAction(loop, { now: NOW, skipGoalProof: true }).action, skipped);
+
+  // boundary-blocked scope: the same real review artifacts, a closed workstream scope in handoff mode
+  const boundary = structuredClone(loop);
+  boundary.orchestration.boundary_mode = 'handoff';
+  const scope = boundary.session_chain.sessions.at(-1).scope;
+  scope.kind = 'workstream'; scope.closed_at ??= NOW; scope.superseded_at = null;
+  scope.terminal_event ??= { type: 'workstream-terminal', seq: 1 };
+  assert.equal(goalReviewBoundaryBlocked(boundary), true);
+  assert.deepEqual(nextAction(boundary, { now: NOW }).action, { type: 'finish' });
+  assert.deepEqual(nextAction(boundary, { now: NOW, skipGoalProof: true }).action, skipped);
+
+  const rejectedFixture = reviewedGoalWork(t);
+  const rejected = completed(rejectedFixture, 'reject');
+  assert.equal(nextAction(rejected, { now: NOW }).action.reason, 'goal-review-rejected');
+  assert.deepEqual(nextAction(rejected, { now: NOW, skipGoalProof: true }).action, skipped);
 });

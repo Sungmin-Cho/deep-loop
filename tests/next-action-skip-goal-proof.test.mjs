@@ -92,9 +92,10 @@ test('goalProof: null under skip is not_evaluated and the proof is not computed'
   assert.deepEqual(r.action, { type: 'not_evaluated', reason: 'goal-proof' });
 });
 
-// A completed goal review whose result artifact cannot be read: the proof outcome shows without the skip,
-// and the skip keeps it unevaluated at the final block.
-test('an unreadable goal review result shows its proof outcome normally and is not_evaluated under skip', t => {
+// A synthetic approved goal review with no snapshot or result artifacts on disk: the proof fails at the
+// missing snapshot (before any result reading, hashing or git), so this only shows the skip at the final
+// block. The real completed-review coverage, at both proof points, is in tests/goal-review.test.mjs.
+test('a goal review with missing artifacts reports GOAL_PROOF_UNAVAILABLE normally and is not_evaluated under skip', t => {
   const loop = structuredClone(readLoop(reviewedGoalWork(t)));
   loop.goal_reviews.push({ id: 'GR-1', status: 'approved', verdict: 'APPROVE', transport: 'native-task',
     snapshot_rel: 'goal-snapshots/GR-1.json', snapshot_sha256: 'a'.repeat(64),
