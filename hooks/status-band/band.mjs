@@ -144,16 +144,17 @@ export function transitions(prevSelected, nextSelected) {
 
 const num = (v) => (isNum(v) ? String(v) : '?');
 const statusButton = Object.freeze({ key: 'status', label: 'Status', command: STATUS_COMMAND });
+const hideButton = Object.freeze({ key: 'hide', label: 'Hide' });
 
 export function bandModel(display, { hidden, hasSurvey, active } = {}) {
   if (!active || hasSurvey || hidden || display?.kind !== 'envelope') return null;
   const { resolution, run } = display.envelope;
   if (resolution.kind === 'ambiguous') {
     if (resolution.reason === 'multi-active-root-cwd') {
-      return { line: `deep-loop · ${num(resolution.total)} active runs · ${STATUS_COMMAND}`, buttons: [{ ...statusButton }] };
+      return { line: `deep-loop · ${num(resolution.total)} active runs · ${STATUS_COMMAND}`, buttons: [{ ...statusButton }, { ...hideButton }] };
     }
     if (resolution.reason === 'duplicate-worktree-claim') {
-      return { line: `deep-loop · worktree claimed by ${num(resolution.total)} runs · ${STATUS_COMMAND}`, buttons: [{ ...statusButton }] };
+      return { line: `deep-loop · worktree claimed by ${num(resolution.total)} runs · ${STATUS_COMMAND}`, buttons: [{ ...statusButton }, { ...hideButton }] };
     }
     return null;
   }
@@ -171,7 +172,7 @@ export function bandModel(display, { hidden, hasSurvey, active } = {}) {
   if (run.next_action.type) parts.push(`next: ${run.next_action.type}`);
   const buttons = [{ ...statusButton }];
   if (run.pending_human_reviews > 0) buttons.push({ key: 'ack', label: 'Ack', command: ACK_COMMAND });
-  buttons.push({ key: 'hide', label: 'Hide' });
+  buttons.push({ ...hideButton });
   return { line: parts.join(' · '), buttons };
 }
 

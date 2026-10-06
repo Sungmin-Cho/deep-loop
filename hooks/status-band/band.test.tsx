@@ -140,18 +140,19 @@ for (const surface of SURFACES) {
     }
   })
 
-  test(`ambiguous replies draw the two fixed sentences with a Status button (${surface})`, async ($, on) => {
+  test(`ambiguous replies draw the two fixed sentences with Status and Hide buttons (${surface})`, async ($, on) => {
     const r = rig($, on, surface)
     r.ctl.primary = ambiguous('multi-active-root-cwd', 3)
     await r.start()
     let v = await r.shown()
     expect(v.line).toContain('deep-loop · 3 active runs · /deep-loop-status')
-    expect(v.buttons).toEqual(['Status'])
+    expect(v.buttons).toEqual(['Status', 'Hide'])
     r.ctl.primary = ambiguous('duplicate-worktree-claim', 2)
     await r.turn()
     await r.clock.advance(1500)
     v = await r.shown()
     expect(v.line).toContain('deep-loop · worktree claimed by 2 runs · /deep-loop-status')
+    expect(v.buttons).toEqual(['Status', 'Hide'])
   })
 
   test(`Hide, Status fill (insert, no submit), busy prompt and refused fill (${surface})`, async ($, on) => {

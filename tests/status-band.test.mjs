@@ -317,9 +317,11 @@ test('bandModel: null cases (order 1, 3, 4)', () => {
 test('bandModel: ambiguous lines', () => {
   const a = model(P(ambiguousEnv('multi-active-root-cwd', 3)));
   assert.equal(a.line, 'deep-loop · 3 active runs · /deep-loop-status');
-  assert.deepEqual(a.buttons, [{ key: 'status', label: 'Status', command: '/deep-loop-status' }]);
+  assert.deepEqual(a.buttons, [{ key: 'status', label: 'Status', command: '/deep-loop-status' },
+    { key: 'hide', label: 'Hide' }]);
   const d = model(P(ambiguousEnv('duplicate-worktree-claim', 2)));
   assert.equal(d.line, 'deep-loop · worktree claimed by 2 runs · /deep-loop-status');
+  assert.deepEqual(d.buttons.map((b) => b.key), ['status', 'hide']);
 });
 
 test('bandModel: run line', () => {
