@@ -158,7 +158,7 @@ function finishOrAdvance(loop, gate, fanoutBlocked, blockingMakers) {
   return A(gate, { type: 'await_human', reason: 'active-work-remains' }, '/deep-loop-status');
 }
 
-export function nextAction(loop, { now = Date.now(), unattended = false, goalProof } = {}) {
+export function nextAction(loop, { now = Date.now(), unattended = false, goalProof, skipGoalProof = false } = {}) {
   const b = checkBudget(loop, { now });
   const br = checkBreaker(loop);
   const debt = computeDebt(loop);
@@ -237,7 +237,7 @@ export function nextAction(loop, { now = Date.now(), unattended = false, goalPro
     ? { ...r, action: { ...r.action, advice: 'compact', advice_reason: 'per_session_turn_cap' } }
     : r;
 
-  if (isGoalDriven(loop)) return withAdvice(goalNextAction(loop, { gate, debt, blockingMakers, goalProof }));
+  if (isGoalDriven(loop)) return withAdvice(goalNextAction(loop, { gate, debt, blockingMakers, goalProof, skipGoalProof }));
 
   const routingLoop = workstreamSession ? scopedRoutingView(loop, currentSession) : loop;
   const route = () => {

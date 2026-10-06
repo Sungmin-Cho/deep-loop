@@ -14,7 +14,7 @@ const pausedInline = episode => episode.role === 'maker' && episode.status === '
 
 // The LLM chooses task content and how to fulfill it. These descriptors expose
 // outstanding work and the same scope/proof constraints enforced by writers.
-export function goalNextAction(loop, { gate, debt, blockingMakers, goalProof } = {}) {
+export function goalNextAction(loop, { gate, debt, blockingMakers, goalProof, skipGoalProof = false } = {}) {
   const result = (action, command = '/deep-loop-continue') => ({ gate, action, next_command: command,
     identity: { run_id: loop.run_id, project_root: loop.project.root, owner: loop.session_chain.lease.owner_run_id,
       generation: loop.session_chain.lease.generation, runtime: sessionRuntime(loop) } });
@@ -24,6 +24,10 @@ export function goalNextAction(loop, { gate, debt, blockingMakers, goalProof } =
   const current = loop.workstreams.find(ws => ws.id === scope.workstream_id);
   const open = loop.workstreams.filter(ws => !terminal.has(ws.status));
   const ordinary = ordinaryFinishProofState(loop);
+  // Read-only status callers (run status) must not run the goal proof (file hashing, git subprocesses).
+  if (goalProof === undefined && skipGoalProof === true && ordinary.missing.length === 0) {
+    return result({ type: 'not_evaluated', reason: 'goal-proof' }, '/deep-loop-status');
+  }
   const proof = goalProof ?? (ordinary.missing.length === 0 ? goalProofState(loop.project.root, loop) : null);
 
   if (goalReviewBoundaryBlocked(loop)) {
