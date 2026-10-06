@@ -25,12 +25,13 @@ export function goalNextAction(loop, { gate, debt, blockingMakers, goalProof, sk
   const open = loop.workstreams.filter(ws => !terminal.has(ws.status));
   const ordinary = ordinaryFinishProofState(loop);
   // Read-only status callers (run status) must not run the goal proof (file hashing, git subprocesses).
-  if (goalProof === undefined && skipGoalProof === true && ordinary.missing.length === 0) {
-    return result({ type: 'not_evaluated', reason: 'goal-proof' }, '/deep-loop-status');
-  }
-  const proof = goalProof ?? (ordinary.missing.length === 0 ? goalProofState(loop.project.root, loop) : null);
+  // The skip is deferred: only the two points that actually read the proof report not_evaluated.
+  const skip = skipGoalProof === true && goalProof == null && ordinary.missing.length === 0;
+  const proof = skip ? null : (goalProof ?? (ordinary.missing.length === 0 ? goalProofState(loop.project.root, loop) : null));
+  const notEvaluated = () => result({ type: 'not_evaluated', reason: 'goal-proof' }, '/deep-loop-status');
 
   if (goalReviewBoundaryBlocked(loop)) {
+    if (skip) return notEvaluated();
     if (proof?.ok) return result({ type: 'finish' }, '/deep-loop-finish');
     return result({ type: 'handoff', reason: 'workstream-terminal', boundary_event: { ...scope.terminal_event } }, '/deep-loop-handoff');
   }
@@ -103,6 +104,7 @@ export function goalNextAction(loop, { gate, debt, blockingMakers, goalProof, sk
       requirement_ids: missingRequirements.length ? missingRequirements : [...new Set(obligations.flatMap(item => item.requirement_ids))],
       obligations: structuredClone(obligations) });
   }
+  if (skip) return notEvaluated();
   if (proof?.ok) return result({ type: 'finish' }, '/deep-loop-finish');
   if (proof?.code === 'GOAL_PROOF_REJECTED') return result({ type: 'plan_next_work', reason: 'goal-review-rejected',
     requirement_ids: proof.failures.map(item => item.id), failures: proof.failures, review_id: proof.review_id });
