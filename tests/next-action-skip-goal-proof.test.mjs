@@ -91,3 +91,17 @@ test('goalProof: null under skip is not_evaluated and the proof is not computed'
   const r = nextAction(loop, { now: NOW, goalProof: null, skipGoalProof: true });
   assert.deepEqual(r.action, { type: 'not_evaluated', reason: 'goal-proof' });
 });
+
+// A completed goal review whose result artifact cannot be read: the proof outcome shows without the skip,
+// and the skip keeps it unevaluated at the final block.
+test('an unreadable goal review result shows its proof outcome normally and is not_evaluated under skip', t => {
+  const loop = structuredClone(readLoop(reviewedGoalWork(t)));
+  loop.goal_reviews.push({ id: 'GR-1', status: 'approved', verdict: 'APPROVE', transport: 'native-task',
+    snapshot_rel: 'goal-snapshots/GR-1.json', snapshot_sha256: 'a'.repeat(64),
+    result_rel: 'goal-results/GR-1.json', result_sha256: 'b'.repeat(64), result_raw_sha256: 'c'.repeat(64) });
+  const normal = nextAction(loop, { now: NOW });
+  assert.equal(normal.action.type, 'dispatch_goal_checker');
+  assert.equal(normal.action.reason, 'GOAL_PROOF_UNAVAILABLE');
+  const skipped = nextAction(loop, { now: NOW, skipGoalProof: true });
+  assert.deepEqual(skipped.action, { type: 'not_evaluated', reason: 'goal-proof' });
+});
