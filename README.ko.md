@@ -235,7 +235,7 @@ Claude Code(터미널 또는 desktop)에서는 deep-loop가 작업 중인 run을
 
 같은 요약을 CLI로도 볼 수 있습니다: `node "<absolute-deep-loop-root>/scripts/deep-loop.mjs" run status --json [--cwd <dir>] [--run-id <id>] --project-root "<canonical_project_root>"`. 읽기 전용이며 lease를 잡지 않고, `status_version: 1`이 붙은 닫힌 모양의 JSON envelope 한 줄을 냅니다. exit 0·1은 항상 envelope를 담고(1은 단일 run이 선택되지 않은 경우, 즉 모호하거나 유효하지 않은 경우), exit 2는 stdout이 빈 사용법 오류입니다. goal proof는 평가하지 않으므로, proof에 따라 달라지는 v0.5 run의 next action은 평가하지 않음으로 보고됩니다.
 
-`.claude-plugin/plugin.json`은 Claude Code가 `hooks/hooks.claude.json`을 읽게 합니다. 이 파일은 `hooks/hooks.json`의 `hooks`를 그대로 반복하고 band 모듈을 더합니다. 반복하는 이유는 Grok이 manifest hooks 파일만 읽기 때문입니다. Claude Code는 동일한 command hook을 한 번만 실행하며(Claude Code 2.1.291·2.1.200에서 측정), Codex는 계속 `hooks/hooks.json`만 읽습니다.
+`.claude-plugin/plugin.json`은 Claude Code가 `hooks/hooks.claude.json`을 읽게 합니다. 이 파일은 `hooks/hooks.json`의 `hooks`를 그대로 반복하고 band 모듈을 더합니다. 반복하는 이유는 Grok이 manifest hooks 파일만 읽기 때문입니다. Claude Code는 동일한 command hook을 한 번만 실행하며(동일한 SessionStart 명령은 Claude Code 2.1.291·2.1.200에서 한 번 실행됐고, 실제 `/compact`에서는 2.1.291이 PreCompact·PostCompact·SessionStart(compact)를 각각 한 번, 2.1.200은 PreCompact만 한 번 실행했으며 둘 다 `hooks/hooks.json`만 쓴 baseline과 같음), Codex는 계속 `hooks/hooks.json`만 읽습니다.
 
 ## 안전 불변식
 

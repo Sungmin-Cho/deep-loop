@@ -33,9 +33,12 @@ All notable changes to deep-loop are documented in this file.
 
 - Codex reads only `hooks/hooks.json`, which is unchanged. Grok reads the manifest hooks file
   `hooks/hooks.claude.json`, whose command hooks are identical (measured on Grok 1.0.46).
-  Claude Code runs the identical command hooks once (measured on 2.1.291 and 2.1.200,
-  including PreCompact, PostCompact and SessionStart(compact)). `hooks/hooks.claude.json` must keep
-  repeating `hooks/hooks.json`'s `hooks` verbatim.
+  Claude Code runs the identical command hooks once: an identical SessionStart command fired once
+  on 2.1.291 and 2.1.200. In a real `/compact` on 2.1.291, PreCompact, PostCompact and
+  SessionStart(compact) each ran once, the same as the `hooks/hooks.json`-only baseline, for both
+  the logging prototype and the real deep-loop implementations. On 2.1.200 only PreCompact fired,
+  once, also identical to its baseline. `hooks/hooks.claude.json` must keep repeating
+  `hooks/hooks.json`'s `hooks` verbatim.
 - Claude Code without Mods support shows no band and behaves as before.
 - No schema or migration change.
 

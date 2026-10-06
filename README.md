@@ -255,7 +255,7 @@ In Claude Code (terminal or desktop) deep-loop can draw one line above the promp
 
 The same summary is available from the CLI: `node "<absolute-deep-loop-root>/scripts/deep-loop.mjs" run status --json [--cwd <dir>] [--run-id <id>] --project-root "<canonical_project_root>"`. It is read-only, takes no lease, and prints one closed-shape JSON envelope with `status_version: 1`. Exit 0 or 1 always carries the envelope (1 when no single run is selected because the choice is ambiguous or invalid); exit 2 is a usage error with an empty stdout. It does not evaluate goal proof, so a v0.5 run whose next action depends on proof reports `next_action` as not evaluated.
 
-`.claude-plugin/plugin.json` points Claude Code at `hooks/hooks.claude.json`, which repeats the `hooks` of `hooks/hooks.json` verbatim and adds the band module. The repetition exists because Grok reads only the manifest hooks file; Claude Code runs the identical command hooks once (measured on Claude Code 2.1.291 and 2.1.200), and Codex still reads only `hooks/hooks.json`.
+`.claude-plugin/plugin.json` points Claude Code at `hooks/hooks.claude.json`, which repeats the `hooks` of `hooks/hooks.json` verbatim and adds the band module. The repetition exists because Grok reads only the manifest hooks file; Claude Code runs the identical command hooks once (an identical SessionStart command fired once on Claude Code 2.1.291 and 2.1.200; in a real `/compact`, 2.1.291 ran PreCompact, PostCompact and SessionStart(compact) once each and 2.1.200 fired only PreCompact, once, both identical to the `hooks/hooks.json`-only baseline), and Codex still reads only `hooks/hooks.json`.
 
 ## Safety Invariants
 
