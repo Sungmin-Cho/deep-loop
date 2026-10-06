@@ -462,3 +462,45 @@ test('family 5 grades indirect network writes and safe reads across every produc
     assert.equal(gradeStaticAssertion('no-external-action-routes', staticFixture(path, safeSource)).pass, true, path);
   }
 });
+
+test('family 5 recognizes Claude Code Mods host calls ($.process.run, process.spawn, http.fetch)', () => {
+  const cases = [
+    [`$.process.run(['git', 'push', 'origin', 'main']);`, 'git push'],
+    [`engine.process.spawn({ argv: ['gh', 'pr', 'create'] });`, 'gh pr'],
+    [`await $.http.fetch('https://api.github.com/repos/o/r/pulls', { method: 'POST' });`, 'network api:pull-request'],
+    [`await (async () => { const r = await $.process.run(['git', 'push']); return r; })();`, 'git push'],
+    [`const run = engine.process.run; run(['git', 'push']);`, 'git push'],
+    [`const f = $.http.fetch; await f('https://x/pulls', { method: 'POST' });`, 'network api:pull-request'],
+    [`function ship() { return $.process.run(['gh', 'pr', 'create']); } ship();`, 'gh pr'],
+    [`function sh(argv) { return $.process.run(argv); } sh(['git', 'push']);`, 'git push'],
+    [`const sh = (argv) => engine.process.run(argv); sh(['git', 'push']);`, 'git push'],
+    [`const send = (url, init) => $.http.fetch(url, init); await send('https://x/pulls', { method: 'POST' });`, 'network api:pull-request'],
+    [`const api = { exec: engine.process.run }; api.exec(['git', 'push']);`, 'git push'],
+  ];
+  for (const [source, route] of cases) {
+    assert.deepEqual(findExecutableExternalActions(source), [route], source);
+  }
+});
+
+test('family 5 keeps Mods process and network judgements separate and allows run status', () => {
+  for (const source of [
+    `$.process.run(['node', \`\${$.plugin.root}/scripts/deep-loop.mjs\`, 'run', 'status', '--json']);`,
+    `const cwd = await $.session.cwd(); await $.process.run(['node', 'x.mjs', 'run', 'status', '--json', '--cwd', cwd], { cwd, timeoutMs: 5000 });`,
+    `await $.http.fetch('https://api.github.com/repos/o/r', { method: 'GET' });`,
+    `const run = engine.process.run; run(['node', 'x.mjs', 'run', 'status']);`,
+    `$.process.runner(['git', 'push']);`,
+    `process.run(['git', 'push']);`,
+  ]) assert.deepEqual(findExecutableExternalActions(source), [], source);
+  // a network-write URL given to a process host call is judged by process words only, and vice versa
+  assert.deepEqual(findExecutableExternalActions(`$.process.run(['curl', 'https://x/pulls', 'POST']);`), []);
+  assert.deepEqual(findExecutableExternalActions(`$.http.fetch('https://x/repo', { argv: ['git', 'push'] });`), []);
+});
+
+test('family 5 reports Mods host-call violations in a production surface file', () => {
+  const path = 'hooks/status-band/register.mjs';
+  const result = gradeStaticAssertion('no-external-action-routes',
+    staticFixture(path, `export const register = (on) => on('turn.complete', async ($, e, next) => { await $.process.run(['git', 'push']); return next(e); });\n`));
+  assert.equal(result.pass, false);
+  assert.ok(result.evidence.violations.some(item => item.path === path && item.route === 'git push'));
+  assert.ok(result.evidence.production_surfaces.includes(path));
+});
