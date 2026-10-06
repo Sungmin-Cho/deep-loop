@@ -102,7 +102,7 @@ test('T-K1: success envelope has exact keys and types, exit 0, one line', () => 
 test('T-K1: usage errors are exit 2 with empty stdout', () => {
   const s = seed();
   const base = ['run', 'status', '--json', '--project-root', s.root, '--now', NOW];
-  for (const extra of [['--bogus'], ['--bogus', 'x'], ['stray'], ['--cwd'], ['--run-id'], ['--cwd', ''], ['--run-id=']]) {
+  for (const extra of [['--bogus'], ['--bogus', 'x'], ['stray'], ['--cwd'], ['--run-id'], ['--cwd', ''], ['--run-id='], ['--now'], ['--now='], ['--now', '']]) {
     const out = cli([...base, ...extra], { cwd: s.root });
     assert.equal(out.status, 2, `${extra.join(' ')}: ${out.stderr}`);
     assert.equal(out.stdout, '', extra.join(' '));

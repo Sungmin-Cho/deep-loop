@@ -512,7 +512,7 @@ const handlers = {
     const f = parseFlags(rest);
     if (verb === 'status') {
       // Read-only band summary (issue #75). Exit 0/1 always print exactly one envelope line; exit 2 prints none.
-      for (const name of ['cwd', 'run-id', 'project-root']) {
+      for (const name of ['cwd', 'run-id', 'project-root', 'now']) {
         if (f[name] === true || f[name] === '') { error(`USAGE: run status --${name} requires a value`); return 2; }
       }
       if (f.json !== undefined && f.json !== true) { error('USAGE: run status --json takes no value'); return 2; }
