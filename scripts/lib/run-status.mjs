@@ -20,7 +20,7 @@ export const PUBLIC_NEXT_COMMANDS = Object.freeze([
 // Closed vocabulary of reasons the kernel itself produces as code literals. This is a projection by
 // vocabulary, not a proof of origin: free text that happens to equal a listed word is shown as-is, and
 // everything else (paths, sentences, goal text) is reduced to "other".
-export const PUBLIC_REASONS = Object.freeze(new Set([
+const REASON_WORDS = [
   // next-action / goal-actions / execution action reasons
   'active-work-remains', 'breaker', 'budget', 'checker-needs-claim', 'checker-result-needs-import',
   'comprehension-debt', 'dependency-needs-replan', 'episode-blocked', 'goal-checker-unavailable',
@@ -48,9 +48,25 @@ export const PUBLIC_REASONS = Object.freeze(new Set([
   'receipt-mismatch', 'duplicate-receipt', 'receipt-cleanup-failed', 'settlement-invalid', 'usage-mismatch',
   'log-tampered', 'fenced', 'runtime-fenced', 'checker-skill-ambiguous', 'checker-skill-invalid',
   'checker-skill-unavailable',
-]));
+  // respawn / headless-host pause reasons (concrete spellings of the templated families)
+  'checker-claim-failed', 'independent-review-continuation-failed', 'headless-child-did-not-acquire', 'child-did-not-acquire',
+  'attended-launch-unauthorized', 'launcher-session-unverified', 'launcher-session-invalid',
+  'launcher-socket-unverified', 'launcher-identity-drift', 'codex-transport-not-activated',
+  'runtime-identity-unavailable', 'launcher-identity-unavailable',
+  'cmux-launcher-unavailable', 'iterm2-launcher-unavailable', 'terminal-app-launcher-unavailable',
+  'tmux-launcher-unavailable', 'wt-launcher-unavailable', 'powershell-launcher-unavailable',
+  'desktop-launcher-unavailable', 'headless-launcher-unavailable',
+  // finish / goal proof `missing` codes (surfaced comma-joined as await_human reasons)
+  'no-proof-of-work', 'unsettled-episodes', 'active-workstreams', 'non-terminal-workstreams',
+  'unreviewed-maker', 'no-independent-review', 'hillclimb-contract-unpinned', 'unresolved-rejection',
+  'non-converged-maker', 'final-report-missing', 'goal-requirements-unmapped', 'goal-obligations-unresolved',
+  'execution-not-quiescent', 'goal-proof-unchecked', 'goal-review-required', 'goal-proof-stale',
+  'goal-review-rejected', 'goal-proof-unavailable',
+];
+const REASON_SET = new Set(REASON_WORDS);
+export const PUBLIC_REASONS = Object.freeze([...REASON_WORDS]);
 export const PUBLIC_REASON_PREFIXES = Object.freeze([
-  'review-point-unsatisfied', 'independent-review', 'recovery', 'gate',
+  'review-point-unsatisfied', 'independent-review', 'recovery', 'gate', 'checker-gate',
 ]);
 
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -60,14 +76,19 @@ const RUN_STATUSES = new Set(['running', 'paused', 'completed', 'stopped']);
 const RESOLUTION_KINDS = new Set(['selected', 'none', 'ambiguous', 'invalid']);
 const TERMINAL_WORKSTREAM = new Set(['ready', 'merged', 'abandoned']);
 
+const isPublicWord = value => REASON_SET.has(value) || PUBLIC_REASON_PREFIXES.includes(value);
+export function isPublicReason(value) { return typeof value === 'string' && isPublicWord(value); }
+
 export function publicReason(value) {
   if (typeof value !== 'string' || value.length === 0) return null;
-  if (PUBLIC_REASONS.has(value) || PUBLIC_REASON_PREFIXES.includes(value)) return value;
+  if (isPublicWord(value)) return value;
   const colon = value.indexOf(':');
   if (colon > 0) {
     const prefix = value.slice(0, colon);
     if (PUBLIC_REASON_PREFIXES.includes(prefix)) return prefix;
   }
+  // Comma-joined kernel codes (finish `missing` lists): shown unchanged only when every part is public.
+  if (value.includes(',') && value.split(',').every(isPublicWord)) return value;
   return 'other';
 }
 
@@ -127,8 +148,7 @@ function workstreamFields(loop) {
   return { total: list.length, terminal, by_status };
 }
 
-function nextActionFields(loop, now, unattended) {
-  const result = nextAction(loop, { now, unattended, skipGoalProof: true });
+export function projectNextAction(result) {
   const action = result?.action ?? {};
   const blocked = Array.isArray(result?.gate?.blocked_by) ? result.gate.blocked_by : [];
   return {
@@ -137,6 +157,10 @@ function nextActionFields(loop, now, unattended) {
     next_command: PUBLIC_NEXT_COMMANDS.includes(result?.next_command) ? result.next_command : null,
     blocked_by: blocked.filter(item => typeof item === 'string').map(item => publicReason(item)),
   };
+}
+
+function nextActionFields(loop, now, unattended) {
+  return projectNextAction(nextAction(loop, { now, unattended, skipGoalProof: true }));
 }
 
 function runFields(loop, runId, { now, unattended }) {

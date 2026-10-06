@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { buildInitialLoop, initRun } from '../scripts/lib/initrun.mjs';
 import {
   PUBLIC_NEXT_COMMANDS, PUBLIC_REASONS, PUBLIC_REASON_PREFIXES, RUN_STATUS_VERSION,
-  buildRunStatus, emptyResolution, projectResolution, publicReason, statusEnvelope,
+  buildRunStatus, emptyResolution, isPublicReason, projectNextAction, projectResolution, publicReason, statusEnvelope,
 } from '../scripts/lib/run-status.mjs';
 import { TEST_GOAL_CONTRACT } from './helpers/goal-fixture.mjs';
 
@@ -127,6 +127,11 @@ test('publicReason is a closed-vocabulary projection', () => {
   assert.equal(publicReason('independent-review:xyz'), 'independent-review');
   assert.equal(publicReason('recovery:boundary-recovery'), 'recovery');
   assert.equal(publicReason('recovered:awaiting-resume'), 'recovered:awaiting-resume');
+  assert.equal(publicReason('checker-gate:budget'), 'checker-gate');
+  // comma-joined kernel codes pass only when every part is public
+  assert.equal(publicReason('unsettled-episodes,unreviewed-maker'), 'unsettled-episodes,unreviewed-maker');
+  assert.equal(publicReason('unsettled-episodes,secrets.txt'), 'other');
+  assert.equal(publicReason('a,b'), 'other');
   for (const hidden of ['secrets.txt', 'ship-confidential-acquisition', '/Users/a/b', 'C:\\x\\y',
     'fix the login bug', 'unknown-prefix:abc']) assert.equal(publicReason(hidden), 'other', hidden);
   for (const none of [undefined, null, 42, {}, [], '']) assert.equal(publicReason(none), null);
@@ -145,6 +150,16 @@ test('vocabulary completeness scan over action reasons and kernel pause reasons'
       ...[...src.matchAll(/reason:\s*`([a-z0-9-]+):\$\{/g)].map(m => `${m[1]}:x`),
     ];
     assert.ok(literals.length > 0, name);
+    for (const lit of literals) if (!known(lit)) missing.push(`${name}:${lit}`);
+  }
+  const pauseCall = /(?:pauseRun|pauseWithOriginalFence|pauseWithFreshFence)\([^;]{0,400}?\breason:\s*(?:'([^']+)'|`([a-z0-9-]+):\$\{)/g;
+  for (const name of readdirSync(new URL('../scripts/lib/', import.meta.url)).filter(f => f.endsWith('.mjs'))) {
+    const src = SRC(name);
+    const literals = [
+      ...[...src.matchAll(pauseCall)].map(m => m[1] ?? `${m[2]}:x`),
+      ...[...src.matchAll(/pauseReason\s*[:=]\s*'([^']+)'/g)].map(m => m[1]),
+      ...[...src.matchAll(/pauseReason\s*[:=]\s*`([a-z0-9-]+):\$\{/g)].map(m => `${m[1]}:x`),
+    ];
     for (const lit of literals) if (!known(lit)) missing.push(`${name}:${lit}`);
   }
   for (const name of readdirSync(new URL('../scripts/lib/', import.meta.url)).filter(f => f.endsWith('.mjs'))) {
@@ -236,4 +251,27 @@ test('field semantics: soft stop, hard stop, breaker, debt, pending reviews, del
 test('unattended may be a boolean or a function of the loop', () => {
   const loop = v04();
   assert.deepEqual(status(loop, { unattended: true }).envelope, status(loop, { unattended: () => true }).envelope);
+});
+
+test('isPublicReason and the exported vocabulary are read-only views', () => {
+  assert.equal(isPublicReason('budget'), true);
+  assert.equal(isPublicReason('review-point-unsatisfied'), true);
+  assert.equal(isPublicReason('fix the login bug'), false);
+  assert.equal(isPublicReason(7), false);
+  assert.ok(Object.isFrozen(PUBLIC_REASONS) && Array.isArray(PUBLIC_REASONS));
+  assert.throws(() => PUBLIC_REASONS.push('x'), TypeError);
+});
+
+test('next-action projection drops non-public commands, malformed types and non-string blocked_by', () => {
+  const project = (action, command, blocked) => projectNextAction({ action, next_command: command,
+    gate: { blocked_by: blocked } });
+  assert.equal(project({ type: 'finish' }, '/deep-loop-evil', []).next_command, null);
+  assert.equal(project({ type: 'finish' }, 'rm -rf /', []).next_command, null);
+  assert.equal(project({ type: 'finish' }, '/deep-loop-handoff', []).next_command, '/deep-loop-handoff');
+  assert.equal(project({ type: 'Bad Type!' }, '/deep-loop-status', []).type, null);
+  assert.equal(project({ type: 'x'.repeat(41) }, '/deep-loop-status', []).type, null);
+  assert.equal(project({ type: 7 }, '/deep-loop-status', []).type, null);
+  assert.deepEqual(project({ type: 'await_human' }, '/deep-loop-status', ['budget', 5, null, { a: 1 }, 'secret path']).blocked_by,
+    ['budget', 'other']);
+  assert.deepEqual(projectNextAction(undefined), { type: null, reason: null, next_command: null, blocked_by: [] });
 });
