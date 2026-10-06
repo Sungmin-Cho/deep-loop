@@ -20,6 +20,7 @@ distribution gates complete. Goal-contract discoverability is not evidence of mo
 efficacy or of a verified Grok reviewer bridge.
 The v1.25.0 entry (router policy pin) is likewise a release draft until source
 validation, merge and the separate distribution gates complete.
+The v1.26.0 entry (Claude status band) is likewise a release draft until source validation, merge and the separate distribution gates complete.
 
 ## Marketplace pin edits
 
