@@ -523,6 +523,29 @@ test('family 5 follows optional chaining, namespace aliases and Mods wrapper mem
   }
 });
 
+test('family 5 propagates recorded wrapper members through neutral helper names', () => {
+  const cases = [
+    [`const caps = { run: a => $.process.run(a) }; function invoke(c, argv) { return c.run(argv) } invoke(caps, ['git','push']);`, 'git push'],
+    [`const caps = { run: a => $.process.run(a) }\nfunction invoke(c, argv) { return c.run(argv) }\ninvoke(caps, ['git','push'])`, 'git push'],
+    [`const caps = { run: a => $.process.run(a) }; const invoke = (c, argv) => c?.run(argv); invoke(caps, ['git', 'push']);`, 'git push'],
+    [`const caps = { run: a => $.process.run(a) }\nconst invoke = (c, argv) => c.run(argv)\ninvoke(caps, ['gh', 'pr', 'create'])`, 'gh pr'],
+    [`const caps = { get: (u, i) => $.http.fetch(u, i) }; function send(c, u, i) { return c.get(u, i) } send(caps, 'https://x/pulls', { method: 'POST' });`, 'network api:pull-request'],
+    [`const caps = { get: (u, i) => $.http.fetch(u, i) }\nconst send = async (c, u, i) => c.get(u, i)\nawait send(caps, 'https://x/pulls', { method: 'POST' })`, 'network api:pull-request'],
+    [`const caps = { run: a => $.process.run(a) }; function outer(c, argv) { return inner(c, argv) } function inner(c, argv) { return c.run(argv) } outer(caps, ['git', 'push']);`, 'git push'],
+  ];
+  for (const [source, route] of cases) {
+    assert.deepEqual(findExecutableExternalActions(source), [route], source);
+  }
+  // process and network member names stay separate
+  assert.deepEqual(findExecutableExternalActions(
+    `const caps = { run: a => $.process.run(a) }; function send(c, u, i) { return c.run(u, i) } send(caps, 'https://x/pulls', { method: 'POST' });`), []);
+  for (const source of [
+    `const caps = { run: a => $.process.run(a) }; function invoke(c, argv) { return c.run(argv) } invoke(caps, ['node', 'x.mjs', 'run', 'status']);`,
+    `const caps = { note: t => t }; function invoke(c, argv) { return c.note(argv) } invoke(caps, ['git', 'push']);`,
+    `const caps = { run: a => $.process.run(a) }\nconst safe = (c) => c\nsafe(['git', 'push'])\ncaps.run(['node', 'x.mjs'])`,
+  ]) assert.deepEqual(findExecutableExternalActions(source), [], source);
+});
+
 test('family 5 optional-chaining and wrapper negatives', () => {
   for (const source of [
     `const caps = { run: (argv) => $.process.run(argv) }; caps.run(['node', 'x.mjs', 'run', 'status', '--json']);`,

@@ -150,6 +150,8 @@ function callableSurface(stream) {
   const isCallablePath = (segments, aliases, namespaces, members, objects, kind) => {
     if (modHostCall(segments) === kind) return true;
     if (segments.length === 2 && hostNamespaces[kind]?.has(segments[0]) && hostMembers[kind]?.has(segments[1])) return true;
+    // Recorded wrapper member names count here exactly as in the final call check (`hostCall`).
+    if (segments.length >= 2 && memberNames[kind]?.has(segments.at(-1))) return true;
     if (segments.length === 1) return aliases.has(segments[0]);
     if (segments.length === 2 && namespaces.has(segments[0]) && members.has(segments[1])) return true;
     return objects.get(segments.slice(0, -1).join('.'))?.has(segments.at(-1)) === true;
@@ -184,6 +186,21 @@ function callableSurface(stream) {
 
   const functions = [];
   const objectLiterals = [];
+  // End of an expression-bodied arrow: `;`, a line break at depth 0 (unless the next line continues the
+  // expression with `.`, `?`, `+`, `&`, `|` or `:`), or the closer of an enclosing group.
+  const statementEnd = start => {
+    let depth = 0;
+    for (let cursor = start; cursor < stream.length; cursor += 1) {
+      const value = stream[cursor].value;
+      if (value === '(' || value === '[' || value === '{') depth += 1;
+      else if (value === ')' || value === ']' || value === '}') { if (depth === 0) return cursor - 1; depth -= 1; }
+      else if (depth === 0 && value === ';') return cursor;
+      const next = stream[cursor + 1];
+      if (depth === 0 && next && next.line > stream[cursor].line && !['.', '?', '+', '&', '|', ':'].includes(next.value)) return cursor;
+    }
+    return stream.length - 1;
+  };
+
   const expressionEnd = (start, limit) => {
     const depths = { '(': 0, '[': 0, '{': 0 };
     const closes = { ')': '(', ']': '[', '}': '{' };
@@ -241,7 +258,7 @@ function callableSurface(stream) {
       if (arrow >= 0) {
         name = stream[index + 1].value; bodyStart = arrow + 1;
         bodyEnd = stream[bodyStart]?.value === '{' ? matching(stream, bodyStart, '{', '}')
-          : stream.findIndex((token, cursor) => cursor > bodyStart && token.value === ';');
+          : statementEnd(bodyStart);
       }
     }
     if (name && bodyStart >= 0 && bodyEnd >= bodyStart) functions.push({ name, body: stream.slice(bodyStart, bodyEnd + 1) });
