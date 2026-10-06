@@ -515,6 +515,7 @@ const handlers = {
       for (const name of ['cwd', 'run-id', 'project-root']) {
         if (f[name] === true || f[name] === '') { error(`USAGE: run status --${name} requires a value`); return 2; }
       }
+      if (f.json !== undefined && f.json !== true) { error('USAGE: run status --json takes no value'); return 2; }
       const failed = (reason) => {
         json(statusEnvelope({ ok: false, resolution: emptyResolution('invalid', reason), run: null }));
         return 1;

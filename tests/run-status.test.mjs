@@ -12,7 +12,9 @@ import { newEpisode, recordEpisode } from '../scripts/lib/episode.mjs';
 import { runDir, withLock, readState, pauseRun } from '../scripts/lib/state.mjs';
 import { tripBreaker } from '../scripts/lib/breaker.mjs';
 import { newWorkstream } from '../scripts/lib/workspace.mjs';
-import { reviewedGoalWork } from './helpers/reviewed-goal.mjs';
+import { reviewedGoalWork, goalOk } from './helpers/reviewed-goal.mjs';
+import { makeGoalFixture } from './helpers/goal-fixture.mjs';
+import { publicReason } from '../scripts/lib/run-status.mjs';
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'deep-loop.mjs');
 const SEED_NOW = '2026-10-06T00:00:00.000Z';
@@ -61,7 +63,7 @@ function walk(dir, out = {}) {
   return out;
 }
 const deepLoopTree = root => walk(join(root, '.deep-loop'));
-const noLockLeft = root => Object.keys(deepLoopTree(root)).every(p => !/\/\.lock\/?$|\/\.lock\//.test(p));
+const noLockLeft = root => Object.keys(deepLoopTree(root)).every(p => !/[\\/]\.lock(?:[\\/]|$)/.test(p));
 
 function addMaker(s, { done = true, name = 'a', worktree = `.worktrees/${name}`, ws: existing } = {}) {
   const ws = existing ?? newWorkstream(s.root, s.runId, { title: name, branch: name, worktree, fence: s.fence, now: SEED_NOW }).id;
@@ -103,6 +105,13 @@ test('T-K1: usage errors are exit 2 with empty stdout', () => {
     assert.equal(out.status, 2, `${extra.join(' ')}: ${out.stderr}`);
     assert.equal(out.stdout, '', extra.join(' '));
   }
+  // --json is a switch: a stray value is a usage error, with or without --project-root
+  for (const argv of [['run', 'status', '--json', 'stray', '--now', NOW],
+    ['run', 'status', '--project-root', s.root, '--json', 'stray', '--now', NOW]]) {
+    const stray = cli(argv, { cwd: s.root });
+    assert.equal(stray.status, 2, argv.join(' '));
+    assert.equal(stray.stdout, '', argv.join(' '));
+  }
   const noValue = cli(['run', 'status', '--json', '--now', NOW, '--project-root'], { cwd: s.root });
   assert.equal(noValue.status, 2);
   assert.equal(noValue.stdout, '');
@@ -131,20 +140,28 @@ test('T-K1: an unresolvable project root is an invalid envelope, exit 1', () => 
   assert.equal(envelope.ok, false);
 });
 
-test('T-K2: status writes nothing, even for a paused and a breaker-tripped run', () => {
-  const s = seed();
-  addMaker(s);
-  const before = deepLoopTree(s.root);
-  const lease = readState(s.root, s.runId).data.session_chain.lease.generation;
-  for (let i = 0; i < 2; i += 1) {
-    const out = status(s.root);
-    assert.equal(out.status, 0, out.stderr);
-  }
-  assert.deepEqual(deepLoopTree(s.root), before);
-  assert.ok(noLockLeft(s.root));
-  assert.equal(readState(s.root, s.runId).data.session_chain.lease.generation, lease);
-  for (const name of ['loop.json', '.loop.hash', 'event-log.jsonl']) {
-    assert.ok(existsSync(join(runDir(s.root, s.runId), name)), name);
+test('T-K2: status writes nothing, even for a paused, a breaker-tripped and a v0.5 run', t => {
+  const plain = seed();
+  addMaker(plain);
+  const paused = seed();
+  pauseRun(paused.root, paused.runId, { reason: 'host-session-lost', expect: paused.fence, now: Date.parse(SEED_NOW) });
+  const tripped = seed();
+  tripBreaker(tripped.root, tripped.runId, 'consecutive-request-changes');
+  const goal = reviewedGoalWork(t);
+  const cases = [['running', plain], ['paused', paused], ['tripped', tripped], ['v0.5', { root: goal.root, runId: goal.runId }]];
+  for (const [label, s] of cases) {
+    const before = deepLoopTree(s.root);
+    const lease = readState(s.root, s.runId).data.session_chain.lease.generation;
+    for (let i = 0; i < 2; i += 1) {
+      const out = status(s.root, ['--run-id', s.runId], { cwd: s.root });
+      assert.equal(out.status, 0, `${label}: ${out.stderr}`);
+    }
+    assert.deepEqual(deepLoopTree(s.root), before, `${label}: bytes untouched`);
+    assert.ok(noLockLeft(s.root), label);
+    assert.equal(readState(s.root, s.runId).data.session_chain.lease.generation, lease, label);
+    for (const name of ['loop.json', '.loop.hash']) {
+      assert.ok(existsSync(join(runDir(s.root, s.runId), name)), `${label}: ${name}`);
+    }
   }
 });
 
@@ -194,6 +211,8 @@ test('T-K2: a lock held by a live writer makes status invalid, and its lock surv
   assert.equal(envelope.ok, false);
   assert.equal(envelope.run, null);
   assert.equal(envelope.resolution.kind, 'invalid');
+  // lock contention exhausts the bounded capture deadline, which the resolver reports as a bound
+  assert.equal(envelope.resolution.reason, 'run-set-bound-exceeded');
   assert.ok(noLockLeft(s.root), 'the writer released its lock');
   // and it recovers once the lock is gone
   assert.equal(envelopeOf(status(s.root)).resolution.kind, 'selected');
@@ -301,6 +320,8 @@ function differential(s, label) {
   assert.equal(run.breaker.reason, breaker.reason, label);
   assert.equal(run.next_action.type, next.action.type, label);
   assert.equal(run.next_action.next_command, next.next_command, label);
+  assert.equal(run.next_action.reason, publicReason(next.action.reason), label);
+  assert.deepEqual(run.next_action.blocked_by, (next.gate?.blocked_by ?? []).map(publicReason), label);
   return { run, next };
 }
 
@@ -338,4 +359,25 @@ test('T-K8: a v0.5 run at the proof point is not_evaluated by status but evaluat
   assert.equal(run.next_action.next_command, '/deep-loop-status');
   const next = JSON.parse(cli(['next-action', ...base], { cwd: f.root }).stdout);
   assert.notEqual(next.action.type, 'not_evaluated');
+});
+
+test('T-K7: a v0.5 run whose ordinary proof is not met matches next-action (type, reason, blocked_by)', t => {
+  const f = makeGoalFixture({ review: { points: ['implementation'], reviewer: 'subagent-checker', mode: 'cross-model',
+    flags: [], converge: true, max_review_rounds: 5, require_human_ack: false } });
+  t.after(f.cleanup);
+  const delivery = f.workstream('delivery', ['REQ-A']);
+  const artifact = f.artifact(delivery, 'answer.mjs', 'export const answer = 42;\n');
+  const maker = goalOk(f.cli(['episode', 'new', '--plugin', 'standalone', '--role', 'maker', '--kind', 'implementation',
+    '--point', 'implementation', '--workstream', delivery.id, '--artifacts', JSON.stringify([artifact])])).id;
+  const execution = goalOk(f.cli(['execution', 'prepare', '--episode', maker, '--mode', 'inline', '--stage', 'primary', '--task', 'Deliver A'])).execution;
+  goalOk(f.cli(['execution', 'return', '--episode', maker, '--attempt', execution.attempt_id, '--artifacts', JSON.stringify([artifact])]));
+  const when = '2026-09-06T00:00:00.000Z';
+  const base = ['--project-root', f.root, '--run-id', f.runId, '--now', when];
+  const run = envelopeOf(cli(['run', 'status', '--json', ...base], { cwd: f.root })).run;
+  const next = JSON.parse(cli(['next-action', ...base], { cwd: f.root }).stdout);
+  assert.notEqual(run.next_action.type, 'not_evaluated', 'ordinary proof is not met, so nothing is deferred');
+  assert.equal(run.next_action.type, next.action.type);
+  assert.equal(run.next_action.next_command, next.next_command);
+  assert.equal(run.next_action.reason, publicReason(next.action.reason));
+  assert.deepEqual(run.next_action.blocked_by, (next.gate?.blocked_by ?? []).map(publicReason));
 });
