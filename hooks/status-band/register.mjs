@@ -14,7 +14,9 @@ const hiddenAtom = atom({ plugin: 'deep-loop', key: 'hidden' }, false)
 
 let caps = null
 let active = false
-let generation = 0
+// Starts at a per-load random value, not 0: `$.state` survives a hot reload, so a band the previous
+// module instance published must not look current to this one before its first refresh.
+let generation = Math.floor(Math.random() * 2 ** 40)
 let inFlight = false
 let dirty = false
 let debounce = null
