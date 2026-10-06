@@ -118,7 +118,11 @@ export function needsCompletionProbe(prevSelected, parsed) {
 
 export function applyCompletionProbe(nextState, { prevSelected, probeRunId }, probeParsed) {
   const ok = resOf(probeParsed)?.kind === 'selected' && probeParsed.envelope.run.run_id === probeRunId;
-  if (ok) return { ...nextState, selected: probeParsed };
+  if (ok) {
+    // A nonterminal run keeps being observed; a terminal probe lets the primary cadence stand.
+    const live = !TERMINAL.has(probeParsed.envelope.run.status);
+    return { ...nextState, selected: probeParsed, cadence: live && nextState.cadence === 'off' ? 'slow' : nextState.cadence };
+  }
   return { ...nextState, selected: prevSelected ?? null, cadence: nextState.cadence === 'off' ? 'slow' : nextState.cadence };
 }
 

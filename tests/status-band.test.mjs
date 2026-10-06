@@ -249,6 +249,36 @@ test('completion probe: non-terminal probe tracks X, completed later toasts once
   assert.equal(r.toasts.length, 1);
 });
 
+test('completion probe: primary none + nonterminal probe keeps slow polling until external completion', () => {
+  const X = withRun('X', { status: 'running' });
+  let st = nextBandState(null, X);
+  let r = refresh(st, P(noneEnv()), withRun('X', { status: 'running' }));
+  assert.equal(r.next.cadence, 'slow');
+  assert.equal(r.next.selected.envelope.run.run_id, 'X');
+  assert.deepEqual(r.toasts, []);
+  st = r.next;
+  r = refresh(st, P(noneEnv()), withRun('X', { status: 'paused' }));
+  assert.equal(r.next.cadence, 'slow');
+  st = r.next;
+  r = refresh(st, P(noneEnv()), withRun('X', { status: 'completed' }));
+  assert.equal(r.toasts.length, 1);
+  assert.equal(r.next.selected.envelope.run.status, 'completed');
+  assert.equal(r.next.cadence, 'off');
+  st = r.next;
+  r = refresh(st, P(noneEnv()));
+  assert.equal(r.probeRunId, null);
+  assert.deepEqual(r.toasts, []);
+  assert.equal(r.next.cadence, 'off');
+});
+
+test('applyCompletionProbe: nonterminal probe never lowers fast and raises off to slow', () => {
+  const X = withRun('X', { status: 'running' });
+  const fast = { display: null, selected: X, cadence: 'fast', tick: 0 };
+  assert.equal(applyCompletionProbe(fast, { prevSelected: X, probeRunId: 'X' }, withRun('X', { status: 'paused' })).cadence, 'fast');
+  const slow = { ...fast, cadence: 'slow' };
+  assert.equal(applyCompletionProbe(slow, { prevSelected: X, probeRunId: 'X' }, withRun('X')).cadence, 'slow');
+});
+
 test('applyCompletionProbe: invalid envelope, other run and wrong kinds are failures', () => {
   const X = withRun('X', { status: 'running' });
   const base = nextBandState(X, P(noneEnv()));
