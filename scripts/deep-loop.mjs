@@ -34,6 +34,7 @@ import {
   captureVerifiedRunSnapshot,
 } from './lib/integrity.mjs';
 import { resolveRunContext } from './lib/run-context.mjs';
+import { buildRunStatus, emptyResolution, statusEnvelope } from './lib/run-status.mjs';
 import { leaseCheck, acquireLease, releaseLease, sameBoundaryEvent } from './lib/lease.mjs';
 import { newWorkstream, setWorkstreamStatus, recordWorkstreamTerminal } from './lib/workspace.mjs';
 import { newEpisode, recordEpisode, abandonEpisode } from './lib/episode.mjs';
@@ -509,6 +510,30 @@ const handlers = {
   run: async (a) => {
     const [verb, ...rest] = a;
     const f = parseFlags(rest);
+    if (verb === 'status') {
+      // Read-only band summary (issue #75). Exit 0/1 always print exactly one envelope line; exit 2 prints none.
+      for (const name of ['cwd', 'run-id', 'project-root', 'now']) {
+        if (f[name] === true || f[name] === '') { error(`USAGE: run status --${name} requires a value`); return 2; }
+      }
+      if (f.json !== undefined && f.json !== true) { error('USAGE: run status --json takes no value'); return 2; }
+      const failed = (reason) => {
+        json(statusEnvelope({ ok: false, resolution: emptyResolution('invalid', reason), run: null }));
+        return 1;
+      };
+      let now;
+      try { now = parseNow(f); } catch { return failed('invalid-now'); }
+      let root;
+      try { root = rootOf(f); } catch { return failed('root-unresolvable'); }
+      let result;
+      try {
+        result = resolveRunContext({ root, purpose: 'cli-read',
+          explicitRunId: f['run-id'] ?? null, cwd: f.cwd === undefined ? null : String(f.cwd) });
+      } catch { return failed('status-compute-failed'); }
+      const { envelope, exitCode } = buildRunStatus(result, { now,
+        unattended: (loop) => resolveSpawnMode(loop, { env: process.env }) === 'headless' });
+      json(envelope);
+      return exitCode;
+    }
     const root = rootOf(f);
     if (verb === 'list') {
       const captured = captureVerifiedRunSet(root, { maxRunIds: 64, deadlineMs: 500 });

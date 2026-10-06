@@ -14,7 +14,7 @@ const pausedInline = episode => episode.role === 'maker' && episode.status === '
 
 // The LLM chooses task content and how to fulfill it. These descriptors expose
 // outstanding work and the same scope/proof constraints enforced by writers.
-export function goalNextAction(loop, { gate, debt, blockingMakers, goalProof } = {}) {
+export function goalNextAction(loop, { gate, debt, blockingMakers, goalProof, skipGoalProof = false } = {}) {
   const result = (action, command = '/deep-loop-continue') => ({ gate, action, next_command: command,
     identity: { run_id: loop.run_id, project_root: loop.project.root, owner: loop.session_chain.lease.owner_run_id,
       generation: loop.session_chain.lease.generation, runtime: sessionRuntime(loop) } });
@@ -24,9 +24,14 @@ export function goalNextAction(loop, { gate, debt, blockingMakers, goalProof } =
   const current = loop.workstreams.find(ws => ws.id === scope.workstream_id);
   const open = loop.workstreams.filter(ws => !terminal.has(ws.status));
   const ordinary = ordinaryFinishProofState(loop);
-  const proof = goalProof ?? (ordinary.missing.length === 0 ? goalProofState(loop.project.root, loop) : null);
+  // Read-only status callers (run status) must not run the goal proof (file hashing, git subprocesses).
+  // The skip is deferred: only the two points that actually read the proof report not_evaluated.
+  const skip = skipGoalProof === true && goalProof == null && ordinary.missing.length === 0;
+  const proof = skip ? null : (goalProof ?? (ordinary.missing.length === 0 ? goalProofState(loop.project.root, loop) : null));
+  const notEvaluated = () => result({ type: 'not_evaluated', reason: 'goal-proof' }, '/deep-loop-status');
 
   if (goalReviewBoundaryBlocked(loop)) {
+    if (skip) return notEvaluated();
     if (proof?.ok) return result({ type: 'finish' }, '/deep-loop-finish');
     return result({ type: 'handoff', reason: 'workstream-terminal', boundary_event: { ...scope.terminal_event } }, '/deep-loop-handoff');
   }
@@ -99,6 +104,7 @@ export function goalNextAction(loop, { gate, debt, blockingMakers, goalProof } =
       requirement_ids: missingRequirements.length ? missingRequirements : [...new Set(obligations.flatMap(item => item.requirement_ids))],
       obligations: structuredClone(obligations) });
   }
+  if (skip) return notEvaluated();
   if (proof?.ok) return result({ type: 'finish' }, '/deep-loop-finish');
   if (proof?.code === 'GOAL_PROOF_REJECTED') return result({ type: 'plan_next_work', reason: 'goal-review-rejected',
     requirement_ids: proof.failures.map(item => item.id), failures: proof.failures, review_id: proof.review_id });

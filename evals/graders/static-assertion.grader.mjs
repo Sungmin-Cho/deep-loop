@@ -7,6 +7,16 @@ const PROCESS_CALLS = new Set(['spawnSync', 'spawn', 'execFileSync', 'execFile',
 const NETWORK_CALLS = new Set(['fetch']);
 const NETWORK_MEMBERS = new Set(['request', 'get']);
 
+// Claude Code Mods host calls: `$.process.run(argv)`, `$.process.spawn({ argv })`, `$.http.fetch(url, init)`.
+// Only the last two member segments are judged, so a hook may receive the engine under any name.
+function modHostCall(segments) {
+  if (!Array.isArray(segments) || segments.length < 3) return null;
+  const tail = segments.slice(-2).join('.');
+  if (tail === 'process.run' || tail === 'process.spawn') return 'process';
+  if (tail === 'http.fetch') return 'network';
+  return null;
+}
+
 function tokens(source) {
   const output = [];
   let line = 1;
@@ -60,10 +70,15 @@ function memberPathAt(stream, start) {
   if (stream[start]?.type !== 'identifier') return null;
   const segments = [stream[start].value];
   let next = start + 1;
-  while (stream[next]?.value === '.' && stream[next + 1]?.type === 'identifier') {
-    segments.push(stream[next + 1].value);
-    next += 2;
+  for (;;) {
+    // `?.` is tokenised as `?` then `.`: both spellings are member separators.
+    const dot = stream[next]?.value === '.' ? next : (stream[next]?.value === '?' && stream[next + 1]?.value === '.' ? next + 1 : -1);
+    if (dot < 0 || stream[dot + 1]?.type !== 'identifier') break;
+    segments.push(stream[dot + 1].value);
+    next = dot + 2;
   }
+  // `x?.(` is a call: point `next` at the `(`.
+  if (stream[next]?.value === '?' && stream[next + 1]?.value === '.' && stream[next + 2]?.value === '(') next += 2;
   return { segments, next };
 }
 
@@ -101,6 +116,10 @@ function callableSurface(stream) {
   const networkNamespaces = new Set(['http', 'https']);
   const processObjectAliases = new Map();
   const networkObjectAliases = new Map([['globalThis', new Set(['fetch'])]]);
+  // Mods: `const p = $.process` (namespace alias) and wrapper property names (`{ run: (a) => $.process.run(a) }`).
+  const hostNamespaces = { process: new Set(), network: new Set() };
+  const hostMembers = { process: new Set(['run', 'spawn']), network: new Set(['fetch']) };
+  const memberNames = { process: new Set(), network: new Set() };
   const objectMember = (map, object, member) => {
     if (!map.has(object)) map.set(object, new Set());
     const before = map.get(object).size;
@@ -128,7 +147,11 @@ function callableSurface(stream) {
     }
     return copied;
   };
-  const isCallablePath = (segments, aliases, namespaces, members, objects) => {
+  const isCallablePath = (segments, aliases, namespaces, members, objects, kind) => {
+    if (modHostCall(segments) === kind) return true;
+    if (segments.length === 2 && hostNamespaces[kind]?.has(segments[0]) && hostMembers[kind]?.has(segments[1])) return true;
+    // Recorded wrapper member names count here exactly as in the final call check (`hostCall`).
+    if (segments.length >= 2 && memberNames[kind]?.has(segments.at(-1))) return true;
     if (segments.length === 1) return aliases.has(segments[0]);
     if (segments.length === 2 && namespaces.has(segments[0]) && members.has(segments[1])) return true;
     return objects.get(segments.slice(0, -1).join('.'))?.has(segments.at(-1)) === true;
@@ -163,6 +186,33 @@ function callableSurface(stream) {
 
   const functions = [];
   const objectLiterals = [];
+  // End of an expression-bodied arrow: `;`, the closer of an enclosing group, or a line break at depth 0
+  // where neither side requires the expression to continue. A line break is not a boundary after an
+  // operator / opening bracket / `=>` / prefix keyword, nor before `.`, `?.`, `(`, `[`, an operator, `,` or a
+  // closer. When in doubt the scan continues: a false positive is caught by the real-repo assertion, a false
+  // negative would be silent.
+  const CONTINUES_AFTER = new Set(['&&', '||', '??', '?', ':', '=', '==', '===', '!=', '!==', '<', '>', '<=', '>=',
+    '+', '-', '*', '/', '%', '**', '&', '|', '^', '<<', '>>', '>>>', ',', '.', '?.', '(', '[', '{', '=>', '!', '~',
+    'await', 'return', 'typeof', 'void', 'delete', 'new', 'yield', 'in', 'of', 'instanceof']);
+  const CONTINUES_BEFORE = new Set(['.', '?.', '(', '[', '&&', '||', '??', '?', ':', '=', '==', '===', '!=', '!==', '<', '>',
+    '<=', '>=', '+', '-', '*', '/', '%', '**', '&', '|', '^', ',', ')', ']', '}', 'in', 'of', 'instanceof']);
+  const continuesAfter = token => token.type !== 'string' && CONTINUES_AFTER.has(token.value);
+  const continuesBefore = token => token.type !== 'string' && CONTINUES_BEFORE.has(token.value);
+  const statementEnd = start => {
+    let depth = 0;
+    for (let cursor = start; cursor < stream.length; cursor += 1) {
+      const value = stream[cursor].value;
+      const punct = stream[cursor].type === 'punct';
+      if (punct && (value === '(' || value === '[' || value === '{')) depth += 1;
+      else if (punct && (value === ')' || value === ']' || value === '}')) { if (depth === 0) return cursor - 1; depth -= 1; }
+      else if (punct && depth === 0 && value === ';') return cursor;
+      const next = stream[cursor + 1];
+      if (depth === 0 && next && next.line > stream[cursor].line
+        && !continuesAfter(stream[cursor]) && !continuesBefore(next)) return cursor;
+    }
+    return stream.length - 1;
+  };
+
   const expressionEnd = (start, limit) => {
     const depths = { '(': 0, '[': 0, '{': 0 };
     const closes = { ')': '(', ']': '[', '}': '{' };
@@ -220,7 +270,7 @@ function callableSurface(stream) {
       if (arrow >= 0) {
         name = stream[index + 1].value; bodyStart = arrow + 1;
         bodyEnd = stream[bodyStart]?.value === '{' ? matching(stream, bodyStart, '{', '}')
-          : stream.findIndex((token, cursor) => cursor > bodyStart && token.value === ';');
+          : statementEnd(bodyStart);
       }
     }
     if (name && bodyStart >= 0 && bodyEnd >= bodyStart) functions.push({ name, body: stream.slice(bodyStart, bodyEnd + 1) });
@@ -230,13 +280,13 @@ function callableSurface(stream) {
     }
   }
 
-  const hasDirect = (body, aliases, namespaces, members, objects) => body.some((token, index) => {
+  const hasDirect = (body, aliases, namespaces, members, objects, kind) => body.some((token, index) => {
     if (token.type !== 'identifier') return false;
     const call = memberPathAt(body, index);
-    return body[call.next]?.value === '(' && isCallablePath(call.segments, aliases, namespaces, members, objects);
+    return body[call.next]?.value === '(' && isCallablePath(call.segments, aliases, namespaces, members, objects, kind);
   });
 
-  const propagateObject = ({ owner, start, end }, aliases, namespaces, members, objects) => {
+  const propagateObject = ({ owner, start, end }, aliases, namespaces, members, objects, kind) => {
     let propagated = false;
     for (let cursor = start + 1; cursor < end;) {
       if (stream[cursor]?.type !== 'identifier') { cursor += 1; continue; }
@@ -247,7 +297,7 @@ function callableSurface(stream) {
       if (stream[valueStart]?.value !== '{') {
         const target = memberPathAt(stream, valueStart);
         if (target && target.next <= valueEnd) {
-          if (isCallablePath(target.segments, aliases, namespaces, members, objects)) {
+          if (isCallablePath(target.segments, aliases, namespaces, members, objects, kind)) {
             propagated = addCallablePath(aliases, objects, `${owner}.${property}`) || propagated;
           }
           const targetPath = target.segments.join('.');
@@ -270,11 +320,16 @@ function callableSurface(stream) {
       const name = stream[index].value;
       const target = memberPathAt(stream, index + 2);
       if (target) {
-        if (isCallablePath(target.segments, processAliases, processNamespaces, PROCESS_CALLS, processObjectAliases)) {
+        if (isCallablePath(target.segments, processAliases, processNamespaces, PROCESS_CALLS, processObjectAliases, 'process')) {
           changed = addCallablePath(processAliases, processObjectAliases, name) || changed;
         }
-        if (isCallablePath(target.segments, networkAliases, networkNamespaces, NETWORK_MEMBERS, networkObjectAliases)) {
+        if (isCallablePath(target.segments, networkAliases, networkNamespaces, NETWORK_MEMBERS, networkObjectAliases, 'network')) {
           changed = addCallablePath(networkAliases, networkObjectAliases, name) || changed;
+        }
+        if (target.segments.length >= 2 && stream[target.next]?.value !== '(') {
+          const last = target.segments.at(-1);
+          const kindOf = last === 'process' ? 'process' : (last === 'http' ? 'network' : null);
+          if (kindOf && !hostNamespaces[kindOf].has(name)) { hostNamespaces[kindOf].add(name); changed = true; }
         }
         const targetPath = target.segments.join('.');
         if (hasObjectPrefix(processObjectAliases, targetPath)) changed = copyObjectPaths(processObjectAliases, targetPath, name) || changed;
@@ -286,19 +341,26 @@ function callableSurface(stream) {
       }
     }
     for (const object of objectLiterals) {
-      changed = propagateObject(object, processAliases, processNamespaces, PROCESS_CALLS, processObjectAliases) || changed;
-      changed = propagateObject(object, networkAliases, networkNamespaces, NETWORK_MEMBERS, networkObjectAliases) || changed;
+      changed = propagateObject(object, processAliases, processNamespaces, PROCESS_CALLS, processObjectAliases, 'process') || changed;
+      changed = propagateObject(object, networkAliases, networkNamespaces, NETWORK_MEMBERS, networkObjectAliases, 'network') || changed;
     }
     for (const helper of functions) {
-      if (hasDirect(helper.body, processAliases, processNamespaces, PROCESS_CALLS, processObjectAliases)
+      if (helper.name.includes('.')) {
+        const member = helper.name.split('.').at(-1);
+        if (hasDirect(helper.body, processAliases, processNamespaces, PROCESS_CALLS, processObjectAliases, 'process')
+          && !memberNames.process.has(member)) { memberNames.process.add(member); changed = true; }
+        if (hasDirect(helper.body, networkAliases, networkNamespaces, NETWORK_MEMBERS, networkObjectAliases, 'network')
+          && !memberNames.network.has(member)) { memberNames.network.add(member); changed = true; }
+      }
+      if (hasDirect(helper.body, processAliases, processNamespaces, PROCESS_CALLS, processObjectAliases, 'process')
         ) changed = addCallablePath(processAliases, processObjectAliases, helper.name) || changed;
-      if (hasDirect(helper.body, networkAliases, networkNamespaces, NETWORK_MEMBERS, networkObjectAliases)
+      if (hasDirect(helper.body, networkAliases, networkNamespaces, NETWORK_MEMBERS, networkObjectAliases, 'network')
         ) changed = addCallablePath(networkAliases, networkObjectAliases, helper.name) || changed;
     }
   }
   return {
     processAliases, networkAliases, processNamespaces, networkNamespaces,
-    processObjectAliases, networkObjectAliases,
+    processObjectAliases, networkObjectAliases, hostNamespaces, hostMembers, memberNames,
   };
 }
 
@@ -325,6 +387,16 @@ function networkRoute(words) {
   return 'network-write';
 }
 
+// Mods namespace aliases (`const p = $.process; p.run(...)`) and wrapper member names recorded for this file
+// (any `<x>.<name>(` / `<x>?.<name>(` once `<name>` was seen to wrap a host call).
+// Known gaps: destructured `({ process }) => process.run(...)` (a bare `process.run` is not judged, because
+// Node's own `process` global would make that a false positive) and wrappers built with computed keys.
+function hostCall(surface, segments, kind) {
+  if (segments.length < 2) return false;
+  if (segments.length === 2 && surface.hostNamespaces[kind].has(segments[0]) && surface.hostMembers[kind].has(segments[1])) return true;
+  return surface.memberNames[kind].has(segments.at(-1));
+}
+
 export function findExecutableExternalActions(source, { path = '<source>', structured = false } = {}) {
   const stream = tokens(source);
   const constants = assignedExpressions(stream);
@@ -333,14 +405,18 @@ export function findExecutableExternalActions(source, { path = '<source>', struc
   for (let index = 0; index < stream.length - 1; index += 1) {
     const call = memberPathAt(stream, index);
     if (!call || stream[call.next]?.value !== '(') continue;
-    const processCall = call.segments.length === 1
+    const processCall = (call.segments.length === 1
       ? surface.processAliases.has(call.segments[0])
       : (call.segments.length === 2 && surface.processNamespaces.has(call.segments[0]) && PROCESS_CALLS.has(call.segments[1]))
-        || surface.processObjectAliases.get(call.segments.slice(0, -1).join('.'))?.has(call.segments.at(-1));
-    const networkCall = call.segments.length === 1
+        || surface.processObjectAliases.get(call.segments.slice(0, -1).join('.'))?.has(call.segments.at(-1)))
+      || modHostCall(call.segments) === 'process'
+      || hostCall(surface, call.segments, 'process');
+    const networkCall = (call.segments.length === 1
       ? surface.networkAliases.has(call.segments[0])
       : (call.segments.length === 2 && surface.networkNamespaces.has(call.segments[0]) && NETWORK_MEMBERS.has(call.segments[1]))
-        || surface.networkObjectAliases.get(call.segments.slice(0, -1).join('.'))?.has(call.segments.at(-1));
+        || surface.networkObjectAliases.get(call.segments.slice(0, -1).join('.'))?.has(call.segments.at(-1)))
+      || modHostCall(call.segments) === 'network'
+      || hostCall(surface, call.segments, 'network');
     if (!processCall && !networkCall) continue;
     const open = call.next;
     const end = matching(stream, open);

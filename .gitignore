@@ -14,3 +14,6 @@ package-lock.json
 
 # internal design docs (specs / plans / research / handoffs) — kept local, not published
 docs/
+
+# created in the plugin root by `claude --plugin-dir`
+/tsconfig.json
