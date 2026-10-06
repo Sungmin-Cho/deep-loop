@@ -71,11 +71,13 @@ async function refresh() {
       const probed = parseStatus(await run(c, statusArgv(pluginRoot, cwd, probeRunId), sessionRoot))
       next = applyCompletionProbe(next, { prevSelected: prev?.selected ?? null, probeRunId }, probed)
     }
-    const toasts = transitions(prev?.selected ?? null, next.selected)
+    // A previous observation from an older generation (a detach in between) seeds the completion probe
+    // above but never a toast: nothing is announced across a detach boundary.
+    const toasts = prev?.gen === gen ? transitions(prev.selected, next.selected) : []
     if (!live()) return
-    // The updater itself refuses stale work: the Mods update reads state before applying it,
-    // so a detach inside that window must not publish this result.
-    await c.writeBand((s) => (live() ? { ...next, tick: s?.tick ?? next.tick } : s))
+    // The updater refuses stale work, and every published state carries the generation it was computed
+    // under: a write that still commits after a detach (and a re-attach) is dropped by the render gate.
+    await c.writeBand((s) => (live() ? { ...next, tick: s?.tick ?? next.tick, gen } : s))
     if (!live()) return
     // One toast per refresh: several in one tick draw only the last.
     if (toasts.length) c.toast(toasts.join(' · '))
@@ -175,7 +177,9 @@ export const register = (on) => {
     try {
       const band = await read($, bandAtom)
       const hidden = await read($, hiddenAtom)
-      const model = bandModel(band?.display ?? null, { hidden, hasSurvey: e.props.hasSurvey, active })
+      const model = bandModel(band?.display ?? null, {
+        hidden, hasSurvey: e.props.hasSurvey, active, stale: band?.gen !== generation,
+      })
       if (model) {
         const { Box, Text, Button } = $.ui.resolve(e)
         return h(Box, { width: e.props.bodyColumns, flexDirection: 'row', gap: 1 },

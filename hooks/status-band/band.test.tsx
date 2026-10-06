@@ -46,6 +46,8 @@ function rig($: any, on: any, surface: Surface, init: { surfaces?: string[] } = 
     gate: null as null | Promise<void>,
     // Holds the n-th band state read counted from the next process.run result (1 = refresh's own read, 2 = inside the state update).
     hold: null as null | { n: number; promise: Promise<void> },
+    // Holds the next band `state.set` (the write itself, after the updater was evaluated) until released.
+    holdSet: null as null | { promise: Promise<void>; reached: number },
   }
   on('session.start', (_$: any, e: any) => ({ cwd: e.cwd }))
   on('session.attach', (_$: any, e: any) => ({ clientId: e.clientId }))
@@ -71,6 +73,11 @@ function rig($: any, on: any, surface: Surface, init: { surfaces?: string[] } = 
       h.seen += 1
       if (h.seen === h.n) await h.promise
     }
+    return next(e)
+  })
+  on('state.set', { plugin: 'deep-loop' } as never, async (_$: any, e: any, next: any) => {
+    const h = ctl.holdSet
+    if (h && e.key === 'band') { ctl.holdSet = null; h.reached += 1; await h.promise }
     return next(e)
   })
   on('prompt.read', () => ({ value: { text: ctl.draft, cursor: ctl.draft.length } }))
@@ -377,6 +384,50 @@ test('detach while the state write is pending: the stale result is neither publi
   expect(v.line).not.toContain('stale-trip')
   expect(v.line).not.toContain('99/200')
   expect(r.toasts).toEqual([])
+})
+
+test('detach and re-attach while the band state.set is held: the obsolete observation is never drawn nor toasted', async ($, on) => {
+  const r = rig($, on, 'terminal')
+  await r.start()
+  expect((await r.shown()).line).toContain('budget 41/200')
+  let release: () => void = () => {}
+  const held = { promise: new Promise<void>((resolve) => { release = resolve }), reached: 0 }
+  r.ctl.holdSet = held
+  r.ctl.primary = running({ breaker: { tripped: true, reason: 'stale-trip' }, budget: { spent: 99, total: 200, tokens_spent: 1, tokens_total: 2, state: 'ok', reason: 'ok' } })
+  await r.turn()
+  await r.clock.advance(1500) // the updater ran under the old generation; the write itself is held
+  expect(held.reached).toBe(1)
+  // detach and re-attach while that write is pending (the surface never goes away for good)
+  await r.detach()
+  await r.attach()
+  r.ctl.primary = running({ budget: { spent: 150, total: 200, tokens_spent: 1, tokens_total: 2, state: 'ok', reason: 'ok' } })
+  await r.clock.advance(1) // the re-attach refresh reads the fresh result; its own write is not held
+  release()
+  await r.clock.advance(0)
+  const v = await r.shown()
+  expect(v.line).not.toContain('99/200')
+  expect(v.line).not.toContain('stale-trip')
+  expect(r.toasts).toEqual([])
+  await r.clock.advance(1500)
+  expect((await r.shown()).line).toContain('budget 150/200')
+  expect((await r.shown()).line).not.toContain('99/200')
+  expect(r.toasts).toEqual([])
+})
+
+test('a transition across a detach boundary is not toasted, the next one is', async ($, on) => {
+  const r = rig($, on, 'terminal')
+  await r.start()
+  await r.shown()
+  await r.detach()
+  r.ctl.primary = running({ breaker: { tripped: true, reason: 'while-detached' } })
+  await r.attach()
+  await r.clock.advance(1)
+  expect((await r.shown()).line).toContain('breaker: while-detached')
+  expect(r.toasts).toEqual([])
+  r.ctl.primary = running({ breaker: { tripped: true, reason: 'while-detached' }, comprehension: { debt_ratio: 0.9, debt_threshold: 0.5, blocked: true } })
+  await r.turn()
+  await r.clock.advance(1500)
+  expect(r.toasts).toEqual(['deep-loop: comprehension debt is blocking new work — /deep-loop-ack'])
 })
 
 test('transitions merge into one toast per refresh', async ($, on) => {

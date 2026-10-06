@@ -344,6 +344,15 @@ test('bandModel: null cases (order 1, 3, 4)', () => {
   assert.equal(model(P(ambiguousEnv('other-reason'))), null);
 });
 
+test('bandModel: a band published under an older generation is never drawn', () => {
+  const running = sel();
+  assert.notEqual(model(running, { stale: false }), null);
+  assert.notEqual(model(running), null); // stale defaults to fresh
+  assert.equal(model(running, { stale: true }), null);
+  assert.equal(model(P(ambiguousEnv()), { stale: true }), null);
+  assert.notEqual(model(P(ambiguousEnv())), null);
+});
+
 test('bandModel: ambiguous lines', () => {
   const a = model(P(ambiguousEnv('multi-active-root-cwd', 3)));
   assert.equal(a.line, 'deep-loop · 3 active runs · /deep-loop-status');

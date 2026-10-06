@@ -150,8 +150,9 @@ const num = (v) => (isNum(v) ? String(v) : '?');
 const statusButton = Object.freeze({ key: 'status', label: 'Status', command: STATUS_COMMAND });
 const hideButton = Object.freeze({ key: 'hide', label: 'Hide' });
 
-export function bandModel(display, { hidden, hasSurvey, active } = {}) {
-  if (!active || hasSurvey || hidden || display?.kind !== 'envelope') return null;
+// `stale`: the stored band was published under an older attach generation (a detach happened since).
+export function bandModel(display, { hidden, hasSurvey, active, stale } = {}) {
+  if (!active || hasSurvey || hidden || stale || display?.kind !== 'envelope') return null;
   const { resolution, run } = display.envelope;
   if (resolution.kind === 'ambiguous') {
     if (resolution.reason === 'multi-active-root-cwd') {
