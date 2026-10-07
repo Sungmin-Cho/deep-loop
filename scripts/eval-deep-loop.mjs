@@ -52,7 +52,7 @@ function loadTasks(taskId) {
   return tasks;
 }
 
-export function loadFixtureProfile(file = join(ROOT, 'evals', 'profiles', 'deep-loop-current-v1.26.json')) {
+export function loadFixtureProfile(file = join(ROOT, 'evals', 'profiles', 'deep-loop-current-v1.27.json')) {
   let profile;
   try { profile = JSON.parse(readFileSync(file, 'utf8')); }
   catch (error) { throw new Error(`PROFILE_LOAD_FAILED:${error.code || error.message}`); }

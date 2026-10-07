@@ -5,6 +5,57 @@ All notable changes to deep-loop are documented in this file.
 > Note: the `[1.1.0]`/`[1.2.0]` entries pre-date this changelog file (a known lag between
 > `plugin.json.version` and the changelog); this release does not retro-fill them.
 
+## [1.27.0] — 2026-10-07
+
+### Fixed
+
+- Old run history no longer switches off cwd run selection for the whole project (#77).
+  More than 64 run directories, or one finished run with a claim an older version recorded
+  as an absolute path, used to make `run resolve`, `run status`, the status band and the
+  PreCompact, PostCompact and SessionStart hooks fail for every session, so no compact
+  checkpoint was written.
+- Terminal worktree claims that overlap — two finished runs on one path, or a finished run
+  and an active run — no longer make the whole project ambiguous.
+- PreCompact and SessionStart passed their fixed business time as the selection deadline
+  clock, so their selection time limit never applied. They now use a real clock.
+- PostCompact counted every entry under `.deep-loop/runs/` and gave up on a regular file
+  named like a run id; it now counts run directories like the kernel does.
+- PreCompact answers a selected finished `workstream-session` run with `no-run-terminal`
+  before any affinity or checkpoint step.
+
+### Changed
+
+- Run selection reads `completed` and `stopped` runs without the run lock when their
+  `loop.json` matches `.loop.hash`, passes the schema and binds to the project root. Other
+  runs get the full locked verification, and a selected run is always re-read with it. The
+  event log, pending transactions and artifacts of terminal history are not checked on this
+  path; `--run-id` reads and `validate` still check them.
+- Bounds: 256 run directories (was 64), 64 full verifications, 4096 worktree claims, 32 MiB of
+  state read while classifying. Time: 500 ms + 2 ms per run directory to classify, then 500 ms + 100 ms per
+  full verification, capped at 3000 ms (`cli-read`) or 6900 ms (hooks, `run list`).
+- A terminal claim affects only a cwd inside it (`none`, `terminal-residue`,
+  `source: worktree`). Inside a worktree path that a new run reused, the safety net stays off;
+  PreCompact now writes one diagnostic line there and the band says so.
+- A legacy absolute claim of a finished run that points into `.claude/worktrees/` or
+  `.worktrees/` is read as its relative form; other unresolvable claims of finished runs are
+  isolated and counted in `run resolve`'s `history`.
+- An active run's non-conforming claim now fails with reason `invalid-worktree-claim`
+  (was `run-set-integrity` / `integrity-invalid`). A run directory without `loop.json` is kind
+  `state-missing`; a lock that stays held is `lock-busy`.
+- `run list` rows carry `verification` (`state-hash` or `full`) and stay filled when another
+  run errors. `run resolve`, hook and headless diagnostics carry `phase` and `bound` for an
+  exceeded bound (`enumeration`, `classification`, `full-capture-count`, `lock-retry`, `claims`,
+  `recapture`).
+- The status band names four run-selection failures (`run selection unavailable (<reason>)`)
+  and a cwd inside a finished run's worktree. `/deep-loop-status` explains each reason and
+  the human remedy, and says where no CLI remedy exists yet.
+
+### Compatibility
+
+- A terminal run with a leftover transaction no longer appears as `reconciliation-required`
+  in `run list` or blocks selection.
+- No durable format changes; 1.26 reads everything 1.27 leaves behind.
+
 ## [1.26.0] — 2026-10-06
 
 ### Added
