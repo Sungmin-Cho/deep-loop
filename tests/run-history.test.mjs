@@ -140,6 +140,20 @@ test('T1 a held lock on every terminal run does not block the set capture', () =
   }
 });
 
+test('T1 the light reader is registered in the verified-read closure', async () => {
+  const { VERIFIED_READ_CLOSURE_NAMES } = await import('../scripts/lib/integrity.mjs');
+  assert.ok(VERIFIED_READ_CLOSURE_NAMES.includes('readTerminalHistoryLight'));
+  assert.ok(VERIFIED_READ_CLOSURE_NAMES.includes('enumerateRunIdsBounded'));
+});
+
+test('T1 the fast path refuses the default path deadline options instead of ignoring them', () => {
+  const root = freshRoot();
+  seedRun(root);
+  for (const name of ['deadlineMs', 'deadlineAtMs', 'vectorDeadlineAtMs']) {
+    assert.throws(() => captureVerifiedRunSet(root, fast({ [name]: 60_000 })), /RUN_SET_OPTIONS_INVALID/, name);
+  }
+});
+
 test('T1 the light reader returns the parsed state and refuses non-terminal runs', () => {
   const root = freshRoot();
   const stopped = seedRun(root, { status: 'stopped' });
@@ -286,6 +300,29 @@ test('T2 the default (non fast path) set still discards every run when one error
   const captured = captureVerifiedRunSet(root, { maxRunIds: 64, deadlineMs: 500 });
   assert.ok(captured.errors[cloneId(5)]);
   assert.equal(captured.runs[active], undefined);
+});
+
+test('T2b the other torn order (new hash, old state) also falls back and matches the locked read', () => {
+  const root = freshRoot();
+  const terminal = seedRun(root, { status: 'stopped' });
+  const loopPath = join(runDir(root, terminal), 'loop.json');
+  const original = readFileSync(loopPath);
+  const next = readLoop(root, terminal);
+  next.goal = 'published later';
+  const nextRaw = JSON.stringify(next, null, 2);
+  writeFileSync(join(runDir(root, terminal), '.loop.hash'), contentHash(nextRaw));
+  let calls = 0;
+  const captured = captureVerifiedRunSet(root, fast({
+    captureRunSnapshotFn: (captureRoot, runId, options) => {
+      calls += 1;
+      // The writer restores a consistent pair before the locked re-read.
+      writeFileSync(join(runDir(root, terminal), '.loop.hash'), contentHash(original.toString('utf8')));
+      return captureVerifiedRunSnapshot(captureRoot, runId, options);
+    },
+  }));
+  assert.equal(calls, 1);
+  assert.equal(captured.runs[terminal].verification, 'full');
+  assert.deepEqual(captured.runs[terminal].snapshot.data, captureVerifiedRunSnapshot(root, terminal).snapshot.data);
 });
 
 test('T2b a torn pair falls back and the locked capture decides', () => {
@@ -558,7 +595,12 @@ test('T1 selection succeeds with 70 terminal runs while every terminal lock is h
   for (const runId of terminal) mkdirSync(join(runDir(root, runId), '.lock'));
   try {
     const before = durableBytes(root);
-    const result = resolveRunContext({ root, cwd: root, purpose: 'hook-checkpoint', lockOptions: { retries: 1, backoffMs: 0 } });
+    let recaptures = 0;
+    const result = resolveRunContext({
+      root, cwd: root, purpose: 'hook-checkpoint', lockOptions: { retries: 1, backoffMs: 0 },
+      captureRunSnapshot: () => { recaptures += 1; throw new Error('a full-captured selection is not re-read'); },
+    });
+    assert.equal(recaptures, 0);
     assert.equal(result.kind, 'selected', JSON.stringify(result));
     assert.equal(result.source, 'single-active');
     assert.equal(result.runId, active);
@@ -700,4 +742,21 @@ test('T9 a terminal run with a leftover prepared transaction is history; exact r
   const exact = captureVerifiedRunSnapshot(root, terminal);
   assert.equal(exact.ok, false);
   assert.ok(['reconciliation-required', 'integrity-invalid'].includes(exact.kind), exact.kind);
+});
+
+test('T10 run status carries the worktree residue marker the band reads', () => {
+  const root = freshRoot();
+  const active = seedRun(root);
+  const worktree = join(root, '.worktrees', 'shared');
+  mkdirSync(worktree, { recursive: true });
+  newWorkstream(root, active, { title: 'shared', branch: 'feature/shared', worktree, fence: { owner: active, generation: 1 } });
+  const terminal = seedRun(root, { status: 'stopped' });
+  const data = readLoop(root, terminal);
+  data.workstreams = [{ ...structuredClone(readLoop(root, active).workstreams[0]), id: 'ws-old', status: 'ready' }];
+  writeLoop(root, terminal, data);
+  const out = spawnSync(process.execPath, [CLI, 'run', 'status', '--json', '--cwd', worktree, '--project-root', root],
+    { cwd: root, encoding: 'utf8' });
+  assert.equal(out.status, 0, out.stdout + out.stderr);
+  const envelope = JSON.parse(out.stdout);
+  assert.deepEqual(envelope.resolution, { kind: 'none', source: 'worktree', reason: 'terminal-residue', total: null, candidates: [] });
 });

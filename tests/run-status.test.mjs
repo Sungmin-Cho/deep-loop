@@ -254,12 +254,15 @@ test('T-K4: six active runs report total 6 and exactly five sorted candidates', 
   const first = seed();
   const ids = [first.runId];
   for (let i = 0; i < 5; i += 1) ids.push(seed(first.root).runId);
-  // In-process with the real capture but a relaxed aggregate deadline: the CLI's fixed 500 ms run-set
-  // deadline is load-sensitive (a slow CI runner reports run-set-bound-exceeded instead), and what this
-  // test pins is the candidate projection, not the deadline.
+  // In-process with the real capture but relaxed run-set deadlines: the CLI's deadlines are
+  // load-sensitive (a slow CI runner reports run-set-bound-exceeded instead), and what this test
+  // pins is the candidate projection, not the deadline. The history fast path takes its own
+  // deadline options (issue #77) and refuses the default path's `deadlineMs`.
   const result = resolveRunContext({
     root: first.root, purpose: 'cli-read',
-    captureRunSet: (root, options) => captureVerifiedRunSet(root, { ...options, deadlineMs: 60_000 }),
+    captureRunSet: (root, options) => captureVerifiedRunSet(root, {
+      ...options, baseDeadlineMs: 60_000, maxDeadlineMs: 60_000,
+    }),
   });
   const { envelope, exitCode } = buildRunStatus(result, { now: Date.parse(SEED_NOW) });
   assert.equal(exitCode, 1);

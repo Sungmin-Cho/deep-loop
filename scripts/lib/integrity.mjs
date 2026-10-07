@@ -1779,9 +1779,10 @@ function defaultReadSleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-// Run selection reads terminal history without a lock (issue #77). Terminal status is
-// absorbing while the stored project root binds to the current one: every terminal
-// writer except root rebind is rejected, and rebind needs an unresolvable stored root.
+// Run selection reads terminal history without a lock (issue #77). A bound terminal
+// run's status and worktree claims are absorbing: business writers reject terminal runs,
+// root rebind needs an unresolvable stored root, and the writers that still touch a
+// terminal run (lease residue cleanup, terminal cost settlement) change neither.
 export const RUN_SELECTION_BOUNDS = Object.freeze({
   maxRunIds: 256,
   maxFullCaptures: 64,
@@ -1849,7 +1850,8 @@ export function readTerminalHistoryLight(root, runId) {
       return lightFallback('run-directory-drift', Math.max(charged, loopBytes.length + hashBytes.length));
     }
   } catch {
-    return lightFallback('state-read', charged);
+    // A read may have succeeded on a file that grew after the sizing lstat.
+    return lightFallback('state-read', Math.max(charged, (loopBytes?.length ?? 0) + (hashBytes?.length ?? 0)));
   }
   const bytes = Math.max(charged, loopBytes.length + hashBytes.length);
   let parsed;
@@ -1962,7 +1964,6 @@ function captureRunSetWithHistory(root, options) {
   if (fullIds.length > maxFullCaptures) {
     return historyBoundExceeded(root, {
       max_run_ids: maxRunIds,
-      deadline_ms: baseDeadlineMs,
       observed_count: runIds.length,
       total_is_lower_bound: false,
       phase: 'full-capture-count',
@@ -2036,6 +2037,11 @@ function captureRunSetWithHistory(root, options) {
 export function captureVerifiedRunSet(root, options = {}) {
   if (options.historyFastPath === true) {
     if (options.runIds !== undefined) throw new Error('RUN_SET_OPTIONS_INVALID: historyFastPath enumerates');
+    // The fast path derives its deadlines from RUN_SELECTION_BOUNDS-style options; a
+    // caller passing the default path's deadline options would otherwise be ignored.
+    for (const name of ['deadlineMs', 'deadlineAtMs', 'deadlineAt', 'vectorDeadlineAtMs']) {
+      if (options[name] !== undefined) throw new Error(`RUN_SET_OPTIONS_INVALID: historyFastPath ignores ${name}`);
+    }
     return captureRunSetWithHistory(root, options);
   }
   const implicit = options.runIds === undefined;

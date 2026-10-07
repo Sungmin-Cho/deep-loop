@@ -46,14 +46,15 @@ node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" run resolve --cwd "<session_cwd>" --
 |---|---|
 | `run-set-bound-exceeded`, `phase: enumeration`, `bound: count` | run 디렉터리가 256개를 넘는다. 오래된 run 디렉터리를 `.deep-loop/runs/` 밖으로 옮기는 것을 사람에게 제안한다. |
 | `run-set-bound-exceeded`, `phase: full-capture-count` | terminal로 검증되지 않는 run이 64개를 넘는다. stale 활성 run을 멈추는 것을 제안한다(아래 `multi-active-root-cwd` 행). |
+| `run-set-bound-exceeded`, `phase: claims` | 모든 run의 worktree claim 합이 4096개를 넘는다. 오래된 run 정리를 제안한다(위 두 행). |
 | `run-set-bound-exceeded`, `bound: deadline` 또는 `bytes` | 시간·바이트 상한이다. 부하가 줄면 다시 시도한다. 계속되면 위 두 행을 본다. |
 | `run-set-integrity` | `errors`에 나온 run을 `validate --run-id <run_id>`로 확인한다. kind `state-missing`은 `loop.json`이 없는 run 디렉터리다. 사람이 옮기거나 지우는 것을 제안한다. |
 | `invalid-worktree-claim` | 활성(running·paused) run의 worktree claim이 규격(`.claude/worktrees/` 또는 `.worktrees/` 아래 상대 경로)에 맞지 않는다. `errors`의 run을 `--run-id`로 조회해 확인한다. `worktree`는 `state patch`로 고칠 수 없는 필드라 **지금 CLI로 고치는 경로는 없다**. 사람에게 그 사실을 알린다. |
-| `reconciliation-required` | `errors`의 run을 `--run-id`로 정확히 읽는다(아래 §1의 `state get`). 정확 읽기는 남은 WAL 발행을 재조정하거나, 그럴 수 없으면 fail-stop한다(README 호환 계약). 이 스킬에 별도 복구 절은 없다. |
+| `reconciliation-required` | `errors`의 run을 `--run-id`로 확인한다(아래 §1의 `state get`). 이 정확 읽기는 검증만 하며, 미완료 발행이 있으면 거부할 뿐 고치지 않는다. 재조정과 fail-stop 규칙은 README 호환 계약의 WAL 문단이 정한다. 이 스킬에 별도 복구 절은 없다. |
 | `none`, `terminal-residue`, `source: worktree` | cwd가 끝난 run이 claim했던 worktree 안이다. 다른 활성 run이 같은 경로를 쓰고 있어도 그 안에서는 compact safety net이 꺼진다. 프로젝트 root에서 작업하거나 새 run에는 새 worktree 경로를 쓰도록 제안한다. |
 | `multi-active-root-cwd`, `duplicate-worktree-claim` | `run list`에서 stale 활성 run을 고른다. `run list`도 상한에 걸리면 `.deep-loop/runs/`의 디렉터리 이름을 보고 아래 §1의 `state get --run-id`로 하나씩 확인한다(정확 읽기는 run 집합을 스캔하지 않는다). 멈추는 것은 `/deep-loop-finish`의 stopped 절차다(`--confirm`과 `human_reason`이 필수). 그 명령은 run이 `running`이고 lease가 `active`일 때만 통과한다. 이 스킬의 사람 전용 복구 절은 각자 좁은 전제를 가진다(예: lost-host 복구는 `host-session-lost` pause, active lease, 열린 affinity). 그 전제에 맞지 않는 `paused` run이나 lease가 `released`·`releasing`인 run은 **지금 일반적인 정지 경로가 없다**. 사람에게 그 사실을 알린다. 멈춘 run의 claim은 terminal이 되므로, 그 경로를 다른 활성 run이 쓰고 있으면 그 안의 cwd는 위 `none` 행이 된다. |
 
-terminal claim(끝난 run의 claim, 또는 ready·merged·abandoned workstream의 claim)은 그 경로 안의 cwd에만 영향을 준다. 그 안에서는 `none`(`terminal-residue`)이고, 프로젝트 전체 선택은 막지 않는다. 예전 형식의 절대 경로 claim은 root 안 컨벤션 디렉터리를 가리키면 상대 경로로 해석되고, 해석할 수 없으면 격리된다. `run resolve`의 `history`가 그 개수를 보여 준다. lock이 계속 잡혀 있는 run은 `errors`에 kind `lock-busy`로 나온다.
+terminal claim(끝난 run의 claim, 또는 ready·merged·abandoned workstream의 claim)은 그 경로 안의 cwd에만 영향을 준다. 그 안에서는 `none`(`terminal-residue`)이고, 프로젝트 전체 선택은 막지 않는다. 예외는 예전과 같다. 활성 run이 없고, 끝난 run 하나의 일반 claim이 cwd를 포함하고, `current`가 그 run을 가리키면 읽기 전용 `legacy-current` 선택이다. 예전 형식의 절대 경로 claim은 root 안 컨벤션 디렉터리를 가리키면 상대 경로로 해석되고, 해석할 수 없으면 격리된다. `run resolve`의 `history`가 그 개수를 보여 준다. lock이 계속 잡혀 있는 run은 `errors`에 kind `lock-busy`로 나온다.
 
 ### 1. 전체 Loop 상태
 

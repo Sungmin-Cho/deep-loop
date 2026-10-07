@@ -557,5 +557,20 @@ test('T14 PostCompact main() does not observe when an active run holds a non-con
     input: JSON.stringify({ cwd: fixture.containedCwd, hook_event_name: 'PostCompact', trigger: 'auto' }),
   });
   assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, 'deep-loop: postcompact hook failed\n');
   assert.equal(existsSync(observationPath(fixture)), false);
+});
+
+test('T12 PostCompact counts run directories, not files: 300 files beside the runs still observe', () => {
+  const fixture = seed('claude');
+  const runs = join(fixture.root, '.deep-loop', 'runs');
+  for (let index = 0; index < 300; index += 1) writeFileSync(join(runs, `note-${index}`), 'x');
+  const result = runNode(['-e', bootstrapSource()], {
+    cwd: fixture.containedCwd,
+    env: bootstrapEnv('CLAUDE_PLUGIN_ROOT'),
+    input: JSON.stringify({ cwd: fixture.containedCwd, hook_event_name: 'PostCompact', trigger: 'auto' }),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.equal(existsSync(observationPath(fixture)), true);
 });

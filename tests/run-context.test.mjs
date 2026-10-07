@@ -715,6 +715,13 @@ test('T5 a POSIX legacy absolute claim with a literal backslash is not moved by 
   assert.notEqual(alone.source, 'legacy-current');
 });
 
+test('T8 a win32 isolated claim keeps a case-folded convention region', () => {
+  const runs = { T: terminalRun('T', '.WORKTREES\\e\u0301'), A: snapshot('A', 'running') };
+  const inside = resolve(runs, { platform: 'win32', cwd: '/project/.WORKTREES/e\u0301/file' });
+  assert.equal(inside.reason, 'terminal-residue');
+  assert.equal(inside.source, 'worktree');
+});
+
 test('T8 a win32 UNC legacy claim against a drive root is isolated without a region', () => {
   const runs = {
     T: terminalRun('T', '\\\\server\\share\\project\\.worktrees\\x', { root: 'C:\\project' }),

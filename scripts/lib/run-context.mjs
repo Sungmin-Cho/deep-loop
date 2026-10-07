@@ -658,6 +658,7 @@ function confirmHistorySelection(result, entries, {
         ? { vectorDeadlineAtMs: startedMs + RUN_SELECTION_BOUNDS.baseDeadlineMs } : {}),
     });
   } catch (error) {
+    if (String(error?.message || error).startsWith('LOCK_BUSY')) return failed('lock-busy');
     return failed(captureFailure(entry.run_id, error).errors?.[entry.run_id]?.kind || 'integrity-invalid');
   }
   if (captured?.ok === false) {
