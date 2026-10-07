@@ -66,7 +66,7 @@ import {
   makeProcessUsageReceiptDescriptor,
   removeProcessUsageReceipt,
 } from './preflight-receipt-journal.mjs';
-import { resolveRunContext } from './run-context.mjs';
+import { ROUTING_BOUND_FIELDS, resolveRunContext } from './run-context.mjs';
 
 const DEFAULT_DEEP_LOOP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const RESUME_SKILL_MAX_BYTES = 4 * 1024 * 1024;
@@ -1805,11 +1805,8 @@ export function driveHeadless({
       ...(selection?.candidates ? { candidates: selection.candidates } : {}),
       ...(selection?.errors ? { errors: selection.errors } : {}),
       ...(Number.isSafeInteger(selection?.total) ? { total: selection.total } : {}),
-      ...(selection?.max_run_ids !== undefined ? { max_run_ids: selection.max_run_ids } : {}),
-      ...(selection?.deadline_ms !== undefined ? { deadline_ms: selection.deadline_ms } : {}),
-      ...(selection?.observed_count !== undefined ? { observed_count: selection.observed_count } : {}),
-      ...(selection?.total_is_lower_bound !== undefined
-        ? { total_is_lower_bound: selection.total_is_lower_bound } : {}),
+      ...Object.fromEntries(ROUTING_BOUND_FIELDS
+        .filter(key => selection?.[key] !== undefined).map(key => [key, selection[key]])),
     };
   }
   if (selection.kind === 'none') return { ok: true, action: 'no-run' };

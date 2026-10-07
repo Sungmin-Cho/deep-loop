@@ -528,7 +528,7 @@ test('PostCompact bootstrap stays shell-free and adapter imports no mutation fac
 });
 
 // ── issue #77: run history must not switch the compact safety net off ──────────────
-import { addTerminalHistory } from './helpers/run-history.mjs';
+import { addTerminalHistory, rewriteLoop } from './helpers/run-history.mjs';
 
 test('T12 PostCompact main() observes the active run beside 71 terminal runs, files and run-id-named files', () => {
   const fixture = seed('claude');
@@ -544,4 +544,18 @@ test('T12 PostCompact main() observes the active run beside 71 terminal runs, fi
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, '');
   assert.equal(existsSync(observationPath(fixture)), true);
+});
+
+test('T14 PostCompact main() does not observe when an active run holds a non-conforming claim', () => {
+  const fixture = seed('claude');
+  rewriteLoop(fixture.root, fixture.runId, data => {
+    data.workstreams[0].worktree = join(fixture.root, data.workstreams[0].worktree);
+  });
+  const result = runNode(['-e', bootstrapSource()], {
+    cwd: fixture.containedCwd,
+    env: bootstrapEnv('CLAUDE_PLUGIN_ROOT'),
+    input: JSON.stringify({ cwd: fixture.containedCwd, hook_event_name: 'PostCompact', trigger: 'auto' }),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(observationPath(fixture)), false);
 });

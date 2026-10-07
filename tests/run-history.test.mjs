@@ -13,6 +13,7 @@ import { newWorkstream } from '../scripts/lib/workspace.mjs';
 import { resolveRunContext } from '../scripts/lib/run-context.mjs';
 import { runDir } from '../scripts/lib/state.mjs';
 import { contentHash } from '../scripts/lib/envelope.mjs';
+import { appendAnchored } from '../scripts/lib/integrity.mjs';
 import {
   RUN_SELECTION_BOUNDS,
   captureVerifiedRunSet,
@@ -203,6 +204,49 @@ test('T2 a symlinked loop.json falls back to full capture and fails closed', t =
   assert.ok(captured.errors[terminal]);
 });
 
+test('T2 a failed light read is still charged its declared bytes', () => {
+  const root = freshRoot();
+  const terminal = seedRun(root, { status: 'stopped' });
+  const loopSize = lstatSync(join(runDir(root, terminal), 'loop.json')).size;
+  rmSync(join(runDir(root, terminal), '.loop.hash'));
+  const light = readTerminalHistoryLight(root, terminal);
+  assert.equal(light.ok, false);
+  assert.equal(light.bytes, loopSize);
+  const captured = captureVerifiedRunSet(root, fast({ maxLightBytes: loopSize - 1, nowFn: () => 1_000 }));
+  assert.equal(captured.phase, 'classification');
+  assert.equal(captured.bound, 'bytes');
+});
+
+test('T2 an oversized terminal loop.json falls back to the locked capture, which accepts it', () => {
+  const root = freshRoot();
+  const terminal = seedRun(root, { status: 'stopped' });
+  const data = readLoop(root, terminal);
+  data.goal = 'g'.repeat(1024 * 1024);
+  writeLoop(root, terminal, data);
+  const light = readTerminalHistoryLight(root, terminal);
+  assert.equal(light.ok, false);
+  assert.ok(light.bytes > 1024 * 1024);
+  const captured = captureVerifiedRunSet(root, fast({ nowFn: () => 1_000 }));
+  assert.deepEqual(Object.keys(captured.errors), []);
+  assert.equal(captured.runs[terminal].verification, 'full');
+});
+
+test('T2 a pre-0.4 terminal state passes the light path through the same migration', () => {
+  const root = freshRoot();
+  const terminal = seedRun(root, { status: 'stopped' });
+  const data = readLoop(root, terminal);
+  data.schema_version = '0.3.0';
+  delete data.project.binding_generation;
+  delete data.autonomy.attended_launch_approval;
+  delete data.session_chain.lease.takeover_kind;
+  for (const session of data.session_chain.sessions) delete session.scope;
+  data.autonomy.continuation_policy = 'compact-in-place';
+  writeLoop(root, terminal, data);
+  const light = readTerminalHistoryLight(root, terminal);
+  assert.equal(light.ok, true, JSON.stringify(light));
+  assert.equal(light.snapshot.data.status, 'stopped');
+});
+
 test('T2 a run id that does not match its directory is not light-verified', () => {
   const root = freshRoot();
   const source = seedRun(root, { status: 'stopped' });
@@ -356,18 +400,22 @@ test('T4 the full-capture deadline scales with the number of full captures and i
   }
 });
 
-test('T4 classification past the base deadline exceeds the classification bound', () => {
+test('T4 classification past its own deadline exceeds the classification bound', () => {
   const root = freshRoot();
   const source = seedRun(root, { status: 'stopped' });
   for (let index = 0; index < 4; index += 1) cloneTerminal(root, source, cloneId(index));
+  // The clock stands still through enumeration and then jumps past 500 + 2 x 5 ms.
   let now = 1_000;
-  const captured = captureVerifiedRunSet(root, fast({ nowFn: () => { now += 200; return now; } }));
+  let classifying = false;
+  const captured = captureVerifiedRunSet(root, fast({
+    nowFn: () => (classifying ? (now += 200) : now),
+    afterEnumeration: () => { classifying = true; },
+  }));
   assert.equal(captured.ok, false);
   assert.equal(captured.kind, 'run-set-bound-exceeded');
-  assert.ok(['enumeration', 'classification'].includes(captured.phase));
+  assert.equal(captured.phase, 'classification');
   assert.equal(captured.bound, 'deadline');
-  // Enumeration has the base budget; classification adds 2 ms per run directory.
-  assert.equal(captured.deadline_ms, captured.phase === 'enumeration' ? 500 : 500 + 2 * 5);
+  assert.equal(captured.deadline_ms, 500 + 2 * 5);
 });
 
 test('T4 classification scales with the directory count and full capture starts after it', () => {
@@ -477,6 +525,15 @@ test('T7 a failed or diverging re-capture is run-set-integrity, never identity-i
   });
   assert.equal(diverged.reason, 'run-set-integrity');
   assert.equal(diverged.errors[runId].kind, 'state-drift');
+  const deadlines = [];
+  resolveRunContext({
+    root, cwd: root, nowFn: () => 7_000,
+    captureRunSnapshot: (captureRoot, id, options) => {
+      deadlines.push(options.vectorDeadlineAtMs);
+      return captureVerifiedRunSnapshot(captureRoot, id, { ...options, nowFn: undefined, vectorDeadlineAtMs: undefined });
+    },
+  });
+  assert.deepEqual(deadlines, [7_000 + 500], 'the re-capture has its own 500 ms deadline');
   const otherClaims = resolveRunContext({
     root, cwd: root,
     captureRunSnapshot: (captureRoot, id, options) => {
@@ -578,22 +635,69 @@ test('T10 a history with no isolated or normalized claim projects no history key
 });
 
 // ── measurement (T17) ─────────────────────────────────────────────────────────────
-test('T17 measurement: light history reads and locked full captures on this host', t => {
+test('T17 measurement: light history, 64 locked full captures and a whole run status process', t => {
+  const frozen = () => 1_000; // deadlines off: this test measures, it does not gate
   const root = freshRoot();
   const source = seedRun(root, { status: 'stopped' });
-  for (let index = 0; index < 247; index += 1) cloneTerminal(root, source, cloneId(index));
-  for (let index = 0; index < 8; index += 1) seedRun(root);
-  const frozen = () => 1_000; // disable the deadline: this test measures, it does not gate
+  for (let index = 0; index < 191; index += 1) cloneTerminal(root, source, cloneId(index));
+  const actives = [];
+  for (let index = 0; index < 64; index += 1) actives.push(seedRun(root));
   let started = performance.now();
-  const captured = captureVerifiedRunSet(root, fast({ nowFn: frozen }));
-  const totalMs = performance.now() - started;
-  assert.deepEqual(Object.keys(captured.errors), []);
-  started = performance.now();
-  for (let index = 0; index < 248; index += 1) readTerminalHistoryLight(root, index === 0 ? source : cloneId(index - 1));
+  for (let index = 0; index < 192; index += 1) readTerminalHistoryLight(root, index === 0 ? source : cloneId(index - 1));
   const lightMs = performance.now() - started;
+  started = performance.now();
+  const captured = captureVerifiedRunSet(root, fast({ nowFn: frozen }));
+  const setMs = performance.now() - started;
+  assert.deepEqual(Object.keys(captured.errors), []);
+  assert.equal(Object.keys(captured.runs).length, 256);
+  started = performance.now();
+  const status = spawnSync(process.execPath, [CLI, 'run', 'status', '--json', '--cwd', root, '--project-root', root],
+    { cwd: root, encoding: 'utf8' });
+  const processMs = performance.now() - started;
+  // 64 active runs make the cwd ambiguous; the envelope still arrives (or a bound names its phase).
+  assert.ok([0, 1].includes(status.status), status.stdout + status.stderr);
+  const envelope = JSON.parse(status.stdout);
   t.diagnostic(JSON.stringify({
     platform: process.platform, node: process.version,
-    light_248_ms: Math.round(lightMs), set_248_light_8_full_ms: Math.round(totalMs),
-    per_full_capture_ms: Math.round((totalMs - lightMs) / 8),
+    light_192_ms: Math.round(lightMs), set_192_light_64_full_ms: Math.round(setMs),
+    per_full_capture_ms: Math.round((setMs - lightMs) / 64), run_status_process_ms: Math.round(processMs),
+    run_status_resolution: `${envelope.resolution.kind}/${envelope.resolution.reason}`,
   }));
+  assert.ok(processMs < 60_000, `run status took ${Math.round(processMs)} ms`);
+});
+
+test('T9 a terminal run with a leftover prepared transaction is history; exact reads still reject it', () => {
+  const root = freshRoot();
+  const terminal = seedRun(root);
+  assert.throws(() => appendAnchored(
+    root, terminal,
+    { type: 'context-prepared', data: { operation_id: 'op-orphan' }, now: '2026-07-23T00:01:00.000Z' },
+    loop => { loop.discovered_items.push('op-orphan'); },
+    undefined,
+    {
+      publication: {
+        kind: 'workstream-boundary',
+        operationId: 'op-orphan',
+        artifacts: [{ rel: 'artifacts/boundary.txt', bytes: Buffer.from('artifact') }],
+        topology: { operation_id: 'op-orphan', phase: 'prepared' },
+        faultAt(label) { if (label === 'prepared:digest-verified') throw new Error('orphan-fixture'); },
+      },
+      floor: 1,
+    },
+  ), /TRANSACTION_PENDING/);
+  // The finished state an interrupted terminal publication could leave behind.
+  const data = readLoop(root, terminal);
+  data.status = 'stopped';
+  writeLoop(root, terminal, data);
+  const active = seedRun(root);
+  const list = cli(root, ['run', 'list']);
+  assert.equal(list.status, 0, list.stdout + list.stderr);
+  assert.deepEqual(list.json.errors, {});
+  assert.equal(list.json.runs.find(row => row.run_id === terminal).verification, 'state-hash');
+  const resolved = cli(root, ['run', 'resolve', '--cwd', root]);
+  assert.equal(resolved.json.run_id, active, resolved.stdout);
+  // The exact (locked, full) read still refuses the run: the journal is verified there.
+  const exact = captureVerifiedRunSnapshot(root, terminal);
+  assert.equal(exact.ok, false);
+  assert.ok(['reconciliation-required', 'integrity-invalid'].includes(exact.kind), exact.kind);
 });

@@ -1132,6 +1132,7 @@ test('terminal cleanup race → no cleanup attempt', async () => {
 
 // ── issue #77: run history must not switch the compact safety net off ──────────────
 import { addTerminalHistory, rewriteLoop } from './helpers/run-history.mjs';
+import { finishRun } from '../scripts/lib/finish.mjs';
 
 function manifestPreCompact(root, cwd = root) {
   return runNode(['-e', BOOTSTRAP_SOURCE], {
@@ -1215,4 +1216,18 @@ test('T11 a reused worktree path keeps the safety net off inside it, and PreComp
   const atRoot = manifestPreCompact(fixture.root);
   assert.equal(atRoot.stderr, '');
   assert.equal(checkpointFiles(fixture.root, fixture.runId).length, 1);
+});
+
+test('T11 a selected terminal workstream-session run is benign no-run-terminal, before affinity checks', async () => {
+  const fixture = seedBound('claude');
+  finishRun(fixture.root, fixture.runId, {
+    status: 'stopped', proof: { human_reason: 'fixture' }, confirm: true,
+    fence: { ...fixture.fence, intent: 'business' },
+  });
+  const before = durableBytes(fixture.root, fixture.runId);
+  const result = await runPreCompactHandoff({ cwd: fixture.root, hook_event_name: 'PreCompact', trigger: 'auto' }, {
+    root: fixture.root,
+  });
+  assert.deepEqual(result, { ok: true, action: 'no-run-terminal', run_id: fixture.runId, selection_source: 'legacy-current' });
+  assert.deepEqual(durableBytes(fixture.root, fixture.runId), before);
 });

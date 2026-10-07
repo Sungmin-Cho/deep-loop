@@ -1825,25 +1825,33 @@ export function readTerminalHistoryLight(root, runId) {
     return lightFallback('run-directory');
   }
   const loopFile = join(dir, 'loop.json');
+  const hashFile = join(dir, '.loop.hash');
+  let loopStat;
   try {
-    lstatSync(loopFile);
+    loopStat = lstatSync(loopFile, { bigint: true });
   } catch (error) {
     return error?.code === 'ENOENT'
       ? Object.freeze({ ok: false, kind: 'state-missing', bytes: 0 })
       : lightFallback('state-file');
   }
+  // The byte budget is charged with the declared sizes before reading, so a read that
+  // consumes data and then fails (drift, size change) still counts against it.
+  const declared = (stat, max) => Number(stat.size > BigInt(max) ? BigInt(max) + 1n : stat.size);
+  let charged = declared(loopStat, LIGHT_LOOP_MAX_BYTES);
+  try { charged += declared(lstatSync(hashFile, { bigint: true }), LIGHT_HASH_MAX_BYTES); }
+  catch { /* a missing anchor is charged nothing and fails below */ }
   let loopBytes;
   let hashBytes;
   try {
     loopBytes = readStableRegularFile(loopFile, { maxBytes: LIGHT_LOOP_MAX_BYTES }).bytes;
-    hashBytes = readStableRegularFile(join(dir, '.loop.hash'), { maxBytes: LIGHT_HASH_MAX_BYTES }).bytes;
+    hashBytes = readStableRegularFile(hashFile, { maxBytes: LIGHT_HASH_MAX_BYTES }).bytes;
     if (!matchingStableFileIdentity(dirIdentity, captureStableFileIdentity(dir))) {
-      return lightFallback('run-directory-drift', loopBytes.length + hashBytes.length);
+      return lightFallback('run-directory-drift', Math.max(charged, loopBytes.length + hashBytes.length));
     }
   } catch {
-    return lightFallback('state-read', (loopBytes?.length ?? 0) + (hashBytes?.length ?? 0));
+    return lightFallback('state-read', charged);
   }
-  const bytes = loopBytes.length + hashBytes.length;
+  const bytes = Math.max(charged, loopBytes.length + hashBytes.length);
   let parsed;
   try {
     parsed = parseHashVerifiedStateBytes(root, runId, loopBytes, hashBytes, {

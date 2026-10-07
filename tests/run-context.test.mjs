@@ -701,3 +701,26 @@ test('T8 win32 legacy absolute claims normalize across separators and drive case
   assert.deepEqual(otherDrive.history, { isolated_claims: 1, legacy_absolute_claims: 0 });
   assert.equal(otherDrive.source, 'single-active');
 });
+
+test('T5 a POSIX legacy absolute claim with a literal backslash is not moved by normalization', () => {
+  const runs = {
+    T: terminalRun('T', '/project/.worktrees\\old'),
+    A: snapshot('A', 'running', ['.worktrees/old']),
+  };
+  const result = resolve(runs, { cwd: '/project/.worktrees/old/file' });
+  assert.equal(result.source, 'worktree');
+  assert.equal(result.runId, 'A');
+  assert.deepEqual(result.history, { isolated_claims: 1, legacy_absolute_claims: 0 });
+  const alone = resolve({ T: terminalRun('T', '/project/.worktrees\\old') }, { current: 'T' });
+  assert.notEqual(alone.source, 'legacy-current');
+});
+
+test('T8 a win32 UNC legacy claim against a drive root is isolated without a region', () => {
+  const runs = {
+    T: terminalRun('T', '\\\\server\\share\\project\\.worktrees\\x', { root: 'C:\\project' }),
+    A: snapshot('A', 'running', [], 'C:\\project'),
+  };
+  const result = resolve(runs, { platform: 'win32', root: 'C:\\project' });
+  assert.deepEqual(result.history, { isolated_claims: 1, legacy_absolute_claims: 0 });
+  assert.equal(result.source, 'single-active');
+});

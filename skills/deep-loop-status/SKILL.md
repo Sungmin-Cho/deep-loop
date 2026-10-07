@@ -49,7 +49,7 @@ node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" run resolve --cwd "<session_cwd>" --
 | `run-set-bound-exceeded`, `bound: deadline` 또는 `bytes` | 시간·바이트 상한이다. 부하가 줄면 다시 시도한다. 계속되면 위 두 행을 본다. |
 | `run-set-integrity` | `errors`에 나온 run을 `validate --run-id <run_id>`로 확인한다. kind `state-missing`은 `loop.json`이 없는 run 디렉터리다. 사람이 옮기거나 지우는 것을 제안한다. |
 | `invalid-worktree-claim` | 활성(running·paused) run의 worktree claim이 규격(`.claude/worktrees/` 또는 `.worktrees/` 아래 상대 경로)에 맞지 않는다. `errors`의 run을 `--run-id`로 조회해 확인한다. `worktree`는 `state patch`로 고칠 수 없는 필드라 **지금 CLI로 고치는 경로는 없다**. 사람에게 그 사실을 알린다. |
-| `reconciliation-required` | 아래 §7과 사람 전용 복구 절의 기존 안내를 따른다. |
+| `reconciliation-required` | `errors`의 run을 `--run-id`로 정확히 읽는다(아래 §1의 `state get`). 정확 읽기는 남은 WAL 발행을 재조정하거나, 그럴 수 없으면 fail-stop한다(README 호환 계약). 이 스킬에 별도 복구 절은 없다. |
 | `none`, `terminal-residue`, `source: worktree` | cwd가 끝난 run이 claim했던 worktree 안이다. 다른 활성 run이 같은 경로를 쓰고 있어도 그 안에서는 compact safety net이 꺼진다. 프로젝트 root에서 작업하거나 새 run에는 새 worktree 경로를 쓰도록 제안한다. |
 | `multi-active-root-cwd`, `duplicate-worktree-claim` | `run list`에서 stale 활성 run을 고른다. `run list`도 상한에 걸리면 `.deep-loop/runs/`의 디렉터리 이름을 보고 아래 §1의 `state get --run-id`로 하나씩 확인한다(정확 읽기는 run 집합을 스캔하지 않는다). 멈추는 것은 `/deep-loop-finish`의 stopped 절차다(`--confirm`과 `human_reason`이 필수). 그 명령은 run이 `running`이고 lease가 `active`일 때만 통과한다. 이 스킬의 사람 전용 복구 절은 각자 좁은 전제를 가진다(예: lost-host 복구는 `host-session-lost` pause, active lease, 열린 affinity). 그 전제에 맞지 않는 `paused` run이나 lease가 `released`·`releasing`인 run은 **지금 일반적인 정지 경로가 없다**. 사람에게 그 사실을 알린다. 멈춘 run의 claim은 terminal이 되므로, 그 경로를 다른 활성 run이 쓰고 있으면 그 안의 cwd는 위 `none` 행이 된다. |
 

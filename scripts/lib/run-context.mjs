@@ -322,6 +322,9 @@ function legacyAbsoluteClaimKey(root, run, worktree, platform, realpathFn, pathA
   // Lexical normalization of `..` can move a claim across a symlinked component, so a
   // dot segment means the recorded location is not knowable without the old tree.
   if (worktree.split(/[\\/]/).some(segment => segment === '.' || segment === '..')) return null;
+  // On POSIX a backslash is a filename character in the native path an old writer
+  // recorded; the portable claim grammar would read it as a separator and move the claim.
+  if (platform !== 'win32' && worktree.includes('\\')) return null;
   const stored = run.snapshot?.data?.project?.root;
   const bases = [...new Set([root, typeof stored === 'string' ? stored : null].filter(Boolean))];
   for (const base of bases) {

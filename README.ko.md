@@ -123,15 +123,15 @@ node "<absolute-deep-loop-root>/scripts/deep-loop.mjs" state get --field status 
 compact hook, `run status`, status band, `run resolve --cwd`는 작업 디렉터리로 run을 고릅니다. 1.27.0부터는 오래된 run이 이 선택을 프로젝트 전체에서 막지 않습니다.
 
 - **terminal 이력은 lock 없이 읽습니다.** `completed`·`stopped` run의 `loop.json`이 `.loop.hash`와 맞고, 스키마를 통과하고, 이 project root에 binding되어 있으면 그 상태 쌍만으로 이력에 넣습니다. 그 밖의 run은 lock 아래 전체 검증을 거칩니다. 이 경로에서는 terminal 이력의 event log, 미완료 transaction, artifact를 확인하지 않습니다. 그래서 transaction이 남은 terminal run은 더 이상 `run list`에서 `reconciliation-required`로 보이거나 선택을 막지 않습니다. `--run-id`로 정확히 읽는 경로와 `validate`는 계속 확인합니다. 선택된 run은 항상 전체 검증으로 다시 읽습니다.
-- **상한.** run 디렉터리 256개, 전체 검증이 필요한 run 64개, worktree claim 4096개, terminal 상태 읽기 32 MiB입니다. terminal 이력 읽기는 500ms + run 디렉터리 1개당 2ms까지 걸릴 수 있습니다. 그다음 전체 검증의 시간 상한은 500ms + 전체 검증 1개당 100ms이고, CLI 읽기는 3000ms, hook과 `run list`는 6900ms에서 멈춥니다. 실제로 흐르는 시계를 씁니다.
-- **terminal claim은 그 안의 cwd에만 영향을 줍니다.** terminal claim(끝난 run의 claim, 또는 `ready`·`merged`·`abandoned` workstream의 claim)은 다른 run이 같은 경로를 claim해도 프로젝트를 모호하게 만들지 않습니다. 그 안의 cwd는 `none`(`terminal-residue`, `source: worktree`)입니다. 새 run이 재사용한 worktree 경로도 마찬가지입니다. 그 안에서는 compact safety net이 꺼진 채이고, PreCompact가 진단 한 줄을 남기며, status band가 `this worktree belongs to a finished run`을 보여 줍니다. 새 run에는 새 worktree 경로를 쓰십시오. 예전 버전이 절대 경로로 기록한 claim은 `.`·`..` 세그먼트 없이 이 root의 `.claude/worktrees/`나 `.worktrees/`를 가리키면 상대 경로로 해석합니다. 그렇지 않으면 격리하고, 그 디렉터리 아래를 가리키는 상대 경로일 때만 그 위치를 residue로 표시합니다. `run resolve`는 그 개수를 `history`로 보여 줍니다.
+- **상한.** run 디렉터리 256개, 전체 검증이 필요한 run 64개, worktree claim 4096개, run 분류 중 상태 읽기 32 MiB입니다. terminal 이력 읽기는 500ms + run 디렉터리 1개당 2ms까지 걸릴 수 있습니다. 그다음 전체 검증의 시간 상한은 500ms + 전체 검증 1개당 100ms이고, CLI 읽기는 3000ms, hook과 `run list`는 6900ms에서 멈춥니다. 실제로 흐르는 시계를 씁니다.
+- **terminal claim은 그 안의 cwd에만 영향을 줍니다.** terminal claim(끝난 run의 claim, 또는 `ready`·`merged`·`abandoned` workstream의 claim)은 다른 run이 같은 경로를 claim해도 프로젝트를 모호하게 만들지 않습니다. 그 안의 cwd는 `none`(`terminal-residue`, `source: worktree`)입니다. 다만 활성 run이 없고 `.deep-loop/current`가 그 끝난 run을 가리키면 예전처럼 읽기 전용 `legacy-current` 선택입니다. 새 run이 재사용한 worktree 경로도 마찬가지입니다. 그 안에서는 compact safety net이 꺼진 채이고, PreCompact가 진단 한 줄을 남기며, status band가 `this worktree belongs to a finished run`을 보여 줍니다. 새 run에는 새 worktree 경로를 쓰십시오. 예전 버전이 절대 경로로 기록한 claim은 `.`·`..` 세그먼트 없이 이 root의 `.claude/worktrees/`나 `.worktrees/`를 가리키면 상대 경로로 해석합니다. 그렇지 않으면 격리하고, 그 디렉터리 아래를 가리키는 상대 경로일 때만 그 위치를 residue로 표시합니다. `run resolve`는 그 개수를 `history`로 보여 줍니다.
 - **활성 run은 엄격합니다.** `running`·`paused` run의 claim이 하나라도 규격에 맞지 않으면 선택은 `invalid-worktree-claim`으로 실패합니다. `loop.json`이 없는 run 디렉터리는 kind `state-missing` 오류이고, lock이 계속 잡혀 있는 run은 `lock-busy`입니다.
 
-| 표면 | 64개를 넘는 이력 / 오래된 예전 형식 claim | 손상되었거나 모호한 비terminal run |
+| 표면 | 64개를 넘는 이력 / 오래된 예전 형식 claim | 손상된 비terminal run, 또는 모호한 cwd |
 |---|---|---|
-| `run list` | 모든 run을 `verification: state-hash \| full`과 함께 나열 | `ok: true`와 `errors`. 정상 행은 채워짐 |
+| `run list` | 모든 run을 `verification: state-hash \| full`과 함께 나열 | 손상된 run은 `errors`의 capture 오류(`ok: true`, 정상 행은 채워짐). cwd 라우팅을 하지 않으므로 모호성은 여기 나오지 않음 |
 | `run resolve`, `run status` | 이력이 없을 때와 같이 선택 | 사유가 붙은 `invalid` 또는 `ambiguous` |
-| PreCompact, PostCompact, SessionStart | 평소대로 checkpoint·observe·restore | 선택 안 함. 진단 한 줄, 차단 없음 |
+| PreCompact, PostCompact, SessionStart | 평소대로 checkpoint·observe·restore | 선택 안 함, 차단 없음. PreCompact는 stderr에 진단 한 줄, PostCompact와 SessionStart는 출력 없음 |
 | Status band | 선택된 run을 표시 | 아래 네 사유에 한해 `run selection unavailable (<reason>)` 표시 |
 
 무인 실행은 canonical project root와 불변 run id를 한 번 provision한 뒤 매 tick에 두 값을 함께 전달합니다:

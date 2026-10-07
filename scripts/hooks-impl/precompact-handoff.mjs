@@ -121,6 +121,12 @@ export async function runPreCompactHandoff(input = {}, {
   const finish = result => ({ ...result, run_id: runId, selection_source: selection.source });
 
   const policy = loop.autonomy?.continuation_policy;
+  // A selected terminal run (legacy-current) is benign under every policy; checking it
+  // before the workstream-session branch keeps it from reading as missing affinity or a
+  // refused checkpoint write (issue #77 made more terminal runs selectable).
+  if (policy === 'workstream-session' && (loop.status === 'completed' || loop.status === 'stopped')) {
+    return finish({ ok: true, action: 'no-run-terminal' });
+  }
   if (policy === 'workstream-session') {
     const currentLease = loop.session_chain?.lease || {};
     const currentExpect = {
