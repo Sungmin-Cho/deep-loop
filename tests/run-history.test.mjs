@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync,
+  lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync,
   writeFileSync,
 } from 'node:fs';
-import { createDirectoryJunction, createFileSymlinkOrSkip } from './helpers/fs-fixtures.mjs';
+import { canonicalRealpath, createDirectoryJunction, createFileSymlinkOrSkip } from './helpers/fs-fixtures.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initRun } from '../scripts/lib/initrun.mjs';
@@ -23,8 +23,10 @@ import {
 
 let clock = Date.UTC(2026, 5, 1);
 
+// The kernel canonicalizes roots with the native realpath (long names on Windows, where
+// tmpdir() is an 8.3 short path on CI). An old writer recorded that canonical form.
 function freshRoot() {
-  return realpathSync(mkdtempSync(join(tmpdir(), 'deep-loop-history-')));
+  return canonicalRealpath(mkdtempSync(join(tmpdir(), 'deep-loop-history-')));
 }
 
 function seedRun(root, { status = 'running' } = {}) {

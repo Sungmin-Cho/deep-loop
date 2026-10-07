@@ -1,7 +1,7 @@
 // Terminal run history for issue #77 tests: one real stopped run, loop.json-only clones
 // of it (enough for the lock-free history read), and one stopped run whose claim an
 // older writer recorded as an absolute path to a since-deleted worktree.
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { contentHash } from '../../scripts/lib/envelope.mjs';
 import { finishRun } from '../../scripts/lib/finish.mjs';
@@ -51,7 +51,8 @@ export function addTerminalHistory(root, {
   let legacy = null;
   if (legacyAbsolute) {
     const { runId } = initRun(root, { runtime: 'claude', goal: 'legacy', now: new Date(now + 1_000) });
-    const worktree = join(root, '.worktrees', 'legacy-history');
+    // An old writer recorded the canonical (native realpath) root, as the kernel does.
+    const worktree = join((realpathSync.native || realpathSync)(root), '.worktrees', 'legacy-history');
     mkdirSync(worktree, { recursive: true });
     newWorkstream(root, runId, {
       title: 'legacy', branch: 'feature/legacy-history', worktree,
