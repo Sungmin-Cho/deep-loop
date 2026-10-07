@@ -1129,3 +1129,90 @@ test('terminal cleanup race → no cleanup attempt', async () => {
   const r = await runPreCompactHandoff({}, { root, now: Date.parse('2026-07-19T00:01:00Z'), cleanupFn });
   assert.deepEqual(r, { ok: true, action: 'no-run' });
 });
+
+// ── issue #77: run history must not switch the compact safety net off ──────────────
+import { addTerminalHistory, rewriteLoop } from './helpers/run-history.mjs';
+
+function manifestPreCompact(root, cwd = root) {
+  return runNode(['-e', BOOTSTRAP_SOURCE], {
+    cwd: root,
+    env: bootstrapEnv('CLAUDE_PLUGIN_ROOT', PROOT),
+    input: JSON.stringify({ cwd, hook_event_name: 'PreCompact', trigger: 'auto', session_id: 'history-session' }),
+  });
+}
+
+test('T11 PreCompact main() checkpoints the active run beside 71 terminal runs and a legacy absolute claim', () => {
+  const fixture = seedBound('claude');
+  const { ids, legacy } = addTerminalHistory(fixture.root);
+  assert.equal(ids.length, 71);
+  assert.ok(legacy);
+  const result = manifestPreCompact(fixture.root);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.equal(checkpointFiles(fixture.root, fixture.runId).length, 1);
+});
+
+test('T11 PreCompact main() reports an exceeded enumeration bound with its phase inside 220 characters', () => {
+  const fixture = seedBound('claude');
+  for (let index = 0; index < 256; index += 1) {
+    mkdirSync(join(fixture.root, '.deep-loop', 'runs', `R${String(index).padStart(3, '0')}`));
+  }
+  const result = manifestPreCompact(fixture.root);
+  assert.equal(result.status, 0, result.stderr);
+  const line = result.stderr.trim();
+  assert.match(line, /^deep-loop: precompact /);
+  const detail = JSON.parse(line.slice('deep-loop: precompact '.length));
+  assert.ok(JSON.stringify(detail).length <= 220);
+  assert.equal(detail.reason, 'run-set-bound-exceeded');
+  assert.equal(detail.phase, 'enumeration');
+  assert.equal(detail.bound, 'count');
+  assert.equal(checkpointFiles(fixture.root, fixture.runId).length, 0);
+});
+
+test('T14 an active run with a non-conforming claim still fails PreCompact closed, by name', () => {
+  const fixture = seedBound('claude');
+  addTerminalHistory(fixture.root, { clones: 3 });
+  rewriteLoop(fixture.root, fixture.runId, data => {
+    data.workstreams[0].worktree = join(fixture.root, data.workstreams[0].worktree);
+  });
+  const result = manifestPreCompact(fixture.root);
+  assert.equal(result.status, 0, result.stderr);
+  const detail = JSON.parse(result.stderr.trim().slice('deep-loop: precompact '.length));
+  assert.equal(detail.action, 'routing-failed');
+  assert.equal(detail.reason, 'invalid-worktree-claim');
+  assert.deepEqual(detail.errors, { [fixture.runId]: { kind: 'invalid-worktree-claim' } });
+  assert.equal(checkpointFiles(fixture.root, fixture.runId).length, 0);
+});
+
+test('T14b PreCompact never hands its fixed business time to the selection deadline clock', () => {
+  const fixture = seedBound('claude');
+  const seen = [];
+  runPreCompactHandoff({ cwd: fixture.root, hook_event_name: 'PreCompact', trigger: 'auto' }, {
+    root: fixture.root,
+    now: Date.parse('2026-06-24T00:00:00Z'),
+    resolveContextFn: options => {
+      seen.push(options);
+      return { ok: true, kind: 'none', reason: 'no-runs' };
+    },
+  });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].nowFn, undefined);
+  assert.equal(seen[0].purpose, 'hook-checkpoint');
+});
+
+test('T11 a reused worktree path keeps the safety net off inside it, and PreCompact says so', () => {
+  const fixture = seedBound('claude');
+  const { ids } = addTerminalHistory(fixture.root, { clones: 3, legacyAbsolute: false });
+  const active = readState(fixture.root, fixture.runId).data.workstreams[0];
+  rewriteLoop(fixture.root, ids[0], data => {
+    data.workstreams = [{ ...structuredClone(active), id: 'ws-old', status: 'ready' }];
+  });
+  const inside = join(fixture.root, active.worktree);
+  const result = manifestPreCompact(fixture.root, inside);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr.trim(), 'deep-loop: precompact {"action":"no-run","reason":"terminal-residue","source":"worktree"}');
+  assert.equal(checkpointFiles(fixture.root, fixture.runId).length, 0);
+  const atRoot = manifestPreCompact(fixture.root);
+  assert.equal(atRoot.stderr, '');
+  assert.equal(checkpointFiles(fixture.root, fixture.runId).length, 1);
+});

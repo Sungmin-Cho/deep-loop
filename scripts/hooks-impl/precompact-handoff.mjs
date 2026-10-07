@@ -1,7 +1,10 @@
 import { readBoundedText } from '../lib/bounded-input.mjs';
 import { detectMain } from '../lib/detect-main.mjs';
 import { captureReconciledRunSnapshot, findRoot } from '../lib/state.mjs';
-import { formatBoundedRoutingDiagnostic, resolveRunContext } from '../lib/run-context.mjs';
+import { ROUTING_BOUND_FIELDS, formatBoundedRoutingDiagnostic, resolveRunContext } from '../lib/run-context.mjs';
+
+const boundFields = source => Object.fromEntries(ROUTING_BOUND_FIELDS
+  .filter(key => source?.[key] !== undefined).map(key => [key, source[key]]));
 import {
   emitCompactCheckpoint,
   emitLegacyCompactCheckpointFromTrustedHook,
@@ -90,12 +93,16 @@ export async function runPreCompactHandoff(input = {}, {
     root,
     cwd: typeof input.cwd === 'string' ? input.cwd : process.cwd(),
     purpose: 'hook-checkpoint',
-    nowFn: () => (now instanceof Date ? now.getTime() : now),
+    // No nowFn: selection deadlines need an advancing clock, not the business `now`.
   });
   if (!selection?.ok || selection.kind !== 'selected') {
     if (selection?.kind === 'none'
       && ['no-runs', 'no-current', 'no-active-run', 'terminal-residue'].includes(selection.reason)) {
-      return { ok: true, action: 'no-run' };
+      // A cwd inside a finished run's worktree is benign, but the safety net is off here:
+      // say so (issue #77), as the only signal a reused worktree path leaves.
+      return selection.reason === 'terminal-residue' && selection.source === 'worktree'
+        ? { ok: true, action: 'no-run', reason: 'terminal-residue', source: 'worktree' }
+        : { ok: true, action: 'no-run' };
     }
     const action = selection?.kind === 'ambiguous' ? 'ambiguous-run' : 'routing-failed';
     return {
@@ -104,11 +111,7 @@ export async function runPreCompactHandoff(input = {}, {
       reason: selection?.reason || selection?.kind || 'invalid',
       ...(Array.isArray(selection?.candidates) ? { candidates: selection.candidates } : {}),
       ...(Number.isSafeInteger(selection?.total) ? { total: selection.total } : {}),
-      ...(selection?.max_run_ids !== undefined ? { max_run_ids: selection.max_run_ids } : {}),
-      ...(selection?.deadline_ms !== undefined ? { deadline_ms: selection.deadline_ms } : {}),
-      ...(selection?.observed_count !== undefined ? { observed_count: selection.observed_count } : {}),
-      ...(selection?.total_is_lower_bound !== undefined
-        ? { total_is_lower_bound: selection.total_is_lower_bound } : {}),
+      ...boundFields(selection),
       ...(selection?.errors && typeof selection.errors === 'object' && !Array.isArray(selection.errors)
         ? { errors: selection.errors } : {}),
     };
@@ -257,7 +260,11 @@ export async function main() {
     const cwd = input.cwd ?? process.cwd();
     if (typeof cwd !== 'string' || cwd.length === 0) throw new Error('root-invalid');
     const response = await runPreCompactHandoff(input, { root: findRoot(cwd) });
-    if (!response?.ok) {
+    if (response?.ok && response.action === 'no-run' && response.source === 'worktree') {
+      process.stderr.write(`deep-loop: precompact ${formatBoundedRoutingDiagnostic({
+        action: response.action, reason: response.reason, source: response.source,
+      })}\n`);
+    } else if (!response?.ok) {
       const detail = formatBoundedRoutingDiagnostic({
         action: response.action,
         reason: response.reason,
@@ -265,11 +272,7 @@ export async function main() {
           ? { errors: response.errors } : {}),
         ...(response.candidates ? { candidates: response.candidates } : {}),
         ...(response.total !== undefined ? { total: response.total } : {}),
-        ...(response.max_run_ids !== undefined ? { max_run_ids: response.max_run_ids } : {}),
-        ...(response.deadline_ms !== undefined ? { deadline_ms: response.deadline_ms } : {}),
-        ...(response.observed_count !== undefined ? { observed_count: response.observed_count } : {}),
-        ...(response.total_is_lower_bound !== undefined
-          ? { total_is_lower_bound: response.total_is_lower_bound } : {}),
+        ...boundFields(response),
       });
       process.stderr.write(`deep-loop: precompact ${detail}\n`);
     }

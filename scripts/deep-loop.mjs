@@ -33,7 +33,7 @@ import {
   captureVerifiedRunSet,
   captureVerifiedRunSnapshot,
 } from './lib/integrity.mjs';
-import { resolveRunContext } from './lib/run-context.mjs';
+import { ROUTING_BOUND_FIELDS, resolveRunContext, runSelectionSetOptions } from './lib/run-context.mjs';
 import { buildRunStatus, emptyResolution, statusEnvelope } from './lib/run-status.mjs';
 import { leaseCheck, acquireLease, releaseLease, sameBoundaryEvent } from './lib/lease.mjs';
 import { newWorkstream, setWorkstreamStatus, recordWorkstreamTerminal } from './lib/workspace.mjs';
@@ -324,8 +324,9 @@ function reportVerifiedExactFailure(result) {
 function projectRunResolution(result) {
   if (!result || typeof result !== 'object') return { ok: false, kind: 'invalid', reason: 'resolver-invalid' };
   const projected = { ok: result.ok === true, kind: result.kind };
-  for (const key of ['reason', 'source', 'status', 'max_run_ids', 'deadline_ms', 'observed_count',
-    'total_is_lower_bound', 'total']) if (result[key] !== undefined) projected[key] = result[key];
+  for (const key of ['reason', 'source', 'status', ...ROUTING_BOUND_FIELDS, 'total']) {
+    if (result[key] !== undefined) projected[key] = result[key];
+  }
   if (result.runId !== undefined) projected.run_id = result.runId;
   if (result.matchedWorktree !== undefined) projected.matched_worktree = result.matchedWorktree;
   if (Array.isArray(result.candidates)) {
@@ -340,6 +341,12 @@ function projectRunResolution(result) {
       ...(typeof result.errors[runId]?.operation_id === 'string' ? { operation_id: result.errors[runId].operation_id } : {}),
       ...(typeof result.errors[runId]?.phase === 'string' ? { phase: result.errors[runId].phase } : {}),
     }]));
+  }
+  if (result.history && typeof result.history === 'object') {
+    projected.history = {
+      isolated_claims: result.history.isolated_claims,
+      legacy_absolute_claims: result.history.legacy_absolute_claims,
+    };
   }
   if (result.expect && typeof result.expect === 'object') {
     projected.expect = {
@@ -536,7 +543,7 @@ const handlers = {
     }
     const root = rootOf(f);
     if (verb === 'list') {
-      const captured = captureVerifiedRunSet(root, { maxRunIds: 64, deadlineMs: 500 });
+      const captured = captureVerifiedRunSet(root, runSelectionSetOptions('run-list'));
       if (captured.ok === false) { json(captured); return 1; }
       const current = (() => {
         try { return readFileSync(join(root, '.deep-loop', 'current'), 'utf8').trim(); }
@@ -555,6 +562,7 @@ const handlers = {
             .filter(value => typeof value === 'string' && value.length > 0)
             .sort().slice(0, 8).map(value => value.length > 256 ? `${value.slice(0, 253)}...` : value),
           is_current: runId === current,
+          verification: captured.runs[runId]?.verification ?? null,
         };
       });
       json({ ok: true, runs, errors: captured.errors || {} });

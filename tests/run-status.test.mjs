@@ -184,10 +184,10 @@ test('T-K2: a damaged run beside a healthy one is invalid/run-set-integrity, byt
   assert.deepEqual(deepLoopTree(a.root), before);
 });
 
-test('T-K2: more than 64 run directories is invalid/run-set-bound-exceeded, bytes untouched', () => {
+test('T-K2: more than 256 run directories is invalid/run-set-bound-exceeded, bytes untouched', () => {
   const s = seed();
   const runs = join(s.root, '.deep-loop', 'runs');
-  for (let i = 0; i < 65; i += 1) mkdirSync(join(runs, `R${String(i).padStart(3, '0')}`));
+  for (let i = 0; i < 256; i += 1) mkdirSync(join(runs, `R${String(i).padStart(3, '0')}`));
   const before = deepLoopTree(s.root);
   const out = status(s.root);
   assert.equal(out.status, 1, out.stdout + out.stderr);

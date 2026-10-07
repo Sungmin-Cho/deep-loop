@@ -1,6 +1,10 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path, { join } from 'node:path';
-import { captureVerifiedRunSet, captureVerifiedRunSnapshot } from './integrity.mjs';
+import {
+  RUN_SELECTION_BOUNDS,
+  captureVerifiedRunSet,
+  captureVerifiedRunSnapshot,
+} from './integrity.mjs';
 import { canonicalProjectRoot } from './project-root.mjs';
 import {
   normalizePortableRelativePath,
@@ -11,6 +15,9 @@ import {
 const ACTIVE = new Set(['running', 'paused']);
 const TERMINAL_WORKSTREAM = new Set(['ready', 'merged', 'abandoned']);
 const TERMINAL_RUN = new Set(['completed', 'stopped', 'abandoned', 'terminal', 'finished']);
+// Run-level terminal statuses of the loop schema. Only these runs' claims may be
+// isolated or normalized; an active run's claims stay strict whatever their workstream.
+const HISTORY_RUN = new Set(['completed', 'stopped']);
 const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const UNSAFE_RUN_ID = /[\x00-\x1F\x7F-\x9F/\\]/;
 const PURPOSES = new Set(['hook-checkpoint', 'hook-restore', 'headless', 'cli-read']);
@@ -42,8 +49,8 @@ function diagnosticFits(value, maxChars) {
 export function formatBoundedRoutingDiagnostic(detail, { maxChars = 220 } = {}) {
   const limit = Number.isSafeInteger(maxChars) && maxChars > 32 ? maxChars : 220;
   const result = {};
-  const scalarKeys = ['action', 'kind', 'reason'];
-  const boundKeys = ['max_run_ids', 'deadline_ms', 'observed_count', 'total_is_lower_bound'];
+  const scalarKeys = ['action', 'kind', 'reason', 'source'];
+  const boundKeys = ROUTING_BOUND_FIELDS;
   const addScalar = key => {
     if (detail?.[key] === undefined) return;
     const next = { ...result, [key]: detail[key] };
@@ -103,8 +110,8 @@ function invalid(reason, extra = {}) {
   return Object.freeze({ ok: false, kind: 'invalid', reason, ...extra });
 }
 
-function none(reason) {
-  return Object.freeze({ ok: true, kind: 'none', reason });
+function none(reason, source) {
+  return Object.freeze({ ok: true, kind: 'none', reason, ...(source ? { source } : {}) });
 }
 
 function selected(source, run, snapshot, matchedWorktree, extra = {}) {
@@ -184,15 +191,37 @@ function snapshotRun(snapshot, runId, root, realpathFn) {
   }
 }
 
+export { RUN_SELECTION_BOUNDS };
+
+// Bound diagnostics, most explanatory first: hook diagnostics keep a prefix of these.
+export const ROUTING_BOUND_FIELDS = Object.freeze(['phase', 'bound', 'max_run_ids', 'max_full_captures',
+  'full_capture_count', 'max_claims', 'deadline_ms', 'observed_count', 'total_is_lower_bound']);
+const BOUND_FIELDS = ROUTING_BOUND_FIELDS;
+
+// Capture options shared by cwd selection and `run list` (issue #77 §3.2).
+export function runSelectionSetOptions(purpose = 'cli-read') {
+  return {
+    historyFastPath: true,
+    maxRunIds: RUN_SELECTION_BOUNDS.maxRunIds,
+    maxFullCaptures: RUN_SELECTION_BOUNDS.maxFullCaptures,
+    maxLightBytes: RUN_SELECTION_BOUNDS.maxLightBytes,
+    baseDeadlineMs: RUN_SELECTION_BOUNDS.baseDeadlineMs,
+    perLightReadMs: RUN_SELECTION_BOUNDS.perLightReadMs,
+    perFullCaptureMs: RUN_SELECTION_BOUNDS.perFullCaptureMs,
+    maxDeadlineMs: RUN_SELECTION_BOUNDS.maxDeadlineMs[purpose] ?? RUN_SELECTION_BOUNDS.maxDeadlineMs['cli-read'],
+  };
+}
+
+function boundExceeded(source) {
+  const extra = {};
+  for (const key of BOUND_FIELDS) if (source?.[key] !== undefined) extra[key] = source[key];
+  return invalid('run-set-bound-exceeded', extra);
+}
+
 function normalizeRunSet(captured, root, realpathFn) {
   if (!captured || typeof captured !== 'object') return invalid('run-set-integrity');
   if (captured.kind === 'run-set-bound-exceeded' || captured.reason === 'run-set-bound-exceeded') {
-    return invalid('run-set-bound-exceeded', {
-      max_run_ids: captured.max_run_ids,
-      deadline_ms: captured.deadline_ms,
-      observed_count: captured.observed_count,
-      total_is_lower_bound: captured.total_is_lower_bound,
-    });
+    return boundExceeded(captured);
   }
   const errors = captured.errors && typeof captured.errors === 'object' ? captured.errors : {};
   const errorIds = Object.keys(errors).sort(compareCodeUnits);
@@ -225,7 +254,12 @@ function normalizeRunSet(captured, root, realpathFn) {
         total: 1,
       });
     }
-    entries.push({ run_id: runId, status: snapshot.data.status, snapshot });
+    entries.push({
+      run_id: runId,
+      status: snapshot.data.status,
+      snapshot,
+      verification: runs[runId]?.verification === 'state-hash' ? 'state-hash' : 'full',
+    });
   }
   return entries;
 }
@@ -259,53 +293,124 @@ function currentRunId(root) {
   }
 }
 
+function conventionContained(root, key, platform, pathApi) {
+  if (!key.ok) return false;
+  const normalizedWorktree = key.normalized;
+  const convention = platform === 'win32'
+    ? (normalizedWorktree.toLowerCase().startsWith('.claude/worktrees/')
+      || normalizedWorktree.toLowerCase().startsWith('.worktrees/'))
+    : (normalizedWorktree.startsWith('.claude/worktrees/') || normalizedWorktree.startsWith('.worktrees/'));
+  if (!convention) return false;
+  const candidate = key.canonical || key.absolute;
+  const roots = [pathApi?.resolve(root, '.claude', 'worktrees'), pathApi?.resolve(root, '.worktrees')];
+  return pathWithin(root, candidate, { pathApi })
+    && roots.some(base => pathWithin(base, candidate, { pathApi })
+      && pathApi.relative(base, candidate) !== '');
+}
+
+function strictClaimKey(root, worktree, platform, realpathFn, pathApi) {
+  const key = recordedClaimKey({ root, worktree, platform, realpathFn, pathApi });
+  return conventionContained(root, key, platform, pathApi) ? key : null;
+}
+
+// A terminal run's claim recorded as an absolute path by an older writer. It is the
+// same claim as its relative form when it lies under one of the bases: the current
+// canonical root or the run's stored project root, which binding already proved to
+// be an alias of it.
+function legacyAbsoluteClaimKey(root, run, worktree, platform, realpathFn, pathApi) {
+  if (!pathApi.isAbsolute(worktree)) return null;
+  // Lexical normalization of `..` can move a claim across a symlinked component, so a
+  // dot segment means the recorded location is not knowable without the old tree.
+  if (worktree.split(/[\\/]/).some(segment => segment === '.' || segment === '..')) return null;
+  const stored = run.snapshot?.data?.project?.root;
+  const bases = [...new Set([root, typeof stored === 'string' ? stored : null].filter(Boolean))];
+  for (const base of bases) {
+    let rel;
+    try { rel = pathApi.relative(base, pathApi.normalize(worktree)); }
+    catch { continue; }
+    if (!rel || rel.startsWith('..') || pathApi.isAbsolute(rel)) continue;
+    const key = strictClaimKey(root, rel.split(pathApi.sep).join('/'), platform, realpathFn, pathApi);
+    if (key) return key;
+  }
+  return null;
+}
+
+// An isolated terminal claim keeps only a residue region: the location a relative claim
+// names under the portable grammar (`/` and `\` both separate, no `.`/`..`/empty
+// segment), and only strictly below `.claude/worktrees/` or `.worktrees/`. It can turn
+// a cwd inside it into terminal residue and nothing else.
+function residueRegion(root, worktree, realpathFn, pathApi, platform) {
+  if (typeof worktree !== 'string' || worktree.length === 0 || worktree.includes('\0')) return null;
+  const portable = worktree.replaceAll('\\', '/');
+  if (portable.startsWith('/') || /^[A-Za-z]:/.test(portable)) return null;
+  const segments = portable.split('/');
+  if (segments.some(segment => segment === '' || segment === '.' || segment === '..')) return null;
+  const fold = value => (platform === 'win32' ? value.toLowerCase() : value);
+  const conventional = (fold(segments[0]) === '.worktrees' && segments.length >= 2)
+    || (fold(segments[0]) === '.claude' && fold(segments[1] ?? '') === 'worktrees' && segments.length >= 3);
+  if (!conventional) return null;
+  let lexical;
+  try { lexical = pathApi.resolve(root, ...segments); }
+  catch { return null; }
+  const candidates = [lexical];
+  try { candidates.push(realpathFn(lexical)); } catch { /* a removed worktree keeps its lexical region */ }
+  const bases = [pathApi.resolve(root, '.claude', 'worktrees'), pathApi.resolve(root, '.worktrees')];
+  const inside = candidates.filter(candidate => {
+    try {
+      return bases.some(base => pathWithin(base, candidate, { pathApi }) && pathApi.relative(base, candidate) !== '');
+    } catch {
+      return false;
+    }
+  });
+  return inside.length > 0 ? [...new Set(inside)] : null;
+}
+
 function claimInventory(root, entries, platform, realpathFn, pathApi) {
   const claims = [];
+  const residues = [];
   const errors = [];
+  const history = { isolated_claims: 0, legacy_absolute_claims: 0 };
+  let examined = 0;
   for (const run of entries) {
     const workstreams = Array.isArray(run.snapshot.data.workstreams)
       ? run.snapshot.data.workstreams : [];
+    const historyRun = HISTORY_RUN.has(run.status);
     for (const workstream of workstreams) {
       if (typeof workstream?.worktree !== 'string') continue;
-      const key = recordedClaimKey({
-        root,
-        worktree: workstream.worktree,
-        platform,
-        realpathFn,
-        pathApi,
-      });
-      const normalizedWorktree = key.ok ? key.normalized : '';
-      const convention = platform === 'win32'
-        ? (normalizedWorktree.toLowerCase().startsWith('.claude/worktrees/')
-          || normalizedWorktree.toLowerCase().startsWith('.worktrees/'))
-        : (normalizedWorktree.startsWith('.claude/worktrees/') || normalizedWorktree.startsWith('.worktrees/'));
-      let contained = false;
-      if (key.ok && convention) {
-        const candidate = key.canonical || key.absolute;
-        const roots = [pathApi?.resolve(root, '.claude', 'worktrees'), pathApi?.resolve(root, '.worktrees')];
-        contained = pathWithin(root, candidate, { pathApi })
-          && roots.some(base => pathWithin(base, candidate, { pathApi })
-            && pathApi.relative(base, candidate) !== '');
+      // Each claim costs realpath and identity reads; bound them like the run set.
+      examined += 1;
+      if (examined > RUN_SELECTION_BOUNDS.maxClaims) {
+        return { ok: false, bound: true, examined, history };
       }
-      if (!key.ok || !contained) {
-        errors.push({ run_id: run.run_id, kind: 'integrity-invalid' });
+      const terminal = TERMINAL_WORKSTREAM.has(workstream.status) || TERMINAL_RUN.has(run.status);
+      let key = strictClaimKey(root, workstream.worktree, platform, realpathFn, pathApi);
+      if (!key && historyRun) {
+        key = legacyAbsoluteClaimKey(root, run, workstream.worktree, platform, realpathFn, pathApi);
+        if (key) history.legacy_absolute_claims += 1;
+      }
+      if (key) {
+        claims.push({ run, workstream, key, terminal });
         continue;
       }
-      claims.push({
-        run,
-        workstream,
-        key,
-        terminal: TERMINAL_WORKSTREAM.has(workstream.status) || TERMINAL_RUN.has(run.status),
-      });
+      if (!historyRun) {
+        errors.push({ run_id: run.run_id, kind: 'invalid-worktree-claim' });
+        continue;
+      }
+      history.isolated_claims += 1;
+      const region = residueRegion(root, workstream.worktree, realpathFn, pathApi, platform);
+      if (region) residues.push({ run, paths: region });
     }
   }
-  if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, claims };
+  if (errors.length > 0) return { ok: false, errors, history };
+  return { ok: true, claims, residues, history };
 }
 
+// Only non-terminal claims can conflict. Terminal history never makes the whole
+// project ambiguous: a cwd inside a terminal claim is residue (issue #77, D2).
 function duplicateClaims(claims) {
   const byKey = new Map();
   for (const claim of claims) {
+    if (claim.terminal) continue;
     for (const key of claim.key.keys) {
       const list = byKey.get(key) || [];
       list.push(claim);
@@ -317,6 +422,13 @@ function duplicateClaims(claims) {
     if (list.length > 1) for (const claim of list) duplicate.set(claim.run.run_id, claim.run);
   }
   return [...duplicate.values()];
+}
+
+function residueContains(residue, cwd, pathApi) {
+  return residue.paths.some(path => {
+    try { return pathWithin(path, cwd, { pathApi }); }
+    catch { return false; }
+  });
 }
 
 function containedClaim(claim, cwd, root, pathApi) {
@@ -409,8 +521,7 @@ export function resolveRunContext({
   let capturedSet;
   try {
     capturedSet = captureRunSet(canonicalRoot, {
-      maxRunIds: 64,
-      deadlineMs: 500,
+      ...runSelectionSetOptions(purpose),
       lockOptions,
       vectorOptions,
       nowFn,
@@ -419,12 +530,7 @@ export function resolveRunContext({
     });
   } catch (error) {
     if (error?.kind === 'run-set-bound-exceeded' || String(error?.message || '').includes('run-set-bound-exceeded')) {
-      return invalid('run-set-bound-exceeded', {
-        max_run_ids: error.max_run_ids,
-        deadline_ms: error.deadline_ms,
-        observed_count: error.observed_count,
-        total_is_lower_bound: error.total_is_lower_bound,
-      });
+      return boundExceeded(error);
     }
     return invalid('run-set-integrity');
   }
@@ -432,14 +538,32 @@ export function resolveRunContext({
   if (!Array.isArray(entries)) return entries;
   if (entries.length === 0) return none('no-runs');
   const inventory = claimInventory(canonicalRoot, entries, platform, realpathFn, pathApi);
-  if (!inventory.ok) return invalid('run-set-integrity', {
+  if (inventory.bound) {
+    return invalid('run-set-bound-exceeded', {
+      phase: 'claims', bound: 'count', max_claims: RUN_SELECTION_BOUNDS.maxClaims,
+      observed_count: inventory.examined, total_is_lower_bound: true,
+    });
+  }
+  const history = inventory.history.isolated_claims > 0 || inventory.history.legacy_absolute_claims > 0
+    ? Object.freeze({ ...inventory.history }) : null;
+  const withHistory = result => (history ? Object.freeze({ ...result, history }) : result);
+  if (!inventory.ok) return withHistory(invalid('invalid-worktree-claim', {
     errors: Object.freeze(Object.fromEntries(
       [...new Map(inventory.errors.map(error => [error.run_id, { kind: error.kind }]))]
         .sort(([left], [right]) => compareCodeUnits(left, right))
         .slice(0, 5),
     )),
     total: new Set(inventory.errors.map(error => error.run_id)).size,
+  }));
+  const result = selectFromInventory({
+    canonicalRoot, entries, inventory, cwd, realpathFn, pathApi, currentRunIdFn,
   });
+  return withHistory(confirmHistorySelection(result, entries, {
+    canonicalRoot, captureRunSnapshot, lockOptions, vectorOptions, nowFn, sleepFn, realpathFn,
+  }));
+}
+
+function selectFromInventory({ canonicalRoot, entries, inventory, cwd, realpathFn, pathApi, currentRunIdFn }) {
   const duplicates = duplicateClaims(inventory.claims);
   if (duplicates.length > 0) {
     return Object.freeze({
@@ -458,14 +582,21 @@ export function resolveRunContext({
   }
   const active = entries.filter(run => ACTIVE.has(run.status));
   if (canonicalCwd) {
-    const terminalMatches = inventory.claims.filter(claim => claim.terminal
+    const claimMatches = inventory.claims.filter(claim => claim.terminal
       && containedClaim(claim, canonicalCwd, canonicalRoot, pathApi));
+    const regionMatches = inventory.residues.filter(residue => residueContains(residue, canonicalCwd, pathApi));
+    const terminalMatches = [...claimMatches, ...regionMatches];
     if (terminalMatches.length > 0) {
-      if (active.length > 0) return none('terminal-residue');
+      // `source: 'worktree'` marks residue decided by the cwd's own (finished) worktree
+      // claim, as opposed to a project whose last run finished (issue #77).
+      const insideFinished = () => none('terminal-residue', 'worktree');
+      if (active.length > 0) return insideFinished();
+      // An isolated claim's region is residue only; it never makes its run legacy-current.
+      if (claimMatches.length === 0) return insideFinished();
       const terminalRuns = new Set(terminalMatches.map(claim => claim.run.run_id));
-      if (terminalRuns.size > 1) return none('terminal-residue');
+      if (terminalRuns.size > 1) return insideFinished();
       const current = currentRunIdFn(canonicalRoot);
-      if (current !== [...terminalRuns][0]) return none('terminal-residue');
+      if (current !== [...terminalRuns][0]) return insideFinished();
       return selectLegacyCurrent(canonicalRoot, entries, inventory.claims, canonicalCwd, realpathFn, pathApi, currentRunIdFn);
     }
     const matches = inventory.claims.filter(claim => !claim.terminal
@@ -497,4 +628,46 @@ export function resolveRunContext({
     });
   }
   return selectLegacyCurrent(canonicalRoot, entries, inventory.claims, canonicalCwd, realpathFn, pathApi, currentRunIdFn);
+}
+
+// A selected run is always returned from a full capture. Terminal history read on the
+// lock-free path is captured again before it can leave the resolver.
+function confirmHistorySelection(result, entries, {
+  canonicalRoot, captureRunSnapshot, lockOptions, vectorOptions, nowFn, sleepFn, realpathFn,
+}) {
+  if (result?.kind !== 'selected') return result;
+  const entry = entries.find(candidate => candidate.run_id === result.runId);
+  if (!entry || entry.verification !== 'state-hash') return result;
+  const failed = kind => invalid('run-set-integrity', {
+    errors: Object.freeze({ [entry.run_id]: Object.freeze({ kind }) }),
+    total: 1,
+  });
+  const startedAt = (typeof nowFn === 'function' ? nowFn : Date.now)();
+  const startedMs = startedAt instanceof Date ? startedAt.getTime() : Number(startedAt);
+  let captured;
+  try {
+    captured = captureRunSnapshot(canonicalRoot, entry.run_id, {
+      lockOptions,
+      vectorOptions,
+      nowFn,
+      sleepFn,
+      ...(Number.isFinite(startedMs)
+        ? { vectorDeadlineAtMs: startedMs + RUN_SELECTION_BOUNDS.baseDeadlineMs } : {}),
+    });
+  } catch (error) {
+    return failed(captureFailure(entry.run_id, error).errors?.[entry.run_id]?.kind || 'integrity-invalid');
+  }
+  if (captured?.ok === false) {
+    return failed(captured.kind === 'reconciliation-required' ? 'reconciliation-required' : 'integrity-invalid');
+  }
+  const snapshot = unwrapCapture(captured);
+  if (!snapshotRun(snapshot, entry.run_id, canonicalRoot, realpathFn)) return failed('integrity-invalid');
+  const claimsOf = data => JSON.stringify((Array.isArray(data?.workstreams) ? data.workstreams : [])
+    .map(workstream => [workstream?.worktree ?? null, workstream?.status ?? null]));
+  if (snapshot.data.status !== entry.status
+    || claimsOf(snapshot.data) !== claimsOf(entry.snapshot.data)) {
+    return failed('state-drift');
+  }
+  return selected(result.source, { run_id: entry.run_id, status: snapshot.data.status }, snapshot,
+    result.matchedWorktree);
 }
