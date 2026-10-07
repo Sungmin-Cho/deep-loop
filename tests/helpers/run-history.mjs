@@ -51,15 +51,17 @@ export function addTerminalHistory(root, {
   let legacy = null;
   if (legacyAbsolute) {
     const { runId } = initRun(root, { runtime: 'claude', goal: 'legacy', now: new Date(now + 1_000) });
-    // An old writer recorded the canonical (native realpath) root, as the kernel does.
-    const worktree = join((realpathSync.native || realpathSync)(root), '.worktrees', 'legacy-history');
+    const worktree = join(root, '.worktrees', 'legacy-history');
     mkdirSync(worktree, { recursive: true });
     newWorkstream(root, runId, {
       title: 'legacy', branch: 'feature/legacy-history', worktree,
       fence: { owner: runId, generation: 1 },
     });
     stop(root, runId);
-    rewriteLoop(root, runId, data => { data.workstreams[0].worktree = worktree; });
+    // An old writer recorded the canonical (native realpath) root, as the kernel does;
+    // on Windows CI that is the long name while tmpdir() is an 8.3 short path.
+    const recorded = join((realpathSync.native || realpathSync)(root), '.worktrees', 'legacy-history');
+    rewriteLoop(root, runId, data => { data.workstreams[0].worktree = recorded; });
     rmSync(worktree, { recursive: true, force: true });
     legacy = runId;
     ids.push(runId);
