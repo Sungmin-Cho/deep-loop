@@ -116,7 +116,23 @@ node "<absolute-deep-loop-root>/scripts/deep-loop.mjs" run list --project-root "
 node "<absolute-deep-loop-root>/scripts/deep-loop.mjs" state get --field status --project-root "<canonical_project_root>" --run-id <run_id>
 ```
 
-`.deep-loop/current` 포인터는 마지막 생성 run을 알려주는 **hint**일 뿐입니다. routing 권위·소유권 증명·tie-breaker가 아닙니다. mutation route와 exact read never silently fallback to current; 공식 automation도 provisioned identity를 요구합니다. 단, bounded resolver는 active run이 없고 현재 선택이 검증된 terminal run 하나일 때에만 `legacy-current` 호환 경로를 유지하며, 그 run에는 서로 다른 terminal claim이 하나 이상(중첩 Workstream 포함) 있을 수 있습니다. 동시에 실행하는 각 run은 고유한 worktree 경로와 branch를 사용해야 합니다. worktree 생성과 `workstream new` 기록 사이에는 좁은 create↔record TOCTOU가 남아 있고, v1은 project-level reservation·claim retirement·ownership transfer를 구현하거나 보장하지 않습니다. 중복 claim은 fail-closed이고 orphan 정리는 proposal-only입니다.
+`.deep-loop/current` 포인터는 마지막 생성 run을 알려주는 **hint**일 뿐입니다. routing 권위·소유권 증명·tie-breaker가 아닙니다. mutation route와 exact read never silently fallback to current; 공식 automation도 provisioned identity를 요구합니다. 단, bounded resolver는 active run이 없고 현재 선택이 검증된 terminal run 하나일 때에만 `legacy-current` 호환 경로를 유지하며, 그 run에는 서로 다른 terminal claim이 하나 이상(중첩 Workstream 포함) 있을 수 있습니다. 동시에 실행하는 각 run은 고유한 worktree 경로와 branch를 사용해야 합니다. worktree 생성과 `workstream new` 기록 사이에는 좁은 create↔record TOCTOU가 남아 있고, v1은 project-level reservation·claim retirement·ownership transfer를 구현하거나 보장하지 않습니다. 비terminal claim의 중복은 fail-closed이고 orphan 정리는 proposal-only입니다.
+
+### run 이력과 cwd 선택
+
+compact hook, `run status`, status band, `run resolve --cwd`는 작업 디렉터리로 run을 고릅니다. 1.27.0부터는 오래된 run이 이 선택을 프로젝트 전체에서 막지 않습니다.
+
+- **terminal 이력은 lock 없이 읽습니다.** `completed`·`stopped` run의 `loop.json`이 `.loop.hash`와 맞고, 스키마를 통과하고, 이 project root에 binding되어 있으면 그 상태 쌍만으로 이력에 넣습니다. 그 밖의 run은 lock 아래 전체 검증을 거칩니다. 이 경로에서는 terminal 이력의 event log, 미완료 transaction, artifact를 확인하지 않습니다. 그래서 transaction이 남은 terminal run은 더 이상 `run list`에서 `reconciliation-required`로 보이거나 선택을 막지 않습니다. `--run-id`로 정확히 읽는 경로와 `validate`는 계속 확인합니다. 선택된 run은 항상 전체 검증으로 다시 읽습니다.
+- **상한.** run 디렉터리 256개, 전체 검증이 필요한 run 64개, worktree claim 4096개, run 분류 중 상태 읽기 32 MiB입니다. terminal 이력 읽기는 500ms + run 디렉터리 1개당 2ms까지 걸릴 수 있습니다. 그다음 전체 검증의 시간 상한은 500ms + 전체 검증 1개당 100ms이고, CLI 읽기는 3000ms, hook과 `run list`는 6900ms에서 멈춥니다. 실제로 흐르는 시계를 씁니다.
+- **terminal claim은 그 안의 cwd에만 영향을 줍니다.** terminal claim(끝난 run의 claim, 또는 `ready`·`merged`·`abandoned` workstream의 claim)은 다른 run이 같은 경로를 claim해도 프로젝트를 모호하게 만들지 않습니다. 그 안의 cwd는 `none`(`terminal-residue`, `source: worktree`)입니다. 다만 활성 run이 없고, `.deep-loop/current`가 가리키는 끝난 run의 일반 claim이 cwd를 포함하고, 다른 끝난 run의 claim이나 residue 영역이 그 cwd를 덮지 않으면 예전처럼 읽기 전용 `legacy-current` 선택입니다. 새 run이 재사용한 worktree 경로도 마찬가지입니다. 그 안에서는 compact safety net이 꺼진 채이고, PreCompact가 진단 한 줄을 남기며, status band가 `this worktree belongs to a finished run`을 보여 줍니다. 새 run에는 새 worktree 경로를 쓰십시오. 예전 버전이 절대 경로로 기록한 claim은 `.`·`..` 세그먼트 없이 이 root의 `.claude/worktrees/`나 `.worktrees/`를 가리키면 상대 경로로 해석합니다. 그렇지 않으면 격리하고, 그 디렉터리 아래를 가리키는 상대 경로일 때만 그 위치를 residue로 표시합니다. `run resolve`는 그 개수를 `history`로 보여 줍니다.
+- **활성 run은 엄격합니다.** `running`·`paused` run의 claim이 하나라도 규격에 맞지 않으면 선택은 `invalid-worktree-claim`으로 실패합니다. `loop.json`이 없는 run 디렉터리는 kind `state-missing` 오류이고, lock이 계속 잡혀 있는 run은 `lock-busy`입니다.
+
+| 표면 | 64개를 넘는 이력 / 오래된 예전 형식 claim | 손상된 비terminal run, 또는 모호한 cwd |
+|---|---|---|
+| `run list` | 모든 run을 `verification: state-hash \| full`과 함께 나열 | 손상된 run은 `errors`의 capture 오류(`ok: true`, 정상 행은 채워짐). cwd 라우팅을 하지 않으므로 모호성은 여기 나오지 않음 |
+| `run resolve`, `run status` | 이력이 없을 때와 같이 선택 | 사유가 붙은 `invalid` 또는 `ambiguous` |
+| PreCompact, PostCompact, SessionStart | 평소대로 checkpoint·observe·restore | 선택 안 함, 차단 없음. PreCompact는 사유가 든 진단 한 줄을 stderr에, PostCompact는 고정된 `deep-loop: postcompact hook failed` 한 줄을, SessionStart는 아무것도 쓰지 않음 |
+| Status band | 선택된 run을 표시 | 아래 네 사유에 한해 `run selection unavailable (<reason>)` 표시 |
 
 무인 실행은 canonical project root와 불변 run id를 한 번 provision한 뒤 매 tick에 두 값을 함께 전달합니다:
 
@@ -229,7 +245,7 @@ payload(`insights_schema_version`은 `1` 유지 — 아래는 additive 필드)�
 Claude Code(터미널 또는 desktop)에서는 deep-loop가 작업 중인 run을 프롬프트 위 한 줄로 보여줄 수 있습니다. 예: `loop D01T · running · budget 1/200 turns · debt 0.00/0.5 · review 0 pending · ws 0/1 · next: discover`. run id 끝 4자, status(와 pause 사유), 예산 대비 사용 turn(`soft-stop`/`hard-stop` 표시 포함), comprehension debt와 임계값, 미검토 human review 수, 끝난 workstream 수, 커널이 고른 next action, 걸린 circuit breaker를 표시합니다. breaker가 걸리거나 debt 게이트가 막거나 예산이 정지 구간에 들어가거나 run이 완료·중단되면 짧은 토스트가 뜹니다.
 
 - **읽기 전용.** band는 `run status --json`만 실행합니다. `Status`·`Ack` 버튼은 빈 프롬프트에 `/deep-loop-status`·`/deep-loop-ack`를 채워 넣을 뿐이며(`Hide`는 이 세션 동안 band를 숨김), 대신 전송하거나 상태를 바꾸지 않습니다. 프롬프트에 글이 있으면 비우라고 안내하고, composer가 없는 host에서는 명령을 복사합니다.
-- **나타나는 경우.** 터미널 또는 desktop surface에서, 작업 디렉터리가 `running` 또는 `paused` run 하나를 고를 때, 또는 여러 active run 때문에 선택이 모호할 때(`N active runs · /deep-loop-status`, `worktree claimed by N runs`, Status·Hide 버튼)입니다. run이 없는 프로젝트, 완료·중단된 run, 읽을 수 없거나 integrity 검사에 실패한 run 디렉터리, 비대화형 `claude -p` 세션, run 목록이 선택 상한을 넘는 경우에는 나타나지 않습니다.
+- **나타나는 경우.** 터미널 또는 desktop surface에서, 작업 디렉터리가 `running` 또는 `paused` run 하나를 고를 때, 여러 active run 때문에 선택이 모호할 때(`N active runs · /deep-loop-status`, `worktree claimed by N runs`), 작업 디렉터리가 끝난 run의 worktree 안일 때(`this worktree belongs to a finished run`), 또는 run 선택이 이름 붙은 네 사유 — `run-set-bound-exceeded`, `run-set-integrity`, `reconciliation-required`, `invalid-worktree-claim` — 로 실패할 때(`run selection unavailable (<reason>) · /deep-loop-status`)입니다. 모두 Status·Hide 버튼이 있습니다. run이 없는 프로젝트, 마지막 run이 끝난 프로젝트, 그 밖의 선택 실패, 비대화형 `claude -p` 세션에서는 나타나지 않습니다.
 - **요구 사항.** Mods를 지원하는 Claude Code(2.1.287 이상). 그보다 오래된 Claude Code, Codex, Grok에서는 band가 없고 동작도 이전과 같습니다. schema나 migration 변경은 없습니다.
 - **끄는 법.** `Hide`(이 세션 한정), `/plugin`에서 deep-loop 플러그인 비활성화, 또는 `disableAllHooks` 설정. band를 숨기거나 꺼도 loop 동작은 달라지지 않습니다.
 

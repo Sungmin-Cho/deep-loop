@@ -10,6 +10,15 @@ const STATUS_COMMAND = '/deep-loop-status';
 const ACK_COMMAND = '/deep-loop-ack';
 const TERMINAL = new Set(['completed', 'stopped']);
 const KINDS = new Set(['selected', 'none', 'ambiguous', 'invalid']);
+// Run selection failures the band names (issue #77). Other invalid results stay hidden.
+export const INVALID_BAND_REASONS = Object.freeze([
+  'run-set-bound-exceeded', 'run-set-integrity', 'reconciliation-required', 'invalid-worktree-claim',
+]);
+const shownInvalid = (resolution) => resolution?.kind === 'invalid'
+  && INVALID_BAND_REASONS.includes(resolution.reason);
+// The cwd is inside a finished run's worktree: the compact safety net is off here.
+const shownResidue = (resolution) => resolution?.kind === 'none' && resolution.reason === 'terminal-residue'
+  && resolution.source === 'worktree';
 
 export function statusArgv(pluginRoot, cwd, runId) {
   const root = String(pluginRoot).replace(/[\\/]$/, '');
@@ -98,7 +107,8 @@ export function shouldPoll(cadence, tick) {
 export function nextBandState(prev, parsed) {
   const kind = outcomeKind(parsed);
   const resKind = resOf(parsed)?.kind;
-  const showsBand = resKind === 'selected' || resKind === 'ambiguous';
+  const showsBand = resKind === 'selected' || resKind === 'ambiguous'
+    || shownInvalid(resOf(parsed)) || shownResidue(resOf(parsed));
   return {
     display: showsBand ? parsed : null,
     selected: resKind === 'selected' ? parsed : (prev?.selected ?? null),
@@ -162,6 +172,12 @@ export function bandModel(display, { hidden, hasSurvey, active, stale } = {}) {
       return { line: `deep-loop · worktree claimed by ${num(resolution.total)} runs · ${STATUS_COMMAND}`, buttons: [{ ...statusButton }, { ...hideButton }] };
     }
     return null;
+  }
+  if (shownResidue(resolution)) {
+    return { line: `deep-loop · this worktree belongs to a finished run · ${STATUS_COMMAND}`, buttons: [{ ...statusButton }, { ...hideButton }] };
+  }
+  if (shownInvalid(resolution)) {
+    return { line: `deep-loop · run selection unavailable (${resolution.reason}) · ${STATUS_COMMAND}`, buttons: [{ ...statusButton }, { ...hideButton }] };
   }
   if (run === null || TERMINAL.has(run.status)) return null;
   const parts = [`loop ${run.run_id.slice(-4)}`];

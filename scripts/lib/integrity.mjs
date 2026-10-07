@@ -1612,6 +1612,7 @@ const VERIFIED_READ_CLOSURE = Object.freeze([
   ['verifyLines', verifyLines],
   ['verifyHeadLines', verifyHeadLines],
   ['enumerateRunIdsBounded', enumerateRunIdsBounded],
+  ['readTerminalHistoryLight', readTerminalHistoryLight],
 ]);
 export const VERIFIED_READ_CLOSURE_NAMES = Object.freeze(VERIFIED_READ_CLOSURE.map(([name]) => name));
 const VERIFIED_READ_FORBIDDEN_CALL = /\b(?:appendAnchored|appendEvent|writeState|durableAtomicWrite|appendFileSync|renameSync|rmSync|unlinkSync|mkdirSync|fsyncSync|openSync|publishArtifactTargetsLocked|markPublicationCommittedLocked|retireCommittedPublicationLocked|reconcileAnchoredPublicationLocked)\s*\(/;
@@ -1778,7 +1779,277 @@ function defaultReadSleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+// Run selection reads terminal history without a lock (issue #77). A bound terminal
+// run's status and worktree claims are absorbing: business writers reject terminal runs,
+// root rebind needs an unresolvable stored root, and the writers that still touch a
+// terminal run (lease residue cleanup, terminal cost settlement, compact restore
+// reconciliation) change neither.
+export const RUN_SELECTION_BOUNDS = Object.freeze({
+  maxRunIds: 256,
+  maxFullCaptures: 64,
+  maxLightBytes: 32 * 1024 * 1024,
+  maxClaims: 4096,
+  baseDeadlineMs: 500,
+  perLightReadMs: 2,
+  perFullCaptureMs: 100,
+  // Full-capture phase cap, measured from the end of classification. `cli-read` stays
+  // inside the status band's 5 s process timeout; `run list` and hooks have no such host.
+  maxDeadlineMs: Object.freeze({
+    'cli-read': 3000,
+    'run-list': 6900,
+    'hook-checkpoint': 6900,
+    'hook-restore': 6900,
+    headless: 6900,
+  }),
+});
+const TERMINAL_HISTORY_STATUSES = new Set(['completed', 'stopped']);
+const LIGHT_LOOP_MAX_BYTES = 1024 * 1024;
+const LIGHT_HASH_MAX_BYTES = 256;
+
+function lightFallback(reason, bytes = 0) {
+  return Object.freeze({ ok: false, kind: 'fallback', reason, bytes });
+}
+
+/**
+ * Hash-, schema- and binding-verified read of a terminal run's state pair, without
+ * the run lock. Anything that is not a verified terminal state is a fallback to the
+ * locked full capture; only a missing loop.json is classified here (`state-missing`).
+ */
+export function readTerminalHistoryLight(root, runId) {
+  const dir = runDir(root, runId);
+  let dirStat;
+  let dirIdentity;
+  try {
+    dirStat = lstatSync(dir, { bigint: true });
+    if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) return lightFallback('run-directory');
+    dirIdentity = captureStableFileIdentity(dir, { lstatFn: () => dirStat });
+  } catch {
+    return lightFallback('run-directory');
+  }
+  const loopFile = join(dir, 'loop.json');
+  const hashFile = join(dir, '.loop.hash');
+  let loopStat;
+  try {
+    loopStat = lstatSync(loopFile, { bigint: true });
+  } catch (error) {
+    return error?.code === 'ENOENT'
+      ? Object.freeze({ ok: false, kind: 'state-missing', bytes: 0 })
+      : lightFallback('state-file');
+  }
+  // The byte budget is charged with the declared sizes before reading, so a read that
+  // consumes data and then fails (drift, size change) still counts against it.
+  const declared = (stat, max) => Number(stat.size > BigInt(max) ? BigInt(max) + 1n : stat.size);
+  let charged = declared(loopStat, LIGHT_LOOP_MAX_BYTES);
+  try { charged += declared(lstatSync(hashFile, { bigint: true }), LIGHT_HASH_MAX_BYTES); }
+  catch { /* a missing anchor is charged nothing and fails below */ }
+  let loopBytes;
+  let hashBytes;
+  try {
+    loopBytes = readStableRegularFile(loopFile, { maxBytes: LIGHT_LOOP_MAX_BYTES }).bytes;
+    hashBytes = readStableRegularFile(hashFile, { maxBytes: LIGHT_HASH_MAX_BYTES }).bytes;
+    if (!matchingStableFileIdentity(dirIdentity, captureStableFileIdentity(dir))) {
+      return lightFallback('run-directory-drift', Math.max(charged, loopBytes.length + hashBytes.length));
+    }
+  } catch {
+    // A read may have succeeded on a file that grew after the sizing lstat.
+    return lightFallback('state-read', Math.max(charged, (loopBytes?.length ?? 0) + (hashBytes?.length ?? 0)));
+  }
+  const bytes = Math.max(charged, loopBytes.length + hashBytes.length);
+  let parsed;
+  try {
+    parsed = parseHashVerifiedStateBytes(root, runId, loopBytes, hashBytes, {
+      requireSchema: true,
+      requireProjectBinding: true,
+    });
+  } catch {
+    return lightFallback('state-verify', bytes);
+  }
+  if (parsed.data?.run_id !== runId || !TERMINAL_HISTORY_STATUSES.has(parsed.data?.status)) {
+    return lightFallback('not-terminal', bytes);
+  }
+  return Object.freeze({
+    ok: true,
+    verification: 'state-hash',
+    bytes,
+    snapshot: Object.freeze({ data: parsed.data, hash: parsed.hash }),
+  });
+}
+
+function historyBoundExceeded(root, diagnostic) {
+  const frozen = Object.freeze({
+    reason: 'run-set-bound-exceeded',
+    kind: 'run-set-bound-exceeded',
+    ...diagnostic,
+  });
+  return Object.freeze({
+    root: canonicalProjectRoot(root),
+    runIds: Object.freeze([]),
+    runs: Object.freeze(Object.create(null)),
+    errors: Object.freeze({ run_set: frozen }),
+    ok: false,
+    ...frozen,
+  });
+}
+
+function boundedInteger(value, name, { min = 0 } = {}) {
+  if (!Number.isSafeInteger(value) || value < min) throw new Error(`RUN_SET_OPTIONS_INVALID: ${name}`);
+  return value;
+}
+
+// Fast-path run set: enumerate → classify (light) → count → locked full captures.
+// Unlike the default set, a healthy run stays in `runs` when another run errors;
+// selection still rejects any set with errors before it reads `runs`.
+function captureRunSetWithHistory(root, options) {
+  const maxRunIds = boundedInteger(options.maxRunIds ?? RUN_SELECTION_BOUNDS.maxRunIds, 'maxRunIds', { min: 1 });
+  const maxFullCaptures = boundedInteger(options.maxFullCaptures ?? RUN_SELECTION_BOUNDS.maxFullCaptures, 'maxFullCaptures');
+  const maxLightBytes = boundedInteger(options.maxLightBytes ?? RUN_SELECTION_BOUNDS.maxLightBytes, 'maxLightBytes');
+  const baseDeadlineMs = boundedInteger(options.baseDeadlineMs ?? RUN_SELECTION_BOUNDS.baseDeadlineMs, 'baseDeadlineMs');
+  const perLightReadMs = boundedInteger(options.perLightReadMs ?? RUN_SELECTION_BOUNDS.perLightReadMs, 'perLightReadMs');
+  const perFullCaptureMs = boundedInteger(options.perFullCaptureMs ?? RUN_SELECTION_BOUNDS.perFullCaptureMs, 'perFullCaptureMs');
+  const maxDeadlineMs = boundedInteger(
+    options.maxDeadlineMs ?? RUN_SELECTION_BOUNDS.maxDeadlineMs['cli-read'], 'maxDeadlineMs',
+  );
+  const captureFn = typeof options.captureRunSnapshotFn === 'function'
+    ? options.captureRunSnapshotFn : captureVerifiedRunSnapshot;
+  const startedAt = nowMillis(options.nowFn);
+  if (!Number.isSafeInteger(startedAt)) throw new Error('RUN_SET_DEADLINE_INVALID');
+  const enumerationDeadline = startedAt + baseDeadlineMs;
+
+  let runIds;
+  try {
+    ({ runIds } = enumerateRunIdsBounded(root, {
+      maxRunIds,
+      deadlineAtMs: enumerationDeadline,
+      deadlineMs: baseDeadlineMs,
+      nowFn: options.nowFn,
+      opendirFn: options.opendirFn,
+    }));
+  } catch (error) {
+    if (error?.kind !== 'run-set-bound-exceeded') throw error;
+    return historyBoundExceeded(root, {
+      max_run_ids: maxRunIds,
+      deadline_ms: baseDeadlineMs,
+      observed_count: error.observed_count,
+      total_is_lower_bound: error.total_is_lower_bound,
+      phase: 'enumeration',
+      bound: error.total_is_lower_bound ? 'count' : 'deadline',
+    });
+  }
+  options.afterEnumeration?.(runIds);
+
+  // Light reads scale with the number of directories; the budget follows them.
+  const classificationDeadlineMs = baseDeadlineMs + perLightReadMs * runIds.length;
+  const classificationDeadline = startedAt + classificationDeadlineMs;
+  const runs = Object.create(null);
+  const errors = Object.create(null);
+  const fullIds = [];
+  let lightBytes = 0;
+  const classificationExceeded = bound => historyBoundExceeded(root, {
+    max_run_ids: maxRunIds,
+    deadline_ms: classificationDeadlineMs,
+    observed_count: runIds.length,
+    total_is_lower_bound: false,
+    phase: 'classification',
+    bound,
+  });
+  for (const runId of runIds) {
+    if (nowMillis(options.nowFn) >= classificationDeadline) return classificationExceeded('deadline');
+    const light = readTerminalHistoryLight(root, runId);
+    lightBytes += light.bytes;
+    if (lightBytes > maxLightBytes) return classificationExceeded('bytes');
+    if (light.ok) runs[runId] = light;
+    else if (light.kind === 'state-missing') errors[runId] = Object.freeze({ kind: 'state-missing' });
+    else fullIds.push(runId);
+  }
+  if (nowMillis(options.nowFn) >= classificationDeadline) return classificationExceeded('deadline');
+  if (fullIds.length > maxFullCaptures) {
+    return historyBoundExceeded(root, {
+      max_run_ids: maxRunIds,
+      observed_count: runIds.length,
+      total_is_lower_bound: false,
+      phase: 'full-capture-count',
+      bound: 'count',
+      full_capture_count: fullIds.length,
+      max_full_captures: maxFullCaptures,
+    });
+  }
+
+  // The full-capture budget starts when classification ends, so a slow classification
+  // never eats the per-capture allowance.
+  const deadlineMs = Math.min(maxDeadlineMs, baseDeadlineMs + perFullCaptureMs * fullIds.length);
+  const fullStartedAt = nowMillis(options.nowFn);
+  if (!Number.isSafeInteger(fullStartedAt)) throw new Error('RUN_SET_DEADLINE_INVALID');
+  const vectorDeadlineAtMs = fullStartedAt + deadlineMs;
+  const captureExceeded = () => historyBoundExceeded(root, {
+    max_run_ids: maxRunIds,
+    deadline_ms: deadlineMs,
+    observed_count: runIds.length,
+    total_is_lower_bound: false,
+    phase: 'lock-retry',
+    bound: 'deadline',
+  });
+  for (const runId of fullIds) {
+    const capture = () => captureFn(root, runId, {
+      artifactRels: options.artifactRelsByRun?.[runId] || [],
+      lockOptions: options.lockOptions,
+      vectorOptions: options.vectorOptionsByRun?.[runId] || options.vectorOptions,
+      vectorDeadlineAtMs,
+      nowFn: options.nowFn,
+    });
+    let result;
+    try {
+      try {
+        result = capture();
+      } catch (firstError) {
+        // One retry, outside the per-run lock and inside the same aggregate deadline.
+        if (!String(firstError?.message || firstError).startsWith('LOCK_BUSY')) throw firstError;
+        const remaining = vectorDeadlineAtMs - nowMillis(options.nowFn);
+        if (!Number.isSafeInteger(remaining) || remaining <= 0) return captureExceeded();
+        (options.sleepFn || options.lockOptions?.sleepFn || defaultReadSleep)(
+          Math.min(options.retryDelayMs ?? 50, remaining),
+        );
+        if (nowMillis(options.nowFn) >= vectorDeadlineAtMs) return captureExceeded();
+        result = capture();
+      }
+    } catch (error) {
+      const message = String(error?.message || error);
+      errors[runId] = Object.freeze({
+        kind: message.startsWith('TRANSACTION_RECONCILIATION_REQUIRED') ? 'reconciliation-required'
+          : (message.startsWith('LOCK_BUSY') ? 'lock-busy' : 'integrity-invalid'),
+        message: message.split(':')[0],
+      });
+      continue;
+    }
+    if (result?.ok) {
+      runs[runId] = Object.freeze({ ...result, verification: 'full' });
+      continue;
+    }
+    if (nowMillis(options.nowFn) >= vectorDeadlineAtMs) return captureExceeded();
+    errors[runId] = result;
+  }
+  return Object.freeze({
+    root: canonicalProjectRoot(root),
+    runIds,
+    runs: Object.freeze(runs),
+    errors: Object.freeze(errors),
+  });
+}
+
 export function captureVerifiedRunSet(root, options = {}) {
+  if (options.historyFastPath === true) {
+    if (options.runIds !== undefined) throw new Error('RUN_SET_OPTIONS_INVALID: historyFastPath enumerates');
+    // The fast path derives its deadlines from RUN_SELECTION_BOUNDS-style options; a
+    // caller passing the default path's deadline options would otherwise be ignored.
+    for (const name of ['deadlineMs', 'deadlineAtMs', 'deadlineAt', 'vectorDeadlineAtMs', 'deadlineBudgetMs']) {
+      if (options[name] !== undefined) throw new Error(`RUN_SET_OPTIONS_INVALID: historyFastPath ignores ${name}`);
+    }
+    for (const name of ['deadlineMs', 'deadlineAtMs', 'deadlineBudgetMs']) {
+      if (options.vectorOptions?.[name] !== undefined) {
+        throw new Error(`RUN_SET_OPTIONS_INVALID: historyFastPath ignores vectorOptions.${name}`);
+      }
+    }
+    return captureRunSetWithHistory(root, options);
+  }
   const implicit = options.runIds === undefined;
   let vectorDeadlineAtMs = readDeadlineAtMs(options);
   if (vectorDeadlineAtMs === undefined && options.deadlineMs !== undefined) {

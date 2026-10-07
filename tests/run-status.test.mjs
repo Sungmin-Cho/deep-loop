@@ -184,10 +184,10 @@ test('T-K2: a damaged run beside a healthy one is invalid/run-set-integrity, byt
   assert.deepEqual(deepLoopTree(a.root), before);
 });
 
-test('T-K2: more than 64 run directories is invalid/run-set-bound-exceeded, bytes untouched', () => {
+test('T-K2: more than 256 run directories is invalid/run-set-bound-exceeded, bytes untouched', () => {
   const s = seed();
   const runs = join(s.root, '.deep-loop', 'runs');
-  for (let i = 0; i < 65; i += 1) mkdirSync(join(runs, `R${String(i).padStart(3, '0')}`));
+  for (let i = 0; i < 256; i += 1) mkdirSync(join(runs, `R${String(i).padStart(3, '0')}`));
   const before = deepLoopTree(s.root);
   const out = status(s.root);
   assert.equal(out.status, 1, out.stdout + out.stderr);
@@ -254,12 +254,15 @@ test('T-K4: six active runs report total 6 and exactly five sorted candidates', 
   const first = seed();
   const ids = [first.runId];
   for (let i = 0; i < 5; i += 1) ids.push(seed(first.root).runId);
-  // In-process with the real capture but a relaxed aggregate deadline: the CLI's fixed 500 ms run-set
-  // deadline is load-sensitive (a slow CI runner reports run-set-bound-exceeded instead), and what this
-  // test pins is the candidate projection, not the deadline.
+  // In-process with the real capture but relaxed run-set deadlines: the CLI's deadlines are
+  // load-sensitive (a slow CI runner reports run-set-bound-exceeded instead), and what this test
+  // pins is the candidate projection, not the deadline. The history fast path takes its own
+  // deadline options (issue #77) and refuses the default path's `deadlineMs`.
   const result = resolveRunContext({
     root: first.root, purpose: 'cli-read',
-    captureRunSet: (root, options) => captureVerifiedRunSet(root, { ...options, deadlineMs: 60_000 }),
+    captureRunSet: (root, options) => captureVerifiedRunSet(root, {
+      ...options, baseDeadlineMs: 60_000, maxDeadlineMs: 60_000,
+    }),
   });
   const { envelope, exitCode } = buildRunStatus(result, { now: Date.parse(SEED_NOW) });
   assert.equal(exitCode, 1);

@@ -10,12 +10,15 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readBoundedText } from '../lib/bounded-input.mjs';
 import { detectMain } from '../lib/detect-main.mjs';
-import { resolveRunContext } from '../lib/run-context.mjs';
+import { RUN_SELECTION_BOUNDS, resolveRunContext } from '../lib/run-context.mjs';
 import { sessionRuntime } from '../lib/runtime.mjs';
 
 export const MAX_POSTCOMPACT_INPUT_BYTES = 4096;
 export const MAX_POSTCOMPACT_HOST_INPUT_BYTES = 256 * 1024;
-export const MAX_POSTCOMPACT_RUN_ENTRIES = 256;
+// Run directories are counted like the kernel enumeration (directories only, same cap);
+// every entry, files included, stays bounded at twice that.
+export const MAX_POSTCOMPACT_RUN_DIRECTORIES = RUN_SELECTION_BOUNDS.maxRunIds;
+export const MAX_POSTCOMPACT_RUN_ENTRIES = 2 * MAX_POSTCOMPACT_RUN_DIRECTORIES;
 export const MAX_POSTCOMPACT_CHECKPOINT_ENTRIES = 256;
 export const MAX_POSTCOMPACT_LOOP_BYTES = 1024 * 1024;
 export const POSTCOMPACT_OBSERVE_TIMEOUT_MS = 5000;
@@ -60,6 +63,28 @@ function boundedDirectoryNames(path, maxEntries) {
       const entry = directory.readSync();
       if (entry === null) return names;
       if (names.length >= maxEntries) return null;
+      names.push(entry.name);
+    }
+  } catch {
+    return null;
+  } finally {
+    try { directory?.closeSync(); } catch { /* best effort */ }
+  }
+}
+
+function boundedRunDirectoryNames(path) {
+  let directory;
+  try {
+    directory = opendirSync(path);
+    const names = [];
+    let entries = 0;
+    while (true) {
+      const entry = directory.readSync();
+      if (entry === null) return names;
+      entries += 1;
+      if (entries > MAX_POSTCOMPACT_RUN_ENTRIES) return null;
+      if (!entry.isDirectory()) continue;
+      if (names.length >= MAX_POSTCOMPACT_RUN_DIRECTORIES) return null;
       names.push(entry.name);
     }
   } catch {
@@ -165,7 +190,7 @@ function observationRequest(root, cwd, resolveContextFn = resolveRunContext) {
   if (canonicalCwd === null) return null;
   const runsPath = join(root, '.deep-loop', 'runs');
   if (canonicalExactDirectory(runsPath) !== runsPath) return null;
-  const runNames = boundedDirectoryNames(runsPath, MAX_POSTCOMPACT_RUN_ENTRIES);
+  const runNames = boundedRunDirectoryNames(runsPath);
   if (runNames === null || !boundedLoopInventory(root, runNames)) return null;
   const selected = resolveContextFn({
     root,

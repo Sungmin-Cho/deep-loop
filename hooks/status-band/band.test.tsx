@@ -17,7 +17,7 @@ const runBody = (over: Record<string, unknown> = {}) => ({
 })
 const running = (over: Record<string, unknown> = {}) => ({ exitCode: 0, stdout: JSON.stringify({ status_version: 1, ok: true, resolution: resolution(), run: runBody(over) }) + '\n' })
 const none = () => ({ exitCode: 0, stdout: JSON.stringify({ status_version: 1, ok: true, resolution: resolution({ kind: 'none', source: null, reason: 'no-runs' }), run: null }) + '\n' })
-const invalid = () => ({ exitCode: 1, stdout: JSON.stringify({ status_version: 1, ok: false, resolution: resolution({ kind: 'invalid', source: null, reason: 'run-set-integrity' }), run: null }) + '\n' })
+const invalid = (reason = 'root-unresolvable') => ({ exitCode: 1, stdout: JSON.stringify({ status_version: 1, ok: false, resolution: resolution({ kind: 'invalid', source: null, reason }), run: null }) + '\n' })
 const ambiguous = (reason = 'multi-active-root-cwd', total = 2) => ({ exitCode: 1, stdout: JSON.stringify({ status_version: 1, ok: false, resolution: resolution({ kind: 'ambiguous', source: null, reason, total, candidates: [] }), run: null }) + '\n' })
 const failure = () => ({ exitCode: 2, stdout: '' })
 
@@ -156,6 +156,24 @@ for (const surface of SURFACES) {
       await r.clock.advance(1500)
       expect((await r.shown()).line).toContain('loop 63M3')
     }
+  })
+
+  test(`named run-selection failures draw a reason line with Status and Hide buttons (${surface})`, async ($, on) => {
+    const r = rig($, on, surface)
+    r.ctl.primary = invalid('run-set-bound-exceeded')
+    await r.start()
+    let v = await r.shown()
+    expect(v.line).toContain('deep-loop · run selection unavailable (run-set-bound-exceeded) · /deep-loop-status')
+    expect(v.buttons).toEqual(['Status', 'Hide'])
+    r.ctl.primary = invalid('invalid-worktree-claim')
+    await r.turn()
+    await r.clock.advance(1500)
+    v = await r.shown()
+    expect(v.line).toContain('run selection unavailable (invalid-worktree-claim)')
+    r.ctl.primary = running()
+    await r.turn()
+    await r.clock.advance(1500)
+    expect((await r.shown()).line).toContain('loop 63M3')
   })
 
   test(`ambiguous replies draw the two fixed sentences with Status and Hide buttons (${surface})`, async ($, on) => {

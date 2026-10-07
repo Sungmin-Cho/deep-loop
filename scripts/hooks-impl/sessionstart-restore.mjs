@@ -18,7 +18,7 @@ import {
 import { detectMain } from '../lib/detect-main.mjs';
 import { findRoot } from '../lib/state.mjs';
 import { readableSessionRuntime, skillToken } from '../lib/runtime.mjs';
-import { formatBoundedRoutingDiagnostic, resolveRunContext } from '../lib/run-context.mjs';
+import { ROUTING_BOUND_FIELDS, formatBoundedRoutingDiagnostic, resolveRunContext } from '../lib/run-context.mjs';
 
 const CAP = 3072;
 export const MAX_COMPACT_CAPSULE_WIRE_BYTES = 2048;
@@ -226,11 +226,8 @@ function routingDiagnostic(selection) {
       ? { errors: selection.errors } : {}),
     ...(selection.candidates ? { candidates: selection.candidates } : {}),
     ...(selection.total !== undefined ? { total: selection.total } : {}),
-    ...(selection.max_run_ids !== undefined ? { max_run_ids: selection.max_run_ids } : {}),
-    ...(selection.deadline_ms !== undefined ? { deadline_ms: selection.deadline_ms } : {}),
-    ...(selection.observed_count !== undefined ? { observed_count: selection.observed_count } : {}),
-    ...(selection.total_is_lower_bound !== undefined
-      ? { total_is_lower_bound: selection.total_is_lower_bound } : {}),
+    ...Object.fromEntries(ROUTING_BOUND_FIELDS
+      .filter(key => selection[key] !== undefined).map(key => [key, selection[key]])),
   });
 }
 
@@ -291,7 +288,7 @@ export function runSessionStartRestore(input = {}, {
     root,
     cwd: typeof input.cwd === 'string' ? input.cwd : cwd,
     purpose: 'hook-restore',
-    nowFn: () => (now instanceof Date ? now.getTime() : now),
+    // No nowFn: selection deadlines need an advancing clock, not the business `now`.
   });
   if (!selection?.ok || selection.kind !== 'selected') {
     const branch = selection?.reason === 'no-runs' ? 'no-run'

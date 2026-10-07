@@ -882,3 +882,43 @@ test('oversize and non-JSON stdin exit zero without injecting context', () => {
     assert.equal(result.stderr, 'deep-loop: sessionstart restore hook failed\n');
   }
 });
+
+// ── issue #77: run history must not switch the compact safety net off ──────────────
+import { addTerminalHistory, rewriteLoop } from './helpers/run-history.mjs';
+import { resolveRunContext as resolveRunContextForTest } from '../scripts/lib/run-context.mjs';
+
+test('T13 SessionStart main() restores the active run beside 71 terminal runs and a legacy absolute claim', () => {
+  const root = freshRoot();
+  const fixture = initBound(root, 'claude');
+  addTerminalHistory(root);
+  const emitted = emitCompactCheckpoint(root, fixture.runId, { fence: fixture.fence, runtime: 'claude', now: NOW_MS + 1 });
+  const result = runManifestHook(root, {
+    cwd: root, hook_event_name: 'SessionStart', source: 'compact', session_id: 'history-session',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  const capsule = JSON.parse(JSON.parse(result.stdout).hookSpecificOutput.additionalContext).capsule;
+  assert.equal(capsule.run_id, fixture.runId);
+  assert.equal(capsule.checkpoint_key, emitted.checkpoint_key);
+});
+
+test('T13 SessionStart names an invalid active claim as its branch and carries the diagnostic', () => {
+  const root = freshRoot();
+  const fixture = initBound(root, 'claude');
+  rewriteLoop(root, fixture.runId, data => {
+    data.workstreams[0].worktree = join(root, data.workstreams[0].worktree);
+  });
+  const seen = [];
+  const result = runSessionStartRestore({ hook_event_name: 'SessionStart', source: 'compact' }, {
+    root,
+    now: NOW_MS,
+    resolveContextFn: options => {
+      seen.push(options);
+      return resolveRunContextForTest(options);
+    },
+  });
+  assert.equal(result.branch, 'invalid-worktree-claim');
+  assert.match(result.diagnostic, /invalid-worktree-claim/);
+  assert.equal(result.additionalContext, null);
+  assert.equal(seen[0].nowFn, undefined, 'the business now is not the deadline clock');
+});

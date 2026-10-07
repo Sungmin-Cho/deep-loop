@@ -401,7 +401,8 @@ test('PostCompact child failures are fixed, bounded, and never expose child or h
 test('PostCompact bounds run inventory, loop bytes, checkpoint entries, and observe child time', async () => {
   const fixture = seed('claude');
   const adapter = await loadAdapter();
-  assert.equal(adapter.MAX_POSTCOMPACT_RUN_ENTRIES, 256);
+  assert.equal(adapter.MAX_POSTCOMPACT_RUN_ENTRIES, 512);
+  assert.equal(adapter.MAX_POSTCOMPACT_RUN_DIRECTORIES, 256);
   assert.equal(adapter.MAX_POSTCOMPACT_CHECKPOINT_ENTRIES, 256);
   assert.equal(adapter.MAX_POSTCOMPACT_LOOP_BYTES, 1024 * 1024);
   assert.equal(adapter.POSTCOMPACT_OBSERVE_TIMEOUT_MS, 5000);
@@ -524,4 +525,52 @@ test('PostCompact bootstrap stays shell-free and adapter imports no mutation fac
     source,
     /['"](?:restore|continue|handoff|respawn)['"]|\b(?:restore|continue|handoff|respawn|modelTurn)\s*\(/i,
   );
+});
+
+// ── issue #77: run history must not switch the compact safety net off ──────────────
+import { addTerminalHistory, rewriteLoop } from './helpers/run-history.mjs';
+
+test('T12 PostCompact main() observes the active run beside 71 terminal runs, files and run-id-named files', () => {
+  const fixture = seed('claude');
+  addTerminalHistory(fixture.root);
+  const runs = join(fixture.root, '.deep-loop', 'runs');
+  writeFileSync(join(runs, '.DS_Store'), 'x');
+  writeFileSync(join(runs, '01FILELOOKSLIKEARUNID00000'), 'x');
+  const result = runNode(['-e', bootstrapSource()], {
+    cwd: fixture.containedCwd,
+    env: bootstrapEnv('CLAUDE_PLUGIN_ROOT'),
+    input: JSON.stringify({ cwd: fixture.containedCwd, hook_event_name: 'PostCompact', trigger: 'auto' }),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.equal(existsSync(observationPath(fixture)), true);
+});
+
+test('T14 PostCompact main() does not observe when an active run holds a non-conforming claim', () => {
+  const fixture = seed('claude');
+  rewriteLoop(fixture.root, fixture.runId, data => {
+    data.workstreams[0].worktree = join(fixture.root, data.workstreams[0].worktree);
+  });
+  const result = runNode(['-e', bootstrapSource()], {
+    cwd: fixture.containedCwd,
+    env: bootstrapEnv('CLAUDE_PLUGIN_ROOT'),
+    input: JSON.stringify({ cwd: fixture.containedCwd, hook_event_name: 'PostCompact', trigger: 'auto' }),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, 'deep-loop: postcompact hook failed\n');
+  assert.equal(existsSync(observationPath(fixture)), false);
+});
+
+test('T12 PostCompact counts run directories, not files: 300 files beside the runs still observe', () => {
+  const fixture = seed('claude');
+  const runs = join(fixture.root, '.deep-loop', 'runs');
+  for (let index = 0; index < 300; index += 1) writeFileSync(join(runs, `note-${index}`), 'x');
+  const result = runNode(['-e', bootstrapSource()], {
+    cwd: fixture.containedCwd,
+    env: bootstrapEnv('CLAUDE_PLUGIN_ROOT'),
+    input: JSON.stringify({ cwd: fixture.containedCwd, hook_event_name: 'PostCompact', trigger: 'auto' }),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.equal(existsSync(observationPath(fixture)), true);
 });

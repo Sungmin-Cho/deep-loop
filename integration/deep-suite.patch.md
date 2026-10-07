@@ -21,6 +21,7 @@ efficacy or of a verified Grok reviewer bridge.
 The v1.25.0 entry (router policy pin) is likewise a release draft until source
 validation, merge and the separate distribution gates complete.
 The v1.26.0 entry (Claude status band) is likewise a release draft until source validation, merge and the separate distribution gates complete.
+The v1.27.0 entry (run selection no longer blocked by run history, issue #77) is likewise a release draft until source validation, merge and the separate distribution gates complete.
 
 ## Marketplace pin edits
 

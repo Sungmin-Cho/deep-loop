@@ -4,7 +4,7 @@ import {
   REFRESH_DEBOUNCE_MS, FALLBACK_INTERVAL_MS, SLOW_EVERY_TICKS, RUN_TIMEOUT_MS,
   statusArgv, parseStatus, outcomeKind, pollPolicy, shouldPoll, nextBandState,
   needsCompletionProbe, applyCompletionProbe, transitions, bandModel, isDeepLoopCommand,
-  fillPlan, fillOutcomeToast, copyOutcomeToast, busyToast,
+  fillPlan, fillOutcomeToast, copyOutcomeToast, busyToast, INVALID_BAND_REASONS,
 } from '../hooks/status-band/band.mjs';
 
 const resolution = (over = {}) => ({ kind: 'selected', source: 'single-active', reason: null, total: null, candidates: [], ...over });
@@ -170,9 +170,18 @@ test('nextBandState: display/selected/cadence/tick', () => {
   assert.equal(s.display, null);
   assert.equal(s.selected, run);
   assert.equal(s.cadence, 'fast');
+  // Issue #77: a named run-selection failure is displayed; cadence keeps its rule.
   s = nextBandState({ display: run, selected: run, cadence: 'fast', tick: 1 }, P(invalidEnv()));
-  assert.equal(s.display, null);
+  assert.equal(s.display?.envelope.resolution.reason, 'run-set-integrity');
+  assert.equal(s.selected, run);
   assert.equal(s.cadence, 'fast');
+  for (const cadence of ['fast', 'slow', 'off']) {
+    const next = nextBandState({ display: null, selected: null, cadence, tick: 0 }, P(invalidEnv('invalid-worktree-claim')));
+    assert.equal(next.display?.envelope.resolution.reason, 'invalid-worktree-claim', cadence);
+    assert.equal(next.cadence, cadence === 'off' ? 'slow' : cadence, cadence);
+  }
+  s = nextBandState({ display: run, selected: run, cadence: 'fast', tick: 1 }, P(invalidEnv('root-unresolvable')));
+  assert.equal(s.display, null);
   assert.deepEqual(nextBandState(null, FAIL), { display: null, selected: null, cadence: 'slow', tick: 0 });
 });
 
@@ -337,7 +346,8 @@ test('bandModel: null cases (order 1, 3, 4)', () => {
   assert.equal(model(running, { hidden: true }), null);
   assert.equal(model(null), null);
   assert.equal(model(P(noneEnv())), null);
-  assert.equal(model(P(invalidEnv())), null);
+  assert.equal(model(P(invalidEnv('root-unresolvable'))), null);
+  assert.equal(model(P(invalidEnv('identity-invalid'))), null);
   assert.equal(model(FAIL), null);
   assert.equal(model(sel({ status: 'completed' })), null);
   assert.equal(model(sel({ status: 'stopped' })), null);
@@ -416,4 +426,29 @@ test('fillPlan and toast helpers', () => {
   assert.equal(fillOutcomeToast('/deep-loop-status', false, 'no_composer'), null);
   assert.equal(copyOutcomeToast('/deep-loop-ack', true), 'Copied /deep-loop-ack');
   assert.equal(copyOutcomeToast('/deep-loop-ack', false), 'Type /deep-loop-ack in the prompt');
+});
+
+test('bandModel: a cwd inside a finished run worktree (issue #77)', () => {
+  const residue = P({ status_version: 1, ok: true, resolution: resolution({ kind: 'none', source: 'worktree', reason: 'terminal-residue' }), run: null });
+  const finishedProject = P({ status_version: 1, ok: true, resolution: resolution({ kind: 'none', source: null, reason: 'terminal-residue' }), run: null });
+  assert.equal(model(finishedProject), null, 'a project whose last run finished stays quiet');
+  const band = model(residue);
+  assert.equal(band.line, 'deep-loop · this worktree belongs to a finished run · /deep-loop-status');
+  assert.deepEqual(band.buttons.map(button => button.key), ['status', 'hide']);
+  const next = nextBandState({ display: null, selected: null, cadence: 'slow', tick: 0 }, residue);
+  assert.equal(next.display, residue);
+  assert.equal(next.cadence, 'off');
+  assert.equal(model(P(noneEnv())), null, 'other none reasons stay hidden');
+});
+
+test('bandModel: named run-selection failures (issue #77)', () => {
+  assert.deepEqual(INVALID_BAND_REASONS, [
+    'run-set-bound-exceeded', 'run-set-integrity', 'reconciliation-required', 'invalid-worktree-claim',
+  ]);
+  for (const reason of INVALID_BAND_REASONS) {
+    const band = model(P(invalidEnv(reason)));
+    assert.equal(band.line, `deep-loop · run selection unavailable (${reason}) · /deep-loop-status`);
+    assert.deepEqual(band.buttons.map(button => button.key), ['status', 'hide']);
+  }
+  assert.equal(model(P(invalidEnv('run-set-integrity')), { hidden: true }), null);
 });
