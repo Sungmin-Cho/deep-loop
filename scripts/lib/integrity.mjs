@@ -1782,7 +1782,8 @@ function defaultReadSleep(ms) {
 // Run selection reads terminal history without a lock (issue #77). A bound terminal
 // run's status and worktree claims are absorbing: business writers reject terminal runs,
 // root rebind needs an unresolvable stored root, and the writers that still touch a
-// terminal run (lease residue cleanup, terminal cost settlement) change neither.
+// terminal run (lease residue cleanup, terminal cost settlement, compact restore
+// reconciliation) change neither.
 export const RUN_SELECTION_BOUNDS = Object.freeze({
   maxRunIds: 256,
   maxFullCaptures: 64,
@@ -2039,8 +2040,13 @@ export function captureVerifiedRunSet(root, options = {}) {
     if (options.runIds !== undefined) throw new Error('RUN_SET_OPTIONS_INVALID: historyFastPath enumerates');
     // The fast path derives its deadlines from RUN_SELECTION_BOUNDS-style options; a
     // caller passing the default path's deadline options would otherwise be ignored.
-    for (const name of ['deadlineMs', 'deadlineAtMs', 'deadlineAt', 'vectorDeadlineAtMs']) {
+    for (const name of ['deadlineMs', 'deadlineAtMs', 'deadlineAt', 'vectorDeadlineAtMs', 'deadlineBudgetMs']) {
       if (options[name] !== undefined) throw new Error(`RUN_SET_OPTIONS_INVALID: historyFastPath ignores ${name}`);
+    }
+    for (const name of ['deadlineMs', 'deadlineAtMs', 'deadlineBudgetMs']) {
+      if (options.vectorOptions?.[name] !== undefined) {
+        throw new Error(`RUN_SET_OPTIONS_INVALID: historyFastPath ignores vectorOptions.${name}`);
+      }
     }
     return captureRunSetWithHistory(root, options);
   }

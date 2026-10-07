@@ -628,6 +628,17 @@ test('T5 an isolated region never makes its run legacy-current', () => {
   assert.equal(inValid.source, 'legacy-current');
 });
 
+test('T5 another finished run residue over the cwd keeps legacy-current away', () => {
+  const runs = {
+    T1: snapshot('T1', 'completed', [{ path: '.worktrees/shared', status: 'ready' }]),
+    T2: snapshot('T2', 'stopped', [{ path: '.worktrees\\shared\u0301', status: 'ready' }]),
+  };
+  const overlap = value => (value.endsWith('/.worktrees/shared\u0301') ? '/project/.worktrees/shared' : value);
+  const result = resolve(runs, { current: 'T1', cwd: '/project/.worktrees/shared/file', realpathFn: overlap });
+  assert.equal(result.reason, 'terminal-residue');
+  assert.equal(result.source, 'worktree');
+});
+
 test('T5 the claim inventory is bounded like the run set', () => {
   const many = Array.from({ length: 4097 }, (_, index) => `.worktrees/w${index}`);
   const result = resolve({ A: snapshot('A', 'running', many) });

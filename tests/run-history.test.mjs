@@ -149,8 +149,12 @@ test('T1 the light reader is registered in the verified-read closure', async () 
 test('T1 the fast path refuses the default path deadline options instead of ignoring them', () => {
   const root = freshRoot();
   seedRun(root);
-  for (const name of ['deadlineMs', 'deadlineAtMs', 'vectorDeadlineAtMs']) {
+  for (const name of ['deadlineMs', 'deadlineAtMs', 'deadlineAt', 'vectorDeadlineAtMs', 'deadlineBudgetMs']) {
     assert.throws(() => captureVerifiedRunSet(root, fast({ [name]: 60_000 })), /RUN_SET_OPTIONS_INVALID/, name);
+  }
+  for (const name of ['deadlineMs', 'deadlineAtMs', 'deadlineBudgetMs']) {
+    assert.throws(() => captureVerifiedRunSet(root, fast({ vectorOptions: { [name]: 60_000 } })),
+      /RUN_SET_OPTIONS_INVALID/, `vectorOptions.${name}`);
   }
 });
 
@@ -395,6 +399,7 @@ test('T3 more full captures than the bound exceed the full-capture-count bound',
   assert.equal(captured.bound, 'count');
   assert.equal(captured.full_capture_count, 3);
   assert.equal(captured.max_full_captures, 2);
+  assert.equal(Object.hasOwn(captured, 'deadline_ms'), false, 'no time bound applies to a count');
   assert.equal(spy.calls.length, 0, 'the count is checked before any locked capture');
 });
 
@@ -549,7 +554,17 @@ test('T7 a failed or diverging re-capture is run-set-integrity, never identity-i
   writeFileSync(join(root, '.deep-loop', 'current'), `${runId}\n`);
   const thrown = resolveRunContext({ root, cwd: root, captureRunSnapshot: () => { throw new Error('LOCK_BUSY: held'); } });
   assert.equal(thrown.reason, 'run-set-integrity');
-  assert.deepEqual(Object.keys(thrown.errors), [runId]);
+  assert.deepEqual(thrown.errors, { [runId]: { kind: 'lock-busy' } });
+  // A held lock under the default lock options meets the re-capture deadline first.
+  mkdirSync(join(runDir(root, runId), '.lock'));
+  try {
+    const held = resolveRunContext({ root, cwd: root });
+    assert.equal(held.reason, 'run-set-bound-exceeded', JSON.stringify(held));
+    assert.equal(held.phase, 'recapture');
+    assert.equal(held.bound, 'deadline');
+  } finally {
+    rmSync(join(runDir(root, runId), '.lock'), { recursive: true, force: true });
+  }
   const refused = resolveRunContext({ root, cwd: root, captureRunSnapshot: () => ({ ok: false, kind: 'reconciliation-required' }) });
   assert.equal(refused.reason, 'run-set-integrity');
   assert.equal(refused.errors[runId].kind, 'reconciliation-required');

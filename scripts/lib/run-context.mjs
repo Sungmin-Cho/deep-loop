@@ -662,6 +662,13 @@ function confirmHistorySelection(result, entries, {
     return failed(captureFailure(entry.run_id, error).errors?.[entry.run_id]?.kind || 'integrity-invalid');
   }
   if (captured?.ok === false) {
+    // Waiting on a held lock usually meets this deadline before the lock retries run out;
+    // name it like the run-set path does rather than as an integrity failure.
+    if (captured.kind === 'verified-read-deadline-exceeded') {
+      return invalid('run-set-bound-exceeded', {
+        phase: 'recapture', bound: 'deadline', deadline_ms: RUN_SELECTION_BOUNDS.baseDeadlineMs,
+      });
+    }
     return failed(captured.kind === 'reconciliation-required' ? 'reconciliation-required' : 'integrity-invalid');
   }
   const snapshot = unwrapCapture(captured);
