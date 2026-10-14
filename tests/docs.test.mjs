@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { REVIEW_RECOVERY_PROFILES, REVIEW_RECOVERY_PROFILE_ALIASES } from '../scripts/lib/review.mjs';
 const R = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SKILL_CMDS = ['/deep-loop', '/deep-loop-discover', '/deep-loop-triage', '/deep-loop-continue',
   '/deep-loop-compact', '/deep-loop-handoff', '/deep-loop-resume', '/deep-loop-status',
@@ -459,6 +461,33 @@ test('hook manifest describes cross-host affinity checkpointing while retaining 
   assert.match(manifest.description, /\bemit-only\b/i);
   assert.match(manifest.description, /unattended continuation is deferred to the measured driveHeadless driver/i);
   assert.doesNotMatch(manifest.description, /\b(?:headless\s+)?respawn\b/i);
+});
+
+test('review recovery profile docs name the pinned models, and no retired pin remains (#79)', () => {
+  const pinned = [...new Set(REVIEW_RECOVERY_PROFILES['codex-agy-static']
+    .filter((_, index, flags) => flags[index - 1] === '--reviewer-model')
+    .map(assignment => assignment.slice(assignment.indexOf('=') + 1)))];
+  assert.deepEqual(pinned, ['gpt-6.1-sol', 'gemini-3.8-flash-high']);
+  for (const [alias, target] of Object.entries(REVIEW_RECOVERY_PROFILE_ALIASES)) {
+    assert.ok(Object.hasOwn(REVIEW_RECOVERY_PROFILES, target), `${alias} must target a profile`);
+    assert.ok(!Object.hasOwn(REVIEW_RECOVERY_PROFILES, alias), `${alias} must not shadow a profile`);
+  }
+  const names = [...Object.keys(REVIEW_RECOVERY_PROFILES), ...Object.keys(REVIEW_RECOVERY_PROFILE_ALIASES)];
+  for (const path of [...USER_DOCS, 'skills/deep-loop-status/SKILL.md']) {
+    const source = readFileSync(join(R, path), 'utf8');
+    for (const name of names) assert.ok(source.includes(name), `${path}: profile ${name} missing`);
+    for (const id of pinned) assert.ok(source.includes(id), `${path}: pinned model ${id} missing`);
+  }
+  // Runtime code and skill text only: CHANGELOG history and unrelated test fixtures may name them.
+  const retired = ['gpt-5.6-sol', 'gemini-3.6-flash-high'];
+  const surfaces = execFileSync('git', ['-C', R, 'ls-files', '-z', '--',
+    'scripts', 'skills', 'protocols', 'recipes', 'schemas', 'hooks', ...USER_DOCS, 'AGENTS.md', 'CLAUDE.md'],
+  { encoding: 'utf8' }).split('\0').filter(Boolean);
+  assert.ok(surfaces.includes('scripts/lib/review.mjs'));
+  for (const path of surfaces) {
+    const source = readFileSync(join(R, path), 'utf8');
+    for (const id of retired) assert.ok(!source.includes(id), `${path} still names retired pin ${id}`);
+  }
 });
 
 test('CHANGELOG documents the current plugin release', () => {

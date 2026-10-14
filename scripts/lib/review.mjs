@@ -34,7 +34,7 @@ import {
 export { epOrder, isProofCapableChecker };
 
 const REVIEW_CONFIG_TERMINAL = new Set(['done', 'approved', 'rejected', 'abandoned']);
-const REVIEW_RECOVERY_PROFILES = Object.freeze({
+export const REVIEW_RECOVERY_PROFILES = Object.freeze({
   'codex-only-static': Object.freeze(['--contract', '--codex-only', '--reviewer-strategy', 'static']),
   'codex-agy-static': Object.freeze([
     '--contract', '--no-fallback', '--no-opus', '--agy', '--codex', '--reviewer-strategy', 'static',
@@ -46,7 +46,7 @@ const REVIEW_RECOVERY_PROFILES = Object.freeze({
   ]),
 });
 // Keep the old name working for operators and docs; it expands to the canonical profile's current flags.
-const REVIEW_RECOVERY_PROFILE_ALIASES = Object.freeze({ 'gpt56-agy-static': 'codex-agy-static' });
+export const REVIEW_RECOVERY_PROFILE_ALIASES = Object.freeze({ 'gpt56-agy-static': 'codex-agy-static' });
 
 export function configureReviewFlags(root, runId, options = {}) {
   if (options === null || typeof options !== 'object' || Array.isArray(options)) {
