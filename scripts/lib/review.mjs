@@ -34,17 +34,19 @@ import {
 export { epOrder, isProofCapableChecker };
 
 const REVIEW_CONFIG_TERMINAL = new Set(['done', 'approved', 'rejected', 'abandoned']);
-const REVIEW_RECOVERY_PROFILES = Object.freeze({
+export const REVIEW_RECOVERY_PROFILES = Object.freeze({
   'codex-only-static': Object.freeze(['--contract', '--codex-only', '--reviewer-strategy', 'static']),
-  'gpt56-agy-static': Object.freeze([
+  'codex-agy-static': Object.freeze([
     '--contract', '--no-fallback', '--no-opus', '--agy', '--codex', '--reviewer-strategy', 'static',
-    '--reviewer-model', 'codex-review=gpt-5.6-sol',
-    '--reviewer-model', 'codex-adversarial=gpt-5.6-sol',
-    '--reviewer-model', 'agy=gemini-3.6-flash-high',
+    '--reviewer-model', 'codex-review=gpt-6.1-sol',
+    '--reviewer-model', 'codex-adversarial=gpt-6.1-sol',
+    '--reviewer-model', 'agy=gemini-3.8-flash-high',
     '--reviewer-effort', 'codex-review=high',
     '--reviewer-effort', 'codex-adversarial=high',
   ]),
 });
+// Keep the old name working for operators and docs; it expands to the canonical profile's current flags.
+export const REVIEW_RECOVERY_PROFILE_ALIASES = Object.freeze({ 'gpt56-agy-static': 'codex-agy-static' });
 
 export function configureReviewFlags(root, runId, options = {}) {
   if (options === null || typeof options !== 'object' || Array.isArray(options)) {
@@ -53,17 +55,21 @@ export function configureReviewFlags(root, runId, options = {}) {
   const { profile, sourceCheckerId, confirm, fence } = options;
   if (confirm !== true) throw new Error('CONFIRM_REQUIRED: pass --confirm (human-only)');
   validFence(fence, 'configureReviewFlags');
-  if (!Object.hasOwn(REVIEW_RECOVERY_PROFILES, profile)) {
+  const canonicalProfile = Object.hasOwn(REVIEW_RECOVERY_PROFILE_ALIASES, profile)
+    ? REVIEW_RECOVERY_PROFILE_ALIASES[profile]
+    : profile;
+  if (!Object.hasOwn(REVIEW_RECOVERY_PROFILES, canonicalProfile)) {
     throw new Error(`REVIEW_CONFIG_PROFILE_INVALID: ${String(profile)}`);
   }
   if (!sourceCheckerId || typeof sourceCheckerId !== 'string') {
     throw new Error('REVIEW_CONFIG_SOURCE_INVALID: source checker is required');
   }
-  const nextFlags = [...REVIEW_RECOVERY_PROFILES[profile]];
+  const nextFlags = [...REVIEW_RECOVERY_PROFILES[canonicalProfile]];
+  const requestedProfile = canonicalProfile === profile ? {} : { requested_profile: profile };
 
   appendAnchored(root, runId, {
     type: 'review-configured',
-    data: { profile, source_checker: sourceCheckerId, flags: nextFlags },
+    data: { profile: canonicalProfile, ...requestedProfile, source_checker: sourceCheckerId, flags: nextFlags },
   }, (loop) => {
     const source = loop.episodes.find(episode => episode.id === sourceCheckerId);
     source.review_reconfiguration_consumed = true;
@@ -105,7 +111,7 @@ export function configureReviewFlags(root, runId, options = {}) {
     }
   }, { floor: MUTATION_TURN_FLOOR });
 
-  return { ok: true, profile, source_checker: sourceCheckerId, flags: nextFlags };
+  return { ok: true, profile: canonicalProfile, ...requestedProfile, source_checker: sourceCheckerId, flags: nextFlags };
 }
 
 export function findPendingIndependentChecker(loop) {

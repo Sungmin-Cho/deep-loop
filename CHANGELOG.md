@@ -5,6 +5,41 @@ All notable changes to deep-loop are documented in this file.
 > Note: the `[1.1.0]`/`[1.2.0]` entries pre-date this changelog file (a known lag between
 > `plugin.json.version` and the changelog); this release does not retro-fill them.
 
+## [1.28.0] — 2026-10-14
+
+### Fixed
+
+- The closed `review configure` recovery profile for a Codex plus Agy review pinned models two
+  generations old (#79). Agy 1.3.5 no longer recognizes `gemini-3.6-flash-high`, so with
+  `--no-fallback` the Agy reviewer failed with `ERROR_UNSUPPORTED_MODEL` on every run. The profile
+  now pins `gpt-6.1-sol` at high effort for both Codex roles and `gemini-3.8-flash-high` for Agy.
+  Both ids were checked against their CLIs on 2026-10-14 (codex-cli 0.162.1, agy 1.3.5).
+
+### Changed
+
+- The profile's canonical name is now `codex-agy-static`. Like `codex-only-static`, it names the
+  providers rather than a model generation, so the next pin change does not make the name wrong.
+- `gpt56-agy-static` is still accepted. It is an alias that expands to the same flags as
+  `codex-agy-static`. The result and the `review-configured` event record the canonical name as
+  `profile` and the requested name as `requested_profile`. A request that uses a canonical name
+  produces the same shapes as before.
+- The Agy effort stays in the model id suffix (`-high`), because deep-review's Agy adapter has no
+  effort transport. `/deep-loop-status` and both READMEs now say this. They also say that a
+  rejected pin fails closed, and that the Agy role runs the agy CLI inside the reviewed tree.
+- `scripts/lib/review.mjs` exports its frozen profile and alias tables. A docs test reads the pins
+  from them. It fails when either README or the status skill stops naming a profile, an alias or a
+  pinned model. It also fails when runtime code or skill text names a retired pin again.
+
+### Compatibility
+
+- Runs already configured with `gpt56-agy-static` keep the flags recorded in their `loop.json`.
+  The kernel does not rewrite them. Every run on this machine that used the profile was already
+  `completed`. A live run with the old flags can be moved to the new pins through the existing
+  recovery route: abandon the failed checker as an operational failure, then run
+  `review configure --profile codex-agy-static`.
+- No durable format changes. 1.27 reads everything 1.28 writes; `requested_profile` is an extra
+  field in event data that nothing reads.
+
 ## [1.27.0] — 2026-10-07
 
 ### Fixed

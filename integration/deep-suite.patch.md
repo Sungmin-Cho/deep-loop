@@ -22,6 +22,7 @@ The v1.25.0 entry (router policy pin) is likewise a release draft until source
 validation, merge and the separate distribution gates complete.
 The v1.26.0 entry (Claude status band) is likewise a release draft until source validation, merge and the separate distribution gates complete.
 The v1.27.0 entry (run selection no longer blocked by run history, issue #77) is likewise a release draft until source validation, merge and the separate distribution gates complete.
+The v1.28.0 entry (Codex plus Agy recovery profile pinned to current models and renamed `codex-agy-static`, issue #79) is likewise a release draft until source validation, merge and the separate distribution gates complete.
 
 ## Marketplace pin edits
 
