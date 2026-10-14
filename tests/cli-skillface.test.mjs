@@ -326,25 +326,76 @@ test('review configure replaces flags through a confirmed fenced transaction', (
   });
 });
 
-test('review configure exposes one closed GPT-5.6 plus Agy diversity profile', () => {
+test('review configure exposes one closed Codex plus Agy diversity profile', () => {
   const { root, runId } = seed({ 'deep-review': true });
   const sourceChecker = operationallyAbandonedChecker(root, runId);
   const flags = [
     '--contract', '--no-fallback', '--no-opus', '--agy', '--codex', '--reviewer-strategy', 'static',
-    '--reviewer-model', 'codex-review=gpt-5.6-sol',
-    '--reviewer-model', 'codex-adversarial=gpt-5.6-sol',
-    '--reviewer-model', 'agy=gemini-3.6-flash-high',
+    '--reviewer-model', 'codex-review=gpt-6.1-sol',
+    '--reviewer-model', 'codex-adversarial=gpt-6.1-sol',
+    '--reviewer-model', 'agy=gemini-3.8-flash-high',
+    '--reviewer-effort', 'codex-review=high',
+    '--reviewer-effort', 'codex-adversarial=high',
+  ];
+  const out = JSON.parse(run(root, [
+    'review', 'configure', '--profile', 'codex-agy-static',
+    '--source-checker', sourceChecker, '--confirm',
+    '--owner', runId, '--generation', '1',
+  ]));
+
+  assert.deepEqual(out, { ok: true, profile: 'codex-agy-static', source_checker: sourceChecker, flags });
+  assert.deepEqual(JSON.parse(run(root, ['state', 'get', '--field', 'review.flags'])), flags);
+  const events = readFileSync(join(root, '.deep-loop', 'runs', runId, 'event-log.jsonl'), 'utf8')
+    .trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(events.findLast(event => event.type === 'review-configured')?.data, {
+    profile: 'codex-agy-static', source_checker: sourceChecker, flags,
+  });
+});
+
+test('review configure accepts the legacy profile alias and records both names', () => {
+  const { root, runId } = seed({ 'deep-review': true });
+  const sourceChecker = operationallyAbandonedChecker(root, runId);
+  const flags = [
+    '--contract', '--no-fallback', '--no-opus', '--agy', '--codex', '--reviewer-strategy', 'static',
+    '--reviewer-model', 'codex-review=gpt-6.1-sol',
+    '--reviewer-model', 'codex-adversarial=gpt-6.1-sol',
+    '--reviewer-model', 'agy=gemini-3.8-flash-high',
     '--reviewer-effort', 'codex-review=high',
     '--reviewer-effort', 'codex-adversarial=high',
   ];
   const out = JSON.parse(run(root, [
     'review', 'configure', '--profile', 'gpt56-agy-static',
-    '--source-checker', sourceChecker, '--confirm',
-    '--owner', runId, '--generation', '1',
+    '--source-checker', sourceChecker, '--confirm', '--owner', runId, '--generation', '1',
   ]));
-
-  assert.deepEqual(out, { ok: true, profile: 'gpt56-agy-static', source_checker: sourceChecker, flags });
+  assert.deepEqual(out, {
+    ok: true, profile: 'codex-agy-static', requested_profile: 'gpt56-agy-static',
+    source_checker: sourceChecker, flags,
+  });
   assert.deepEqual(JSON.parse(run(root, ['state', 'get', '--field', 'review.flags'])), flags);
+  const events = readFileSync(join(root, '.deep-loop', 'runs', runId, 'event-log.jsonl'), 'utf8')
+    .trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(events.findLast(event => event.type === 'review-configured')?.data, {
+    profile: 'codex-agy-static', requested_profile: 'gpt56-agy-static', source_checker: sourceChecker, flags,
+  });
+});
+
+test('review configure rejects Object prototype names without consuming the source checker', () => {
+  const { root, runId } = seed({ 'deep-review': true });
+  const sourceChecker = operationallyAbandonedChecker(root, runId);
+  const before = JSON.parse(run(root, ['state', 'get', '--field', 'review.flags']));
+  for (const profile of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+    assert.equal(runFail(root, [
+      'review', 'configure', '--profile', profile, '--source-checker', sourceChecker, '--confirm',
+      '--owner', runId, '--generation', '1',
+    ]), 1);
+    assert.deepEqual(JSON.parse(run(root, ['state', 'get', '--field', 'review.flags'])), before);
+  }
+  const flags = ['--contract', '--codex-only', '--reviewer-strategy', 'static'];
+  const out = JSON.parse(run(root, [
+    'review', 'configure', '--profile', 'codex-only-static', '--source-checker', sourceChecker,
+    '--confirm', '--owner', runId, '--generation', '1',
+  ]));
+  assert.deepEqual(out, { ok: true, profile: 'codex-only-static', source_checker: sourceChecker, flags });
 });
 
 test('review configure requires human confirmation and preserves existing flags', () => {

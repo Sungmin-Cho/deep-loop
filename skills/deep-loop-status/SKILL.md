@@ -142,10 +142,15 @@ node "DEEP_LOOP_ROOT/scripts/deep-loop.mjs" review configure --profile codex-onl
 `codex-only-static`은 exact flags
 `["--contract","--codex-only","--reviewer-strategy","static"]`로만 확장된다.
 critical document의 provider-family floor를 유지하면서 사람이 Agy 전송과 모델
-예외를 명시 승인한 경우에는 `--profile gpt56-agy-static`을 대신 사용한다. 이
-profile은 Codex 두 역할을 `gpt-5.6-sol/high`, Agy 역할을
-`gemini-3.6-flash-high`로 고정하고 Opus와 fallback은 비활성화한다. 임의 모델이나
-provider argv는 받을 수 없다.
+예외를 명시 승인한 경우에는 `--profile codex-agy-static`을 사용한다. 이 프로필은
+Codex 두 역할을 `gpt-6.1-sol/high`, Agy 역할을 `gemini-3.8-flash-high`로 고정하고
+Opus와 fallback을 비활성화하며 임의 모델이나 provider argv는 받지 않는다. 이전 이름
+`gpt56-agy-static`도 같은 flags로 확장되는 alias로 허용하며, 커널은 정규 이름을
+`profile`, 요청 이름을 `requested_profile`로 기록한다. deep-review의 agy adapter에는
+effort 전송이 없어 Agy effort는 모델 ID 접미사 `-high`로 고정된다. CLI가 고정된 ID를
+인식하지 못하면 deep-review 2.6.0+의 `--no-fallback`이 모델 없이 재시도하지 않고 해당
+reviewer를 실패시켜 pin이 조용히 해제되지 않는다. Agy 역할은 검토 대상 트리 안에서 agy
+CLI를 실행하므로 사람은 내용을 신뢰하는 트리에만 이 프로필을 승인한다.
 `--confirm`은 사람이 source checker와 fresh fence를 확인한 경우에만 전달한다.
 성공하면 커널은 source 소비, `review-configured` 이벤트, `review.flags` 변경을
 하나의 anchored transaction으로 기록한다.
